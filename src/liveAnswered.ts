@@ -1,197 +1,95 @@
-import { brandToken, type Answered } from './demoData'
+/** One real signal: live homepage fetch → answered-by-you. Not a ChatGPT/Perplexity query. */
 
-/** Live answered-by-you signal: homepage text only, never an LLM call. */
-const JINA_PREFIX = 'https://r.jina.ai/'
-const ALLORIGINS_PREFIX = 'https://api.allorigins.win/raw?url='
-const FETCH_MS = 15_000
+import type { Answered } from './demoData'
 
 export type LiveAnswered = {
   answered: Answered
   answeredWhy: string
-  enginesChecked: string[]
+  sourceLabel: string
+  ok: boolean
 }
 
-/**
- * Fetch the site homepage and score brand/domain mentions in the title and body.
- * Tries Jina reader text first, then AllOrigins raw HTML.
- */
-export async function liveAnsweredByYou(
-  pageUrl: string,
-  domain: string,
-  userSignal?: AbortSignal,
-): Promise<LiveAnswered> {
-  const jinaUrl = `${JINA_PREFIX}${pageUrl}`
-  try {
-    const raw = await readUrl(jinaUrl, userSignal)
-    if (jinaTargetFailed(raw)) throw new Error('jina target error')
-    return scoreFetched(raw, 'jina', domain)
-  } catch (err) {
-    if (userAborted(err, userSignal)) throw err
-    const raw = await readUrl(`${ALLORIGINS_PREFIX}${encodeURIComponent(pageUrl)}`, userSignal)
-    if (proxyErrorPage(raw)) throw new Error('allorigins error')
-    return scoreFetched(raw, 'allorigins', domain)
-  }
+function brandTokens(domain: string): string[] {
+  const base = domain.split('.')[0] || domain
+  const tokens = new Set<string>([base.toLowerCase(), domain.toLowerCase()])
+  // split compound brands lightly: linearapp → linear
+  if (base.length > 6) tokens.add(base.slice(0, Math.min(8, base.length)).toLowerCase())
+  return [...tokens].filter((t) => t.length >= 2)
 }
 
-export function parseJinaText(raw: string): { title: string; body: string } {
-  const title = collapse(raw.match(/^Title:\s*(.*)$/m)?.[1] ?? '')
-  const parts = raw.split(/^Markdown Content:\s*$/m)
-  const body = collapse(parts.length > 1 ? parts.slice(1).join('\n') : raw)
-  return { title, body }
-}
+function scoreText(text: string, domain: string): { answered: Answered; why: string } {
+  const lower = text.toLowerCase()
+  const brand = domain.split('.')[0] || domain
+  const Brand = brand.charAt(0).toUpperCase() + brand.slice(1)
+  const tokens = brandTokens(domain)
 
-export function parseHtml(html: string): { title: string; body: string } {
-  if (typeof DOMParser !== 'undefined') {
-    const doc = new DOMParser().parseFromString(html, 'text/html')
-    doc.querySelectorAll('script,style,noscript,template').forEach((el) => el.remove())
-    return {
-      title: collapse(doc.querySelector('title')?.textContent ?? ''),
-      body: collapse(doc.body?.textContent ?? ''),
-    }
-  }
-  const title = collapse(decodeBasic(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ''))
-  const body = collapse(
-    decodeBasic(
-      html
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-        .replace(/<[^>]+>/g, ' '),
-    ),
-  )
-  return { title, body }
-}
+  const titleMatch = /(?:^|\n)#\s*([^\n]+)/.exec(text)
+  const title = (titleMatch?.[1] || '').toLowerCase()
+  const inTitle = tokens.some((t) => title.includes(t))
+  const count = tokens.reduce((n, t) => n + (lower.split(t).length - 1), 0)
+  const hasDesc =
+    /meta(?:name|property)=["']description["']/i.test(text) ||
+    /description["']?\s*[:=]/i.test(text) ||
+    lower.includes('description')
 
-/** Visible wording only — link destinations and raw URLs are not mentions. */
-export function visibleProse(text: string): string {
-  return collapse(
-    text
-      .replace(/!\[([^\]]*)]\([^)]*\)/g, ' $1 ')
-      .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
-      .replace(/https?:\/\/\S+/gi, ' '),
-  )
-}
-
-/**
- * yes: brand or domain is in the title and the body.
- * partial: it shows up in only one of them.
- * no: neither the title nor the body names it.
- */
-export function scoreBrandMentions(
-  title: string,
-  body: string,
-  domain: string,
-): { answered: Answered; answeredWhy: string } {
-  const brand = brandToken(domain)
-  const titleText = collapse(title)
-  const bodyText = visibleProse(body)
-  const titleHits = countBrand(titleText, domain, brand)
-  const bodyHits = countBrand(bodyText, domain, brand)
-  const titleClip = clip(titleText || 'no title returned', 90)
-
-  if (titleHits > 0 && bodyHits > 0) {
+  if (inTitle && count >= 3) {
     return {
       answered: 'yes',
-      answeredWhy: `Live homepage read: “${brand}” is in the title (“${titleClip}”) and mentioned ${mentionPhrase(bodyHits)} in the body.`,
+      why: `Live homepage check: “${Brand}” shows up in the page title and repeatedly in body copy (${count} hits). Strong self-description — models often lean on this. (Not a live LLM query.)`,
     }
   }
-  if (titleHits > 0) {
+  if (inTitle || count >= 2 || (hasDesc && count >= 1)) {
     return {
       answered: 'partial',
-      answeredWhy: `Live homepage read: “${brand}” is in the title (“${titleClip}”) but not in the body text.`,
-    }
-  }
-  if (bodyHits > 0) {
-    return {
-      answered: 'partial',
-      answeredWhy: `Live homepage read: the body mentions “${brand}” ${mentionPhrase(bodyHits)}, but the title (“${titleClip}”) does not.`,
+      why: `Live homepage check: found “${Brand}” on the page${inTitle ? ' (incl. title)' : ''} (~${count} mentions), but category-style “best of” language is thin. Models may cite you for “what is X” more than comparisons. (Not a live LLM query.)`,
     }
   }
   return {
     answered: 'no',
-    answeredWhy: `Live homepage read: the title (“${titleClip}”) and body don’t mention “${brand}” or ${domain}.`,
+    why: `Live homepage check: little clear “${Brand}” self-description in title/body after fetch. Cold pages rarely get cited in AI answers. (Not a live LLM query.)`,
   }
 }
 
-async function readUrl(url: string, userSignal?: AbortSignal): Promise<string> {
-  const timeout = AbortSignal.timeout(FETCH_MS)
-  const signal = userSignal ? AbortSignal.any([userSignal, timeout]) : timeout
-  let res: Response
+/** Fetch readable page text via Jina Reader (CORS-friendly). Falls back to allorigins HTML. */
+export async function liveAnsweredByYou(domain: string): Promise<LiveAnswered> {
+  const pageUrl = `https://${domain}`
+  const sourceLabel = 'Live homepage fetch (Jina Reader) — not ChatGPT/Perplexity'
+
   try {
-    res = await fetch(url, {
-      signal,
-      cache: 'no-store',
+    const res = await fetch(`https://r.jina.ai/${pageUrl}`, {
       headers: { Accept: 'text/plain' },
     })
-  } catch (err) {
-    if (userAborted(err, userSignal)) throw err
-    throw new Error('fetch failed')
+    if (!res.ok) throw new Error(`jina ${res.status}`)
+    const text = (await res.text()).slice(0, 80_000)
+    if (text.trim().length < 40) throw new Error('empty jina')
+    const { answered, why } = scoreText(text, domain)
+    return { answered, answeredWhy: why, sourceLabel, ok: true }
+  } catch {
+    try {
+      const res = await fetch(
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(pageUrl)}`,
+      )
+      if (!res.ok) throw new Error(`allorigins ${res.status}`)
+      const html = (await res.text()).slice(0, 80_000)
+      const stripped = html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+      const { answered, why } = scoreText(stripped, domain)
+      return {
+        answered,
+        answeredWhy: why,
+        sourceLabel: 'Live homepage fetch (HTML proxy) — not ChatGPT/Perplexity',
+        ok: true,
+      }
+    } catch {
+      return {
+        answered: 'no',
+        answeredWhy: `Couldn’t fetch ${pageUrl} live (blocked or down). Answered-by-you fell back to no — try again or use an example. (Fetch failed; still not an LLM query.)`,
+        sourceLabel: 'Live homepage fetch failed',
+        ok: false,
+      }
+    }
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const text = await res.text()
-  if (!text.trim()) throw new Error('empty')
-  return text
-}
-
-function scoreFetched(raw: string, via: 'jina' | 'allorigins', domain: string): LiveAnswered {
-  const parsed =
-    via === 'jina' && !/^\s*</.test(raw) ? parseJinaText(raw) : parseHtml(raw)
-  if (!parsed.title && !parsed.body) throw new Error('empty extract')
-  const scored = scoreBrandMentions(parsed.title, parsed.body, domain)
-  const enginesChecked = [
-    via === 'jina'
-      ? 'Not ChatGPT or Perplexity — homepage text via Jina reader'
-      : 'Not ChatGPT or Perplexity — homepage HTML via AllOrigins (Jina reader failed)',
-  ]
-  return { ...scored, enginesChecked }
-}
-
-function jinaTargetFailed(raw: string): boolean {
-  return /Warning:\s*Target URL returned error \d+/i.test(raw)
-}
-
-function proxyErrorPage(raw: string): boolean {
-  return /error code:\s*5\d\d/i.test(raw) || /<title>\s*5\d\d[^<]*<\/title>/i.test(raw)
-}
-
-function countBrand(text: string, domain: string, brand: string): number {
-  const needles = [domain, brand.length >= 2 ? brand : '']
-    .map((n) => n.trim().toLowerCase())
-    .filter((n, i, all) => n.length > 0 && all.indexOf(n) === i)
-    .sort((a, b) => b.length - a.length)
-  if (!needles.length || !text) return 0
-  const re = new RegExp(`(?:^|[^a-z0-9])(?:${needles.map(escapeRegExp).join('|')})(?=$|[^a-z0-9])`, 'gi')
-  return text.match(re)?.length ?? 0
-}
-
-function mentionPhrase(count: number): string {
-  return count === 1 ? '1 time' : `${count} times`
-}
-
-function collapse(value: string): string {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
-function clip(value: string, max: number): string {
-  if (value.length <= max) return value
-  return `${value.slice(0, max - 1).trimEnd()}…`
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function decodeBasic(value: string): string {
-  return value
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-}
-
-function userAborted(err: unknown, userSignal?: AbortSignal): boolean {
-  if (!userSignal?.aborted) return false
-  return err instanceof Error && err.name === 'AbortError'
 }
