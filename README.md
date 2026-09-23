@@ -6,7 +6,7 @@
 
 | Signal | Status |
 | --- | --- |
-| **Answered by you?** | **Live** homepage fetch (Jina Reader, HTML proxy fallback) → yes/partial/no with visible basis. **Not** ChatGPT/Perplexity. |
+| **Answered by you?** | **Live** same-origin page-content check (`GET /api/homepage?domain=`). Yes/partial/no from the homepage title and text. **Not** ChatGPT/Perplexity. |
 | Questions people ask | Labeled stub |
 | Who shows up instead | Labeled stub |
 
@@ -17,9 +17,12 @@ npm install
 npm run dev
 # or
 npm run build && npm run preview
+npm test
 ```
 
-Cloudflare Pages: build `npm run build`, output `dist`.
+Cloudflare Pages: build `npm run build`, output `dist`. The Pages Function `functions/api/homepage.ts` serves `/api/homepage` (same-origin; no CORS).
+
+`npm run dev` and `npm run preview` do not run Pages Functions. When `/api/homepage` is missing, the client falls back to Jina Reader and AllOrigins. Those proxies fail on production (Jina returns 401). Use the Pages deployment to see the live signal.
 
 ## 5-minute demo
 
