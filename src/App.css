@@ -1,0 +1,87 @@
+:root {
+  --bg: #0b0f14;
+  --card: #121821;
+  --ink: #e8eef5;
+  --muted: #8b9aab;
+  --line: #243041;
+  --accent: #5eead4;
+  --accent-ink: #042f2e;
+  --warn: #fbbf24;
+  --yes: #34d399;
+  --partial: #fbbf24;
+  --no: #f87171;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); }
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+.top {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
+}
+.logo {
+  background: none; border: none; color: var(--ink); font-weight: 750;
+  font-size: 1.15rem; letter-spacing: 0.02em; cursor: pointer;
+}
+.badge {
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
+  border: 1px solid var(--line); color: var(--muted);
+  padding: 0.3rem 0.55rem; border-radius: 999px;
+}
+.badge.warn { color: var(--warn); border-color: #785e1a; }
+.hero, .result-wrap { width: min(720px, 100%); margin: 0 auto; padding: 2.5rem 1.25rem 3rem; flex: 1; }
+.hero h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); line-height: 1.15; margin: 0 0 0.75rem; }
+.sub { color: var(--muted); font-size: 1.05rem; line-height: 1.5; margin: 0 0 1.5rem; }
+.cta { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.cta input {
+  flex: 1 1 220px; min-width: 0; background: var(--card); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 12px; padding: 0.85rem 1rem; font: inherit;
+}
+.cta button, .chip, .back {
+  background: var(--accent); color: var(--accent-ink); border: none; border-radius: 12px;
+  padding: 0.85rem 1.1rem; font-weight: 700; cursor: pointer; font: inherit;
+}
+.cta button:disabled { opacity: 0.7; cursor: wait; }
+.examples { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
+.chip { background: transparent; color: var(--accent); border: 1px solid #2dd4bf55; padding: 0.4rem 0.75rem; font-size: 0.88rem; }
+.proof { color: var(--muted); font-size: 0.85rem; margin: 1.25rem 0 2rem; }
+.foil {
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 1.25rem 1.35rem;
+}
+.foil h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.foil p { margin: 0 0 0.6rem; color: var(--muted); line-height: 1.5; }
+.small { font-size: 0.88rem; }
+.muted { color: var(--muted); }
+.status { color: var(--accent); margin-top: 0.85rem; }
+.err { color: var(--no); margin-top: 0.85rem; }
+.back { background: transparent; color: var(--muted); border: 1px solid var(--line); margin-bottom: 1rem; padding: 0.45rem 0.75rem; }
+.result {
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 1.35rem 1.4rem;
+}
+.result-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 1.25rem; flex-wrap: wrap; }
+.result h1 { margin: 0; font-size: 1.45rem; }
+.engines { color: var(--muted); font-size: 0.82rem; margin: 0.35rem 0 0; }
+.block { border-top: 1px solid var(--line); padding: 1rem 0; }
+.block h2 { margin: 0 0 0.65rem; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.block ul { margin: 0; padding-left: 1.15rem; }
+.block li { margin-bottom: 0.4rem; line-height: 1.4; }
+.signal {
+  display: inline-block; font-weight: 800; font-size: 1.2rem; padding: 0.25rem 0.65rem;
+  border-radius: 8px; margin-bottom: 0.5rem;
+}
+.signal.yes { background: #064e3b; color: var(--yes); }
+.signal.partial { background: #78350f; color: var(--partial); }
+.signal.no { background: #7f1d1d; color: var(--no); }
+.why { margin: 0; color: var(--muted); line-height: 1.45; }
+.who { list-style: none; padding: 0; margin: 0; }
+.who li {
+  display: flex; flex-direction: column; gap: 0.15rem; padding: 0.55rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.who li:last-child { border-bottom: none; }
+.who span { color: var(--muted); font-size: 0.9rem; }
+.footer-micro { color: var(--muted); font-size: 0.82rem; margin: 0.75rem 0 0; }
+.foot {
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 0.78rem;
+  padding: 1rem 1.25rem; text-align: center;
+}
