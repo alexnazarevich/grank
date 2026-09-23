@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { EXAMPLES, normalizeUrl, stubForDomain, type AhaResult } from './demoData'
+import { EXAMPLES, parseSite, stubQuestions, stubWhoInstead, type AhaResult } from './demoData'
+import { liveAnsweredByYou } from './liveAnswered'
 import './App.css'
 
 type Phase = 'home' | 'loading' | 'result' | 'error'
@@ -10,22 +11,47 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('home')
   const [result, setResult] = useState<AhaResult | null>(null)
   const [error, setError] = useState('')
+  const requestRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
 
   function runCheck(raw: string) {
-    const domain = normalizeUrl(raw)
-    if (!domain) {
+    const site = parseSite(raw)
+    if (!site) {
+      abortRef.current?.abort()
+      requestRef.current += 1
       setError('That URL didn’t load. Try again or use an example.')
       setPhase('error')
       setResult(null)
       return
     }
+
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const requestId = ++requestRef.current
     setError('')
     setPhase('loading')
-    const canned = EXAMPLES.find((e) => normalizeUrl(e.url) === domain)
-    window.setTimeout(() => {
-      setResult(canned ? canned.result : stubForDomain(domain))
-      setPhase('result')
-    }, 700)
+
+    void liveAnsweredByYou(site.href, site.domain, ctrl.signal)
+      .then((live) => {
+        if (requestId !== requestRef.current) return
+        setResult({
+          domain: site.domain,
+          questions: stubQuestions(site.domain),
+          answered: live.answered,
+          answeredWhy: live.answeredWhy,
+          whoInstead: stubWhoInstead(site.domain),
+          enginesChecked: live.enginesChecked,
+        })
+        setPhase('result')
+      })
+      .catch((err: unknown) => {
+        if (requestId !== requestRef.current) return
+        if (err instanceof Error && err.name === 'AbortError') return
+        setResult(null)
+        setError('That URL didn’t load. Try again or use an example.')
+        setPhase('error')
+      })
   }
 
   function onSubmit(e: FormEvent) {
@@ -39,6 +65,8 @@ export default function App() {
   }
 
   function reset() {
+    abortRef.current?.abort()
+    requestRef.current += 1
     setPhase('home')
     setResult(null)
     setError('')
@@ -50,7 +78,7 @@ export default function App() {
         <button type="button" className="logo" onClick={reset}>
           Grank
         </button>
-        <span className="badge">SAMPLE / DEMO · labeled stubs</span>
+        <span className="badge live">Answered-by-you live · other blocks stub</span>
       </header>
 
       {phase !== 'result' ? (
@@ -76,7 +104,7 @@ export default function App() {
           </form>
 
           {phase === 'loading' ? (
-            <p className="status">Checking how AI might talk about you…</p>
+            <p className="status">Reading the homepage for brand mentions…</p>
           ) : null}
           {phase === 'error' && error ? <p className="err">{error}</p> : null}
 
@@ -98,8 +126,8 @@ export default function App() {
           </div>
 
           <p className="proof">
-            Demo results use labeled sample / stubbed model output. We show the engines we actually
-            check — never “11 models” theater.
+            Answered-by-you reads the homepage (not ChatGPT or Perplexity). Questions and who shows
+            up instead stay labeled stubs — never “11 models” theater.
           </p>
 
           <section className="foil">
@@ -125,11 +153,13 @@ export default function App() {
                 <h1>AI visibility for {result.domain}</h1>
                 <p className="engines">Engines checked: {result.enginesChecked.join(', ')}</p>
               </div>
-              <span className="badge warn">Sample / demo data</span>
             </div>
 
             <section className="block">
-              <h2>Questions people ask</h2>
+              <h2>
+                Questions people ask
+                <span className="tag stub">Stub</span>
+              </h2>
               <ul>
                 {result.questions.map((q) => (
                   <li key={q}>{q}</li>
@@ -138,7 +168,10 @@ export default function App() {
             </section>
 
             <section className="block">
-              <h2>Answered by you?</h2>
+              <h2>
+                Answered by you?
+                <span className="tag live">Live</span>
+              </h2>
               <div className={`signal ${result.answered}`}>
                 {result.answered === 'yes' ? 'Yes' : result.answered === 'partial' ? 'Partial' : 'No'}
               </div>
@@ -146,7 +179,10 @@ export default function App() {
             </section>
 
             <section className="block">
-              <h2>Who shows up instead</h2>
+              <h2>
+                Who shows up instead
+                <span className="tag stub">Stub</span>
+              </h2>
               <ul className="who">
                 {result.whoInstead.map((w) => (
                   <li key={w.name}>
