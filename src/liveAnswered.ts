@@ -17,7 +17,7 @@ function brandTokens(domain: string): string[] {
   return [...tokens].filter((t) => t.length >= 2)
 }
 
-function scoreText(text: string, domain: string): { answered: Answered; why: string } {
+export function scoreText(text: string, domain: string): { answered: Answered; why: string } {
   const lower = text.toLowerCase()
   const brand = domain.split('.')[0] || domain
   const Brand = brand.charAt(0).toUpperCase() + brand.slice(1)
@@ -50,11 +50,67 @@ function scoreText(text: string, domain: string): { answered: Answered; why: str
   }
 }
 
-/** Fetch readable page text via Jina Reader (CORS-friendly). Falls back to allorigins HTML. */
-export async function liveAnsweredByYou(domain: string): Promise<LiveAnswered> {
-  const pageUrl = `https://${domain}`
-  const sourceLabel = 'Live homepage fetch (Jina Reader) — not ChatGPT/Perplexity'
+const PAGE_SOURCE = 'Live homepage fetch (page content) — not ChatGPT/Perplexity'
+const FAILED_SOURCE = 'Live homepage fetch failed'
 
+function failed(domain: string, detail: string): LiveAnswered {
+  const why = `Couldn’t fetch https://${domain} live (${detail}). Answered-by-you fell back to no — try again or use an example. (Fetch failed; still not an LLM query.)`
+  return {
+    answered: 'no',
+    answeredWhy: why,
+    sourceLabel: FAILED_SOURCE,
+    ok: false,
+  }
+}
+
+type HomepagePayload = { ok?: boolean; text?: string; error?: string }
+
+/**
+ * Same-origin Pages Function. Returns 'missing' only when `/api/homepage` is not
+ * deployed (local `vite` / `vite preview`, which do not run `functions/`).
+ */
+async function fetchViaPagesFunction(domain: string): Promise<LiveAnswered | 'missing'> {
+  let res: Response
+  try {
+    res = await fetch(`/api/homepage?domain=${encodeURIComponent(domain)}`, {
+      headers: { Accept: 'application/json' },
+    })
+  } catch {
+    return 'missing'
+  }
+
+  if (res.status === 404) return 'missing'
+
+  const type = res.headers.get('content-type') || ''
+  const raw = await res.text()
+  const looksLikeHtml = type.includes('text/html') || raw.trimStart().startsWith('<')
+  if (res.ok && looksLikeHtml) return 'missing'
+
+  let data: HomepagePayload
+  try {
+    data = JSON.parse(raw) as HomepagePayload
+  } catch {
+    if (res.ok) return 'missing'
+    return failed(domain, `HTTP ${res.status}`)
+  }
+
+  if (!res.ok || data.ok !== true || typeof data.text !== 'string') {
+    const detail = (data.error || `HTTP ${res.status}`).slice(0, 180)
+    return failed(domain, detail)
+  }
+
+  const { answered, why } = scoreText(data.text, domain)
+  return {
+    answered,
+    answeredWhy: why,
+    sourceLabel: PAGE_SOURCE,
+    ok: true,
+  }
+}
+
+/** Dev-only fallback when the Pages Function is not running. Jina often 401s. */
+async function fetchViaPublicProxies(domain: string): Promise<LiveAnswered> {
+  const pageUrl = `https://${domain}`
   try {
     const res = await fetch(`https://r.jina.ai/${pageUrl}`, {
       headers: { Accept: 'text/plain' },
@@ -63,7 +119,12 @@ export async function liveAnsweredByYou(domain: string): Promise<LiveAnswered> {
     const text = (await res.text()).slice(0, 80_000)
     if (text.trim().length < 40) throw new Error('empty jina')
     const { answered, why } = scoreText(text, domain)
-    return { answered, answeredWhy: why, sourceLabel, ok: true }
+    return {
+      answered,
+      answeredWhy: why,
+      sourceLabel: 'Live homepage fetch (Jina Reader) — not ChatGPT/Perplexity',
+      ok: true,
+    }
   } catch {
     try {
       const res = await fetch(
@@ -84,12 +145,17 @@ export async function liveAnsweredByYou(domain: string): Promise<LiveAnswered> {
         ok: true,
       }
     } catch {
-      return {
-        answered: 'no',
-        answeredWhy: `Couldn’t fetch ${pageUrl} live (blocked or down). Answered-by-you fell back to no — try again or use an example. (Fetch failed; still not an LLM query.)`,
-        sourceLabel: 'Live homepage fetch failed',
-        ok: false,
-      }
+      return failed(domain, 'blocked or down')
     }
   }
+}
+
+/**
+ * Production calls `/api/homepage` (Pages Function). Jina/AllOrigins run only when
+ * that route is missing — `npm run dev` and `npm run preview` do not serve it.
+ */
+export async function liveAnsweredByYou(domain: string): Promise<LiveAnswered> {
+  const viaFunction = await fetchViaPagesFunction(domain)
+  if (viaFunction !== 'missing') return viaFunction
+  return fetchViaPublicProxies(domain)
 }
