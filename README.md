@@ -1,3 +1,3 @@
 # Grank
 
-Website URL → AI visibility aha (Track A MVP).
+Track A MVP — Vite SPA. Source landing next.
