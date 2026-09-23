@@ -85,3 +85,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   border-top: 1px solid var(--line); color: var(--muted); font-size: 0.78rem;
   padding: 1rem 1.25rem; text-align: center;
 }
+.tag {
+  display: inline-block; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted); border: 1px solid var(--line);
+  padding: 0.1rem 0.35rem; border-radius: 4px; vertical-align: middle; margin-left: 0.35rem;
+}
+.tag.live { color: var(--yes); border-color: #065f46; }
+.badge.live { color: var(--yes); border-color: #065f46; }

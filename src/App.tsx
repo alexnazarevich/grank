@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { EXAMPLES, normalizeUrl, stubForDomain, type AhaResult } from './demoData'
+import { EXAMPLES, normalizeUrl, stubQuestionsFor, type AhaResult } from './demoData'
+import { liveAnsweredByYou } from './liveAnswered'
 import './App.css'
 
 type Phase = 'home' | 'loading' | 'result' | 'error'
@@ -11,7 +12,7 @@ export default function App() {
   const [result, setResult] = useState<AhaResult | null>(null)
   const [error, setError] = useState('')
 
-  function runCheck(raw: string) {
+  async function runCheck(raw: string) {
     const domain = normalizeUrl(raw)
     if (!domain) {
       setError('That URL didn’t load. Try again or use an example.')
@@ -21,11 +22,17 @@ export default function App() {
     }
     setError('')
     setPhase('loading')
-    const canned = EXAMPLES.find((e) => normalizeUrl(e.url) === domain)
-    window.setTimeout(() => {
-      setResult(canned ? canned.result : stubForDomain(domain))
-      setPhase('result')
-    }, 700)
+    const q = stubQuestionsFor(domain)
+    const live = await liveAnsweredByYou(domain)
+    setResult({
+      domain,
+      ...q,
+      answered: live.answered,
+      answeredWhy: live.answeredWhy,
+      enginesChecked: [live.sourceLabel],
+      answeredLive: live.ok,
+    })
+    setPhase('result')
   }
 
   function onSubmit(e: FormEvent) {
@@ -35,7 +42,7 @@ export default function App() {
       setPhase('error')
       return
     }
-    runCheck(url)
+    void runCheck(url)
   }
 
   function reset() {
@@ -50,7 +57,7 @@ export default function App() {
         <button type="button" className="logo" onClick={reset}>
           Grank
         </button>
-        <span className="badge">SAMPLE / DEMO · labeled stubs</span>
+        <span className="badge">ANSWERED-BY-YOU: LIVE FETCH · OTHER BLOCKS: STUBS</span>
       </header>
 
       {phase !== 'result' ? (
@@ -76,7 +83,7 @@ export default function App() {
           </form>
 
           {phase === 'loading' ? (
-            <p className="status">Checking how AI might talk about you…</p>
+            <p className="status">Fetching your homepage for a live answered-by-you signal…</p>
           ) : null}
           {phase === 'error' && error ? <p className="err">{error}</p> : null}
 
@@ -89,7 +96,7 @@ export default function App() {
                 className="chip"
                 onClick={() => {
                   setUrl(ex.url)
-                  runCheck(ex.url)
+                  void runCheck(ex.url)
                 }}
               >
                 Try: {ex.label}
@@ -98,8 +105,9 @@ export default function App() {
           </div>
 
           <p className="proof">
-            Demo results use labeled sample / stubbed model output. We show the engines we actually
-            check — never “11 models” theater.
+            Answered-by-you uses a <strong>live homepage fetch</strong> (single source). Sample
+            questions and “who shows up instead” are still labeled stubs — never “11 models”
+            theater.
           </p>
 
           <section className="foil">
@@ -123,13 +131,15 @@ export default function App() {
             <div className="result-head">
               <div>
                 <h1>AI visibility for {result.domain}</h1>
-                <p className="engines">Engines checked: {result.enginesChecked.join(', ')}</p>
+                <p className="engines">Signal: {result.enginesChecked.join(', ')}</p>
               </div>
-              <span className="badge warn">Sample / demo data</span>
+              <span className={`badge ${result.answeredLive ? 'live' : 'warn'}`}>
+                {result.answeredLive ? 'Answered-by-you: live' : 'Fetch failed'}
+              </span>
             </div>
 
             <section className="block">
-              <h2>Questions people ask</h2>
+              <h2>Questions people ask <span className="tag">stub</span></h2>
               <ul>
                 {result.questions.map((q) => (
                   <li key={q}>{q}</li>
@@ -138,7 +148,10 @@ export default function App() {
             </section>
 
             <section className="block">
-              <h2>Answered by you?</h2>
+              <h2>
+                Answered by you?{' '}
+                <span className="tag live">{result.answeredLive ? 'live' : 'fallback'}</span>
+              </h2>
               <div className={`signal ${result.answered}`}>
                 {result.answered === 'yes' ? 'Yes' : result.answered === 'partial' ? 'Partial' : 'No'}
               </div>
@@ -146,7 +159,7 @@ export default function App() {
             </section>
 
             <section className="block">
-              <h2>Who shows up instead</h2>
+              <h2>Who shows up instead <span className="tag">stub</span></h2>
               <ul className="who">
                 {result.whoInstead.map((w) => (
                   <li key={w.name}>
@@ -165,7 +178,8 @@ export default function App() {
       ) : null}
 
       <footer className="foot">
-        Grank — simple AEO for thin marketing teams. Not a live multi-engine AEO suite.
+        Grank — simple AEO for thin marketing teams. One live homepage signal; not a multi-engine
+        suite.
       </footer>
     </div>
   )

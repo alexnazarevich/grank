@@ -1,6 +1,14 @@
 # Grank MVP — homepage + URL → aha
 
-**Track A** static demo (Vite + React + TS). Labeled stubs only — no live LLM.
+**Track A** Vite + React + TS. Deployed: https://grank.pages.dev
+
+## What’s real vs stubbed
+
+| Signal | Status |
+| --- | --- |
+| **Answered by you?** | **Live** homepage fetch (Jina Reader, HTML proxy fallback) → yes/partial/no with visible basis. **Not** ChatGPT/Perplexity. |
+| Questions people ask | Labeled stub |
+| Who shows up instead | Labeled stub |
 
 ## Run
 
@@ -11,27 +19,11 @@ npm run dev
 npm run build && npm run preview
 ```
 
-## What’s real vs stubbed
+Cloudflare Pages: build `npm run build`, output `dist`.
 
-| Real | Stubbed |
-| --- | --- |
-| Homepage + URL → one-screen aha UX | All “model” answers / visibility signals |
-| Example paths (notion.so, linear.app) | Engine list = “Demo stub only” |
-| Heuristic cold-start card for other URLs | No crawl, no multi-engine coverage |
+## 5-minute demo
 
-## 5-minute demo script
-
-1. Open homepage — H1 + paste URL CTA.  
-2. Click **Try: linear.app** — Yes + who shows up instead.  
-3. Or paste any URL — cold-start **No** card (labeled sample).  
-4. Point at badges: Sample / demo data; engines checked line.  
-5. Close: speed + simplicity vs suites — not model-count bragging.
-
-## Acceptance (Strategist)
-
-- [x] Homepage with URL + example path  
-- [x] Aha: questions / answered-by-you / who shows up instead  
-- [x] Stubs labeled  
-- [x] No Agents / Credits chrome  
-- [x] README + demo script  
-- [x] Story messaging used  
+1. Open homepage → paste URL or try linear.app / notion.so.  
+2. Point at **Answered by you?** — live badge + fetch basis.  
+3. Point at stub tags on questions / who-instead.  
+4. Close: one real signal, still one screen — no suite chrome.
