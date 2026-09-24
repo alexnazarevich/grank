@@ -8,6 +8,10 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.wrangler
+.env
+.env.*
+.dev.vars
 # dist/ is committed so Cloudflare Pages can publish /dist
 dist-ssr
 *.local

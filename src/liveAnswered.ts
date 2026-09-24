@@ -1,4 +1,4 @@
-/** One real signal: live homepage fetch → answered-by-you. Not a ChatGPT/Perplexity query. */
+/** Supporting signal only: live homepage fetch. Primary answered-by-you is /api/visibility. */
 
 import type { Answered } from './demoData'
 

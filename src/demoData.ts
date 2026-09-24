@@ -1,23 +1,26 @@
-/** Questions + who-instead remain SAMPLE stubs. Answered-by-you can be live. */
+/** Who-instead stays a SAMPLE stub. Questions and answered-by-you come from /api/visibility. */
 
 export type Answered = 'yes' | 'partial' | 'no'
 
 export type AhaResult = {
   domain: string
   questions: string[]
-  answered: Answered
+  /** True when questions came from the model, not the sample bank. */
+  questionsGenerated: boolean
+  /** Null when the model call failed — never invent a Yes. */
+  answered: Answered | null
   answeredWhy: string
-  whoInstead: { name: string; note: string }[]
-  enginesChecked: string[]
-  /** true when questions/who are stubs; answered may still be live */
-  stubQuestions: boolean
   answeredLive: boolean
+  model: string | null
+  whoInstead: { name: string; note: string }[]
+  /** Short supporting line from the homepage fetch. Not the primary verdict. */
+  homepageSupport: string | null
 }
 
 const STUB_WHO = [
-  { name: 'Category leaders', note: 'Incumbents usually fill “best of” answers first (stub)' },
-  { name: 'Review roundups', note: 'Listicles get cited more than thin brand pages (stub)' },
-  { name: 'Wikipedia / docs hubs', note: 'High-trust sources AI leans on (stub)' },
+  { name: 'Category leaders', note: 'Incumbents usually fill “best of” answers first (sample)' },
+  { name: 'Review roundups', note: 'Listicles get cited more than thin brand pages (sample)' },
+  { name: 'Wikipedia / docs hubs', note: 'High-trust sources AI leans on (sample)' },
 ]
 
 export const EXAMPLES: { label: string; url: string }[] = [
@@ -38,7 +41,11 @@ export function normalizeUrl(raw: string): string | null {
   }
 }
 
-export function stubQuestionsFor(domain: string): Pick<AhaResult, 'questions' | 'whoInstead' | 'stubQuestions'> {
+/** Last-resort questions when /api/visibility fails. Always labeled Sample in the UI. */
+export function stubQuestionsFor(domain: string): {
+  questions: string[]
+  whoInstead: { name: string; note: string }[]
+} {
   const brand = domain.split('.')[0] || domain
   const Brand = brand.charAt(0).toUpperCase() + brand.slice(1)
   return {
@@ -49,6 +56,5 @@ export function stubQuestionsFor(domain: string): Pick<AhaResult, 'questions' | 
       `How do I get started with ${Brand}?`,
     ],
     whoInstead: STUB_WHO,
-    stubQuestions: true,
   }
 }

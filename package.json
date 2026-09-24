@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test scripts/homepage-signal.test.ts"
+    "test": "node --experimental-strip-types --test scripts/homepage-signal.test.ts scripts/visibility.test.ts"
   },
   "dependencies": {
     "react": "^19.2.8",
