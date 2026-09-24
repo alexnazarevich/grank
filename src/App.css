@@ -16,7 +16,8 @@
 body { margin: 0; background: var(--bg); color: var(--ink); }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 .top {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;
+  flex-wrap: wrap;
   padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
 }
 .logo {
@@ -24,9 +25,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   font-size: 1.15rem; letter-spacing: 0.02em; cursor: pointer;
 }
 .badge {
-  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.02em;
   border: 1px solid var(--line); color: var(--muted);
   padding: 0.3rem 0.55rem; border-radius: 999px;
+  max-width: min(40rem, 100%); line-height: 1.35; text-align: right;
 }
 .badge.warn { color: var(--warn); border-color: #785e1a; }
 .hero, .result-wrap { width: min(720px, 100%); margin: 0 auto; padding: 2.5rem 1.25rem 3rem; flex: 1; }
@@ -72,7 +74,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .signal.yes { background: #064e3b; color: var(--yes); }
 .signal.partial { background: #78350f; color: var(--partial); }
 .signal.no { background: #7f1d1d; color: var(--no); }
-.why { margin: 0; color: var(--muted); line-height: 1.45; }
+.signal.unavailable { background: #1f2937; color: var(--muted); }
+.why { margin: 0 0 0.65rem; color: var(--muted); line-height: 1.45; }
+.support { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
 .who { list-style: none; padding: 0; margin: 0; }
 .who li {
   display: flex; flex-direction: column; gap: 0.15rem; padding: 0.55rem 0;
@@ -90,5 +94,6 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   text-transform: uppercase; color: var(--muted); border: 1px solid var(--line);
   padding: 0.1rem 0.35rem; border-radius: 4px; vertical-align: middle; margin-left: 0.35rem;
 }
+.tag.plain { text-transform: none; letter-spacing: 0.01em; }
 .tag.live { color: var(--yes); border-color: #065f46; }
 .badge.live { color: var(--yes); border-color: #065f46; }

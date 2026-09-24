@@ -1,10 +1,17 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { EXAMPLES, normalizeUrl, stubQuestionsFor, type AhaResult } from './demoData'
+import { EXAMPLES, normalizeUrl, stubQuestionsFor, type AhaResult, type Answered } from './demoData'
 import { liveAnsweredByYou } from './liveAnswered'
+import { fetchVisibility } from './visibilityClient'
 import './App.css'
 
 type Phase = 'home' | 'loading' | 'result' | 'error'
+
+function verdictWord(answered: Answered): string {
+  if (answered === 'yes') return 'Yes'
+  if (answered === 'partial') return 'Partial'
+  return 'No'
+}
 
 export default function App() {
   const [url, setUrl] = useState('')
@@ -22,16 +29,41 @@ export default function App() {
     }
     setError('')
     setPhase('loading')
-    const q = stubQuestionsFor(domain)
-    const live = await liveAnsweredByYou(domain)
-    setResult({
-      domain,
-      ...q,
-      answered: live.answered,
-      answeredWhy: live.answeredWhy,
-      enginesChecked: [live.sourceLabel],
-      answeredLive: live.ok,
-    })
+
+    const [visibility, homepage] = await Promise.all([
+      fetchVisibility(domain),
+      liveAnsweredByYou(domain),
+    ])
+    const stubs = stubQuestionsFor(domain)
+    const homepageSupport = homepage.ok
+      ? `Supporting homepage fetch: ${verdictWord(homepage.answered)}. Page content only — not the model read.`
+      : null
+
+    if (visibility.ok) {
+      setResult({
+        domain,
+        questions: visibility.questions,
+        questionsGenerated: true,
+        answered: visibility.answered,
+        answeredWhy: visibility.why,
+        answeredLive: true,
+        model: visibility.model,
+        whoInstead: stubs.whoInstead,
+        homepageSupport,
+      })
+    } else {
+      setResult({
+        domain,
+        questions: stubs.questions,
+        questionsGenerated: false,
+        answered: null,
+        answeredWhy: visibility.error,
+        answeredLive: false,
+        model: null,
+        whoInstead: stubs.whoInstead,
+        homepageSupport,
+      })
+    }
     setPhase('result')
   }
 
@@ -57,15 +89,17 @@ export default function App() {
         <button type="button" className="logo" onClick={reset}>
           Grank
         </button>
-        <span className="badge">ANSWERED-BY-YOU: LIVE FETCH · OTHER BLOCKS: STUBS</span>
+        <span className="badge">
+          Questions: Generated · OpenAI · Answered-by-you: Live model · Who-instead: Sample
+        </span>
       </header>
 
       {phase !== 'result' ? (
         <main className="hero">
           <h1>See if AI answers with you</h1>
           <p className="sub">
-            Paste a URL. Get a clear read on sample questions, whether you’re in the answer, and who
-            shows up instead — without setup.
+            Paste a URL. Get questions generated for your site, a live model read on whether you’re
+            in the answer, and a sample of who shows up instead — without setup.
           </p>
 
           <form className="cta" onSubmit={onSubmit}>
@@ -78,13 +112,11 @@ export default function App() {
               aria-label="Website URL"
             />
             <button type="submit" disabled={phase === 'loading'}>
-              {phase === 'loading' ? 'Checking…' : 'Check visibility'}
+              {phase === 'loading' ? 'Generating…' : 'Check visibility'}
             </button>
           </form>
 
-          {phase === 'loading' ? (
-            <p className="status">Fetching your homepage for a live answered-by-you signal…</p>
-          ) : null}
+          {phase === 'loading' ? <p className="status">Generating questions…</p> : null}
           {phase === 'error' && error ? <p className="err">{error}</p> : null}
 
           <div className="examples">
@@ -105,17 +137,17 @@ export default function App() {
           </div>
 
           <p className="proof">
-            Answered-by-you uses a <strong>live homepage fetch</strong> (single source). Sample
-            questions and “who shows up instead” are still labeled stubs — never “11 models”
-            theater.
+            Questions are generated for your site with <strong>gpt-4o-mini</strong>. Answered-by-you
+            is a <strong>live model</strong> read (OpenAI). Who shows up instead is still a{' '}
+            <strong>sample</strong>.
           </p>
 
           <section className="foil">
             <h2>Built for thin teams</h2>
             <p>
               “Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops.
-              You need a glance: your site → sample questions → are you answered → who shows up
-              instead.
+              You need a glance: your site → questions generated for you → are you answered → who
+              shows up instead (sample).
             </p>
             <p className="muted small">
               Not Cognizo/Profound suite pricing — and simpler than Gumshoe’s audit setup.
@@ -131,15 +163,27 @@ export default function App() {
             <div className="result-head">
               <div>
                 <h1>AI visibility for {result.domain}</h1>
-                <p className="engines">Signal: {result.enginesChecked.join(', ')}</p>
+                <p className="engines">
+                  {result.answeredLive
+                    ? `OpenAI · ${result.model}`
+                    : 'Model call failed — questions below are a labeled sample'}
+                </p>
               </div>
               <span className={`badge ${result.answeredLive ? 'live' : 'warn'}`}>
-                {result.answeredLive ? 'Answered-by-you: live' : 'Fetch failed'}
+                {result.answeredLive ? 'Live model · gpt-4o-mini' : 'Model unavailable'}
               </span>
             </div>
 
             <section className="block">
-              <h2>Questions people ask <span className="tag">stub</span></h2>
+              <h2>
+                Questions people ask{' '}
+                <span className={`tag plain ${result.questionsGenerated ? 'live' : ''}`}>
+                  {result.questionsGenerated ? 'Generated · OpenAI' : 'Sample'}
+                </span>
+              </h2>
+              {!result.questionsGenerated ? (
+                <p className="why">Sample questions — generation failed, so these are not from the model.</p>
+              ) : null}
               <ul>
                 {result.questions.map((q) => (
                   <li key={q}>{q}</li>
@@ -150,16 +194,26 @@ export default function App() {
             <section className="block">
               <h2>
                 Answered by you?{' '}
-                <span className="tag live">{result.answeredLive ? 'live' : 'fallback'}</span>
+                <span className={`tag plain ${result.answeredLive ? 'live' : ''}`}>
+                  {result.answeredLive ? 'Live model' : 'Unavailable'}
+                </span>
+                {result.answeredLive ? (
+                  <span className="tag plain live">OpenAI · gpt-4o-mini</span>
+                ) : null}
               </h2>
-              <div className={`signal ${result.answered}`}>
-                {result.answered === 'yes' ? 'Yes' : result.answered === 'partial' ? 'Partial' : 'No'}
-              </div>
+              {result.answeredLive && result.answered ? (
+                <div className={`signal ${result.answered}`}>{verdictWord(result.answered)}</div>
+              ) : (
+                <div className="signal unavailable">Unavailable</div>
+              )}
               <p className="why">{result.answeredWhy}</p>
+              {result.homepageSupport ? <p className="support">{result.homepageSupport}</p> : null}
             </section>
 
             <section className="block">
-              <h2>Who shows up instead <span className="tag">stub</span></h2>
+              <h2>
+                Who shows up instead <span className="tag plain">Sample</span>
+              </h2>
               <ul className="who">
                 {result.whoInstead.map((w) => (
                   <li key={w.name}>
@@ -178,8 +232,8 @@ export default function App() {
       ) : null}
 
       <footer className="foot">
-        Grank — simple AEO for thin marketing teams. One live homepage signal; not a multi-engine
-        suite.
+        Grank — simple AEO for thin marketing teams. Live questions and a live model read.
+        Who-instead is a sample — not a multi-engine suite.
       </footer>
     </div>
   )
