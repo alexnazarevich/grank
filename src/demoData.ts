@@ -8,6 +8,8 @@ export type VisibilityMode = 'unbranded' | 'branded'
 export type ModeBeat = {
   mode: VisibilityMode
   questions: string[]
+  /** Branded model replies aligned to questions. Empty string → no answer for that row. Unbranded is []. */
+  answers: string[]
   /** True when questions came from the model, not the sample bank. */
   questionsGenerated: boolean
   /** Null when the model call failed — never invent a Yes. */

@@ -1,4 +1,4 @@
-/** Same-origin call to the Pages Function. Unbranded is the default; branded omits who-instead. */
+/** Same-origin call to the Pages Function. Unbranded is the default; branded adds answers and omits who-instead. */
 
 import type { Answered } from './demoData'
 
@@ -8,6 +8,8 @@ export type VisibilityOk = {
   ok: true
   mode: VisibilityMode
   questions: string[]
+  /** Branded replies aligned to questions. "" means that row had no answer. Unbranded is []. */
+  answers: string[]
   answered: Answered
   why: string
   model: string
@@ -16,6 +18,44 @@ export type VisibilityOk = {
 
 const WHO_INSTEAD_MAX = 3
 const WHO_INSTEAD_NAME_MAX = 80
+const ANSWER_MAX = 900
+
+function normalizeAnswer(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/g, ' ').trim().slice(0, ANSWER_MAX)
+}
+
+/**
+ * Accepts string questions plus a parallel `answers` array, or `{ question, answer }` objects.
+ * Branded only — callers drop the answers on unbranded.
+ */
+export function parseClientAnswers(
+  questionsField: unknown,
+  answersField: unknown,
+): { questions: string[]; answers: string[] } {
+  if (!Array.isArray(questionsField)) return { questions: [], answers: [] }
+  const parallel = Array.isArray(answersField) ? answersField : []
+  const questions: string[] = []
+  const answers: string[] = []
+  for (let i = 0; i < questionsField.length && questions.length < 5; i++) {
+    const item = questionsField[i]
+    let question = ''
+    let answer: unknown = parallel[i]
+    if (typeof item === 'string') {
+      question = item
+    } else if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>
+      if (typeof rec.question === 'string') question = rec.question
+      if (typeof rec.answer === 'string') answer = rec.answer
+    }
+    const q = question.replace(/\s+/g, ' ').trim()
+    if (!q || q.length > 240) continue
+    const fromItem = normalizeAnswer(answer)
+    questions.push(q)
+    answers.push(fromItem || normalizeAnswer(parallel[i]))
+  }
+  return { questions, answers }
+}
 
 /** Same rules as the Pages Function: trim, drop blanks, skip this brand, cap at 3. */
 export function parseClientWhoInstead(value: unknown, domain?: string): string[] {
@@ -80,12 +120,8 @@ export function interpretVisibilityResponse(
     }
   }
 
-  const questions = Array.isArray(rec.questions)
-    ? rec.questions
-        .filter((q): q is string => typeof q === 'string')
-        .map((q) => q.trim())
-        .filter(Boolean)
-    : []
+  const parsedQa = parseClientAnswers(rec.questions, rec.answers)
+  const questions = parsedQa.questions
   const answered = rec.answered
   const why = typeof rec.why === 'string' ? rec.why.trim() : ''
   const model = typeof rec.model === 'string' ? rec.model.trim() : ''
@@ -111,6 +147,8 @@ export function interpretVisibilityResponse(
     answered,
     why,
     model,
+    // Answers are the branded dig only. Unbranded stays a question list.
+    answers: mode === 'branded' ? parsedQa.answers : [],
     // Who-instead is the unbranded beat only, even if a branded payload includes names.
     whoInstead: mode === 'branded' ? [] : parseClientWhoInstead(rec.whoInstead, domain),
   }

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, scrubSecret } from '../functions/api/visibility.ts'
+import { onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
 import { stubQuestionsFor } from '../src/demoData.ts'
 import { STORY } from '../src/story.ts'
-import { fetchVisibility, interpretVisibilityResponse, parseClientWhoInstead } from '../src/visibilityClient.ts'
+import { fetchVisibility, interpretVisibilityResponse, parseClientAnswers, parseClientWhoInstead } from '../src/visibilityClient.ts'
 
 const KEY = 'sk-test-visibility-secret'
 
@@ -81,6 +81,55 @@ describe('parseVisibilityContent', () => {
     assert.equal(parseVisibilityContent(JSON.stringify({ ...GOOD, answered: 'maybe' })), null)
     assert.equal(parseVisibilityContent(JSON.stringify({ ...GOOD, why: '   ' })), null)
   })
+
+  it('aligns parallel answers and leaves blanks empty', () => {
+    const parsed = parseVisibilityContent(JSON.stringify({
+      ...GOOD,
+      answers: [
+        '  Linear is a project tool for software teams. Public descriptions stay general. ',
+        '',
+        '   ',
+      ],
+    }))
+    assert.equal(parsed?.questions.length, 3)
+    assert.equal(parsed?.answers[0]?.startsWith('Linear is a project tool'), true)
+    assert.equal(parsed?.answers[1], '')
+    assert.equal(parsed?.answers[2], '')
+  })
+
+  it('reads { question, answer } objects and drops a bad question without shifting', () => {
+    const parsed = parseVisibilityContent(JSON.stringify({
+      ...GOOD,
+      questions: [
+        { question: 'What is Linear?', answer: 'Linear is an issue tracker. Teams use it for software work. The summary stays cautious.' },
+        { question: '   ', answer: 'This must not become an answer for the next question.' },
+        { question: 'How do people describe Linear?', answer: '' },
+        { question: 'What does Linear claim?', answer: 12 },
+      ],
+      answers: ['parallel-0', 'parallel-1', 'People describe Linear in general terms. It is known for a fast workflow. That is not a live quote.', ''],
+    }))
+    assert.deepEqual(parsed?.questions, [
+      'What is Linear?',
+      'How do people describe Linear?',
+      'What does Linear claim?',
+    ])
+    assert.equal(parsed?.answers[0]?.includes('issue tracker'), true)
+    assert.equal(parsed?.answers[1]?.startsWith('People describe Linear'), true)
+    assert.equal(parsed?.answers[2], '')
+    assert.equal(parsed?.answers.some((a) => a.includes('must not become')), false)
+  })
+
+  it('keeps answer index when a string question is dropped', () => {
+    const { questions, answers } = readQuestionAnswers(
+      ['What is Linear?', '', 'How is Linear described?', 'x'.repeat(241), 'What does Linear claim?'],
+      ['First reply about Linear. It is a product tool. Details stay public.', 'dropped', 'Second reply about Linear. Tone is the point. No citation.', 'also dropped', ''],
+    )
+    assert.deepEqual(questions, ['What is Linear?', 'How is Linear described?', 'What does Linear claim?'])
+    assert.equal(answers[0]?.startsWith('First reply'), true)
+    assert.equal(answers[1]?.startsWith('Second reply'), true)
+    assert.equal(answers[2], '')
+    assert.equal(answers.some((a) => a.includes('dropped')), false)
+  })
 })
 
 describe('scrubSecret', () => {
@@ -152,6 +201,8 @@ describe('onRequest /api/visibility', () => {
       assert.match(sent, /Mode: unbranded/)
       assert.match(sent, /whoInstead/)
       assert.match(sent, /Do not put the brand name/)
+      assert.match(sent, /"max_tokens":600/)
+      assert.equal(sent.includes('"answers"'), false)
       return new Response(modelPayload(GOOD), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -179,6 +230,7 @@ describe('onRequest /api/visibility', () => {
       assert.equal(body.model, 'gpt-4o-mini')
       assert.equal(body.questions?.length, 3)
       assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
+      assert.equal('answers' in body, false)
     } finally {
       globalThis.fetch = prev
     }
@@ -335,12 +387,13 @@ describe('interpretVisibilityResponse', () => {
     if (!missing.ok) assert.equal(missing.error, 'OPENAI_API_KEY not configured')
   })
 
-  it('drops whoInstead on a branded payload', () => {
+  it('drops whoInstead on a branded payload and keeps aligned answers', () => {
     const ok = interpretVisibilityResponse(200, {
       ok: true,
       mode: 'branded',
       model: 'gpt-4o-mini',
       questions: ['What is Linear?', 'How do people describe Linear?', 'What does Linear claim?'],
+      answers: ['  A short Linear reply. It stays general. No live quote. ', ''],
       answered: 'yes',
       why: 'Named questions usually get a description.',
       whoInstead: ['Jira', 'Asana'],
@@ -349,7 +402,53 @@ describe('interpretVisibilityResponse', () => {
     if (ok.ok) {
       assert.equal(ok.mode, 'branded')
       assert.deepEqual(ok.whoInstead, [])
+      assert.equal(ok.answers[0]?.startsWith('A short Linear reply'), true)
+      assert.equal(ok.answers[1], '')
+      assert.equal(ok.answers[2], '')
+      assert.equal(ok.answers.length, 3)
     }
+  })
+
+  it('reads branded question objects and drops answers on unbranded', () => {
+    const branded = interpretVisibilityResponse(200, {
+      ok: true,
+      mode: 'branded',
+      model: 'gpt-4o-mini',
+      questions: [
+        { question: 'What is Linear?', answer: 'Linear is a software project tool. The reply is a sample. It is not a scrape.' },
+        { question: 'How is Linear described?', answer: '   ' },
+        { question: 'What does Linear claim?', answer: 'Linear talks about a fast workflow. That claim stays high level. No URL.' },
+      ],
+      answered: 'partial',
+      why: 'Named questions get a partial description.',
+    }, false, 'linear.app', 'branded')
+    assert.equal(branded.ok, true)
+    if (branded.ok) {
+      assert.equal(branded.answers.length, 3)
+      assert.match(branded.answers[0], /software project tool/)
+      assert.equal(branded.answers[1], '')
+      assert.match(branded.answers[2], /fast workflow/)
+    }
+
+    const unbranded = interpretVisibilityResponse(200, {
+      ok: true,
+      mode: 'unbranded',
+      model: 'gpt-4o-mini',
+      questions: GOOD.questions,
+      answers: ['This reply must not land on the unbranded beat.'],
+      answered: 'partial',
+      why: GOOD.why,
+      whoInstead: ['Jira'],
+    }, false, 'linear.app', 'unbranded')
+    assert.equal(unbranded.ok, true)
+    if (unbranded.ok) {
+      assert.deepEqual(unbranded.answers, [])
+      assert.deepEqual(unbranded.whoInstead, ['Jira'])
+    }
+    assert.equal(parseClientAnswers(
+      [{ question: 'What is Notion?', answer: '' }],
+      ['Notion is a workspace. People use it for notes and docs. The note stays general.'],
+    ).answers[0]?.startsWith('Notion is a workspace'), true)
   })
 
   it('rejects a mode that does not match the request', () => {
@@ -434,11 +533,17 @@ describe('onRequest mode', () => {
       assert.equal(res.status, 200)
       assert.match(sent, /Mode: branded/)
       assert.match(sent, /every question must include the brand name/)
+      assert.match(sent, /\\"answers\\"/)
+      assert.match(sent, /2 to 4 sentences/)
+      assert.match(sent, /ChatGPT said/)
+      assert.match(sent, /"max_tokens":1400/)
+      assert.match(sent, /gpt-4o-mini/)
       assert.equal(sent.includes('whoInstead'), false)
-      const body = (await res.json()) as { mode?: string; questions?: string[] }
+      const body = (await res.json()) as { mode?: string; questions?: string[]; answers?: string[] }
       assert.equal(body.mode, 'branded')
       assert.equal('whoInstead' in body, false)
       assert.equal(body.questions?.length, 3)
+      assert.deepEqual(body.answers, ['', '', ''])
     } finally {
       globalThis.fetch = prev
     }
@@ -480,6 +585,74 @@ describe('onRequest mode', () => {
       globalThis.fetch = prev
     }
   })
+
+  it('returns branded answers aligned to questions and does not invent a missing one', async () => {
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (!url.includes('api.openai.com')) {
+        return new Response('nope', { status: 404 })
+      }
+      return new Response(modelPayload({
+        questions: [
+          'What is Linear?',
+          'How do people describe Linear?',
+          'What does Linear claim?',
+        ],
+        answers: [
+          `Linear is a project tool for software teams. Public blurbs stay general. key ${KEY} must not leak.`,
+          '',
+        ],
+        answered: 'partial',
+        why: 'Named questions get a partial description.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=branded'),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      assert.equal(res.status, 200)
+      const text = await res.text()
+      assert.equal(text.includes(KEY), false)
+      const body = JSON.parse(text) as { answers?: string[]; questions?: string[]; whoInstead?: unknown }
+      assert.equal(body.questions?.length, 3)
+      assert.equal(body.answers?.length, 3)
+      assert.match(body.answers?.[0] || '', /project tool/)
+      assert.match(body.answers?.[0] || '', /\[redacted\]/)
+      assert.equal(body.answers?.[1], '')
+      assert.equal(body.answers?.[2], '')
+      assert.equal('whoInstead' in body, false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('omits answers on unbranded even when the model sends them', async () => {
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (!url.includes('api.openai.com')) {
+        return new Response('nope', { status: 404 })
+      }
+      return new Response(modelPayload({
+        ...GOOD,
+        answers: ['A reply that must not show on the unbranded land beat. It is extra. Ignore it.'],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=unbranded'),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as { whoInstead?: string[]; answers?: string[] }
+      assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
+      assert.equal('answers' in body, false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
 })
 
 describe('fetchVisibility', () => {
@@ -495,6 +668,7 @@ describe('fetchVisibility', () => {
         questions: ['What is Linear?', 'How is Linear described?', 'What does Linear claim?'],
         answered: 'partial',
         why: 'Named questions get a partial description.',
+        answers: ['Linear gets a short description. It is a sample reply. Not a live engine line.', ''],
         whoInstead: ['Jira'],
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     }) as typeof fetch
@@ -506,6 +680,10 @@ describe('fetchVisibility', () => {
       if (result.ok) {
         assert.equal(result.mode, 'branded')
         assert.deepEqual(result.whoInstead, [])
+        assert.equal(result.answers.length, 3)
+        assert.match(result.answers[0], /short description/)
+        assert.equal(result.answers[1], '')
+        assert.equal(result.answers[2], '')
       }
     } finally {
       globalThis.fetch = prev
@@ -538,6 +716,13 @@ describe('unbranded samples and story copy', () => {
     )
     assert.equal(STORY.digBadge, 'Branded')
     assert.equal(STORY.digFail, 'Couldn’t generate branded questions — try again.')
+    assert.equal(STORY.answerLabel, 'Generated · OpenAI')
+    assert.equal(
+      STORY.answerHelper,
+      'Answers below are from our model for these questions — not a live multi-engine scrape.',
+    )
+    assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
+    assert.equal(JSON.stringify(STORY).includes('what ChatGPT said'), false)
     assert.equal(
       STORY.homeSub,
       'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand.',

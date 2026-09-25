@@ -63,8 +63,22 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .block h2.beat-title {
   text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 1.2rem; margin-bottom: 0.35rem;
 }
-.block li.q { display: flex; gap: 0.5rem; align-items: baseline; }
+.block li.q { margin-bottom: 0.55rem; }
+.q-line { display: flex; gap: 0.5rem; align-items: baseline; }
 .q-badge { margin-left: 0; flex: none; }
+.block ul.answers { list-style: none; padding: 0; }
+.block li.q.with-answer {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.45rem; margin-bottom: 0.95rem;
+}
+.answer {
+  background: #0b0f14; border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.8rem;
+}
+.answer.miss { background: transparent; }
+.answer-meta { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; margin-bottom: 0.4rem; }
+.answer .tag { margin-left: 0; }
+.answer-helper { font-size: 0.82rem; }
+.answer-body { margin: 0; line-height: 1.5; }
+.answer.miss .answer-body { color: var(--muted); }
 .ask {
   margin-top: 0.9rem; background: transparent; color: var(--accent);
   border: 1px solid #2dd4bf55; border-radius: 12px; padding: 0.55rem 0.9rem;
