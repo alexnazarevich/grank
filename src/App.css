@@ -47,6 +47,30 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .examples { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
 .chip { background: transparent; color: var(--accent); border: 1px solid #2dd4bf55; padding: 0.4rem 0.75rem; font-size: 0.88rem; }
 .proof { color: var(--muted); font-size: 0.85rem; margin: 1.25rem 0 2rem; }
+.proof.in-result { margin: 0.75rem 0 0; font-size: 0.8rem; }
+.segments { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.segments button {
+  background: transparent; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 0.4rem 0.85rem; font: inherit; font-size: 0.85rem;
+  font-weight: 700; cursor: pointer;
+}
+.segments button[aria-selected="true"] {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+}
+.eyebrow {
+  margin: 0 0 0.3rem; font-size: 0.72rem; font-weight: 750; letter-spacing: 0.04em; color: var(--accent);
+}
+.block h2.beat-title {
+  text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 1.2rem; margin-bottom: 0.35rem;
+}
+.block li.q { display: flex; gap: 0.5rem; align-items: baseline; }
+.q-badge { margin-left: 0; flex: none; }
+.ask {
+  margin-top: 0.9rem; background: transparent; color: var(--accent);
+  border: 1px solid #2dd4bf55; border-radius: 12px; padding: 0.55rem 0.9rem;
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.ask:disabled { opacity: 0.7; cursor: wait; }
 .foil {
   background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 1.25rem 1.35rem;
 }

@@ -1,9 +1,12 @@
-/** Same-origin call to the Pages Function: questions, answered-by-you, and who-instead. */
+/** Same-origin call to the Pages Function. Unbranded is the default; branded omits who-instead. */
 
 import type { Answered } from './demoData'
 
+export type VisibilityMode = 'unbranded' | 'branded'
+
 export type VisibilityOk = {
   ok: true
+  mode: VisibilityMode
   questions: string[]
   answered: Answered
   why: string
@@ -54,6 +57,7 @@ export function interpretVisibilityResponse(
   data: unknown,
   unusableBody: boolean,
   domain?: string,
+  expectedMode?: VisibilityMode,
 ): VisibilityOk | VisibilityFail {
   if (status === 404 || unusableBody) {
     return {
@@ -86,26 +90,42 @@ export function interpretVisibilityResponse(
   const why = typeof rec.why === 'string' ? rec.why.trim() : ''
   const model = typeof rec.model === 'string' ? rec.model.trim() : ''
   const answeredOk = answered === 'yes' || answered === 'partial' || answered === 'no'
-  if (questions.length < 3 || questions.length > 5 || !answeredOk || !why || !model) {
+  const modeRaw = rec.mode
+  const mode: VisibilityMode | 'invalid' =
+    modeRaw == null || modeRaw === ''
+      ? 'unbranded'
+      : modeRaw === 'unbranded' || modeRaw === 'branded'
+        ? modeRaw
+        : 'invalid'
+  if (questions.length < 3 || questions.length > 5 || !answeredOk || !why || !model || mode === 'invalid') {
+    return { ok: false, error: 'Question generation returned an unusable result.' }
+  }
+  if (expectedMode && mode !== expectedMode) {
     return { ok: false, error: 'Question generation returned an unusable result.' }
   }
 
   return {
     ok: true,
+    mode,
     questions,
     answered,
     why,
     model,
-    whoInstead: parseClientWhoInstead(rec.whoInstead, domain),
+    // Who-instead is the unbranded beat only, even if a branded payload includes names.
+    whoInstead: mode === 'branded' ? [] : parseClientWhoInstead(rec.whoInstead, domain),
   }
 }
 
-export async function fetchVisibility(domain: string): Promise<VisibilityOk | VisibilityFail> {
+export async function fetchVisibility(
+  domain: string,
+  mode: VisibilityMode = 'unbranded',
+): Promise<VisibilityOk | VisibilityFail> {
   let res: Response
   try {
-    res = await fetch(`/api/visibility?domain=${encodeURIComponent(domain)}`, {
-      headers: { Accept: 'application/json' },
-    })
+    res = await fetch(
+      `/api/visibility?domain=${encodeURIComponent(domain)}&mode=${mode}`,
+      { headers: { Accept: 'application/json' } },
+    )
   } catch {
     return { ok: false, error: 'Could not reach question generation. Try again.' }
   }
@@ -113,7 +133,7 @@ export async function fetchVisibility(domain: string): Promise<VisibilityOk | Vi
   const raw = await res.text()
   const type = res.headers.get('content-type') || ''
   if (type.includes('text/html') || raw.trimStart().startsWith('<')) {
-    return interpretVisibilityResponse(res.status, null, true)
+    return interpretVisibilityResponse(res.status, null, true, domain, mode)
   }
 
   let data: unknown
@@ -123,5 +143,5 @@ export async function fetchVisibility(domain: string): Promise<VisibilityOk | Vi
     return { ok: false, error: `Question generation failed (HTTP ${res.status}).` }
   }
 
-  return interpretVisibilityResponse(res.status, data, false, domain)
+  return interpretVisibilityResponse(res.status, data, false, domain, mode)
 }
