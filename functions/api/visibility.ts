@@ -1,6 +1,6 @@
 /**
  * Cloudflare Pages Function: GET or POST /api/visibility?domain=linear.app
- * Live questions + answered-by-you via OpenAI gpt-4o-mini.
+ * Live questions, answered-by-you, and who-instead via OpenAI gpt-4o-mini.
  * OPENAI_API_KEY is read from the Pages env only. Never returned.
  */
 
@@ -20,10 +20,11 @@ Return JSON only:
   "questions": ["3 to 5 natural questions a buyer might ask an AI assistant about this brand or its category"],
   "answered": "yes" | "partial" | "no",
   "why": "one honest sentence",
-  "whoInstead": ["optional other names that might be cited instead"]
+  "whoInstead": ["1 to 3 real alternate brand or product names"]
 }
 "answered" means whether THIS brand is likely cited when those questions are asked of an AI assistant.
-"why" must be one honest sentence and must not overclaim.`
+"why" must be one honest sentence and must not overclaim.
+"whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.`
 
 export type VisibilityEnv = {
   OPENAI_API_KEY?: string
@@ -35,6 +36,36 @@ export type ParsedVisibility = {
   questions: string[]
   answered: Answered
   why: string
+  whoInstead: string[]
+}
+
+const WHO_INSTEAD_MAX = 3
+const WHO_INSTEAD_NAME_MAX = 80
+
+/** Trim, drop blanks and non-names, skip this brand, cap at 3. Missing → []. */
+export function parseWhoInstead(value: unknown, domain?: string): string[] {
+  if (!Array.isArray(value)) return []
+  const blocked = new Set<string>()
+  if (domain) {
+    const host = domain.toLowerCase()
+    const stem = host.split('.')[0] || host
+    blocked.add(stem.replace(/[^a-z0-9]+/g, ''))
+    blocked.add(host.replace(/[^a-z0-9]+/g, ''))
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const name = item.replace(/\s+/g, ' ').trim()
+    if (!name || name.length > WHO_INSTEAD_NAME_MAX) continue
+    const key = name.toLowerCase()
+    const compact = key.replace(/[^a-z0-9]+/g, '')
+    if (!compact || blocked.has(compact) || seen.has(key)) continue
+    seen.add(key)
+    out.push(name)
+    if (out.length >= WHO_INSTEAD_MAX) break
+  }
+  return out
 }
 
 function json(status: number, body: Record<string, unknown>): Response {
@@ -55,7 +86,7 @@ export function scrubSecret(value: string, secret: string): string {
   return out.replace(/\s+/g, ' ').trim()
 }
 
-export function parseVisibilityContent(raw: string): ParsedVisibility | null {
+export function parseVisibilityContent(raw: string, domain?: string): ParsedVisibility | null {
   let text = raw.trim()
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text)
   if (fence) text = fence[1].trim()
@@ -83,7 +114,7 @@ export function parseVisibilityContent(raw: string): ParsedVisibility | null {
   if (typeof rec.why !== 'string') return null
   const why = rec.why.replace(/\s+/g, ' ').trim().slice(0, 400)
   if (!why) return null
-  return { questions, answered, why }
+  return { questions, answered, why, whoInstead: parseWhoInstead(rec.whoInstead, domain) }
 }
 
 async function domainFromRequest(request: Request): Promise<string | null> {
@@ -186,7 +217,7 @@ async function completeVisibility(
     return json(502, { error: 'OpenAI request failed: unreadable response' })
   }
 
-  const parsed = parseVisibilityContent(scrubSecret(content, apiKey))
+  const parsed = parseVisibilityContent(scrubSecret(content, apiKey), domain)
   if (!parsed) {
     return json(502, { error: 'OpenAI request failed: model output was not usable JSON' })
   }
@@ -198,6 +229,7 @@ async function completeVisibility(
     questions: parsed.questions,
     answered: parsed.answered,
     why: parsed.why,
+    whoInstead: parsed.whoInstead,
   })
 }
 
