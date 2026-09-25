@@ -48,7 +48,8 @@ export default function App() {
         answeredWhy: visibility.why,
         answeredLive: true,
         model: visibility.model,
-        whoInstead: stubs.whoInstead,
+        whoInstead: visibility.whoInstead,
+        whoInsteadLive: true,
         homepageSupport,
       })
     } else {
@@ -60,7 +61,8 @@ export default function App() {
         answeredWhy: visibility.error,
         answeredLive: false,
         model: null,
-        whoInstead: stubs.whoInstead,
+        whoInstead: [],
+        whoInsteadLive: false,
         homepageSupport,
       })
     }
@@ -90,7 +92,7 @@ export default function App() {
           Grank
         </button>
         <span className="badge">
-          Questions: Generated · OpenAI · Answered-by-you: Live model · Who-instead: Sample
+          Questions: Generated · OpenAI · Answered-by-you: Live model · Who-instead: Generated · OpenAI
         </span>
       </header>
 
@@ -99,7 +101,7 @@ export default function App() {
           <h1>See if AI answers with you</h1>
           <p className="sub">
             Paste a URL. Get questions generated for your site, a live model read on whether you’re
-            in the answer, and a sample of who shows up instead — without setup.
+            in the answer, and who shows up instead — without setup.
           </p>
 
           <form className="cta" onSubmit={onSubmit}>
@@ -137,9 +139,8 @@ export default function App() {
           </div>
 
           <p className="proof">
-            Questions are generated for your site with <strong>gpt-4o-mini</strong>. Answered-by-you
-            is a <strong>live model</strong> read (OpenAI). Who shows up instead is still a{' '}
-            <strong>sample</strong>.
+            Questions, whether you’re answered, and who shows up instead all come from one{' '}
+            <strong>gpt-4o-mini</strong> call (OpenAI).
           </p>
 
           <section className="foil">
@@ -147,7 +148,7 @@ export default function App() {
             <p>
               “Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops.
               You need a glance: your site → questions generated for you → are you answered → who
-              shows up instead (sample).
+              shows up instead.
             </p>
             <p className="muted small">
               Not Cognizo/Profound suite pricing — and simpler than Gumshoe’s audit setup.
@@ -166,7 +167,7 @@ export default function App() {
                 <p className="engines">
                   {result.answeredLive
                     ? `OpenAI · ${result.model}`
-                    : 'Model call failed — questions below are a labeled sample'}
+                    : 'Model call failed — questions below are a labeled sample. Answered-by-you is unavailable.'}
                 </p>
               </div>
               <span className={`badge ${result.answeredLive ? 'live' : 'warn'}`}>
@@ -212,16 +213,22 @@ export default function App() {
 
             <section className="block">
               <h2>
-                Who shows up instead <span className="tag plain">Sample</span>
+                Who shows up instead{' '}
+                <span className={`tag plain ${result.whoInsteadLive ? 'live' : ''}`}>
+                  Generated · OpenAI
+                </span>
               </h2>
-              <ul className="who">
-                {result.whoInstead.map((w) => (
-                  <li key={w.name}>
-                    <strong>{w.name}</strong>
-                    <span>{w.note}</span>
-                  </li>
-                ))}
-              </ul>
+              {result.whoInstead.length > 0 ? (
+                <ul className="who">
+                  {result.whoInstead.map((name) => (
+                    <li key={name}>
+                      <strong>{name}</strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="why">Couldn’t find alternatives</p>
+              )}
             </section>
 
             <p className="footer-micro">
@@ -232,8 +239,8 @@ export default function App() {
       ) : null}
 
       <footer className="foot">
-        Grank — simple AEO for thin marketing teams. Live questions and a live model read.
-        Who-instead is a sample — not a multi-engine suite.
+        Grank — simple AEO for thin marketing teams. Live questions, a live model read, and who
+        shows up instead — one OpenAI model, not a multi-engine suite.
       </footer>
     </div>
   )

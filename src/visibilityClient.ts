@@ -1,4 +1,4 @@
-/** Same-origin call to the Pages Function that generates questions and answered-by-you. */
+/** Same-origin call to the Pages Function: questions, answered-by-you, and who-instead. */
 
 import type { Answered } from './demoData'
 
@@ -8,6 +8,36 @@ export type VisibilityOk = {
   answered: Answered
   why: string
   model: string
+  whoInstead: string[]
+}
+
+const WHO_INSTEAD_MAX = 3
+const WHO_INSTEAD_NAME_MAX = 80
+
+/** Same rules as the Pages Function: trim, drop blanks, skip this brand, cap at 3. */
+export function parseClientWhoInstead(value: unknown, domain?: string): string[] {
+  if (!Array.isArray(value)) return []
+  const blocked = new Set<string>()
+  if (domain) {
+    const host = domain.toLowerCase()
+    const stem = host.split('.')[0] || host
+    blocked.add(stem.replace(/[^a-z0-9]+/g, ''))
+    blocked.add(host.replace(/[^a-z0-9]+/g, ''))
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const name = item.replace(/\s+/g, ' ').trim()
+    if (!name || name.length > WHO_INSTEAD_NAME_MAX) continue
+    const key = name.toLowerCase()
+    const compact = key.replace(/[^a-z0-9]+/g, '')
+    if (!compact || blocked.has(compact) || seen.has(key)) continue
+    seen.add(key)
+    out.push(name)
+    if (out.length >= WHO_INSTEAD_MAX) break
+  }
+  return out
 }
 
 export type VisibilityFail = {
@@ -23,6 +53,7 @@ export function interpretVisibilityResponse(
   status: number,
   data: unknown,
   unusableBody: boolean,
+  domain?: string,
 ): VisibilityOk | VisibilityFail {
   if (status === 404 || unusableBody) {
     return {
@@ -59,7 +90,14 @@ export function interpretVisibilityResponse(
     return { ok: false, error: 'Question generation returned an unusable result.' }
   }
 
-  return { ok: true, questions, answered, why, model }
+  return {
+    ok: true,
+    questions,
+    answered,
+    why,
+    model,
+    whoInstead: parseClientWhoInstead(rec.whoInstead, domain),
+  }
 }
 
 export async function fetchVisibility(domain: string): Promise<VisibilityOk | VisibilityFail> {
@@ -85,5 +123,5 @@ export async function fetchVisibility(domain: string): Promise<VisibilityOk | Vi
     return { ok: false, error: `Question generation failed (HTTP ${res.status}).` }
   }
 
-  return interpretVisibilityResponse(res.status, data, false)
+  return interpretVisibilityResponse(res.status, data, false, domain)
 }
