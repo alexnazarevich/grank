@@ -7,6 +7,8 @@ export type LiveAnswered = {
   answeredWhy: string
   sourceLabel: string
   ok: boolean
+  /** Raw fetched text. Only sent to save when storeHomepageSnippet is on. */
+  pageText?: string
 }
 
 function brandTokens(domain: string): string[] {
@@ -105,6 +107,7 @@ async function fetchViaPagesFunction(domain: string): Promise<LiveAnswered | 'mi
     answeredWhy: why,
     sourceLabel: PAGE_SOURCE,
     ok: true,
+    pageText: data.text,
   }
 }
 
@@ -124,6 +127,7 @@ async function fetchViaPublicProxies(domain: string): Promise<LiveAnswered> {
       answeredWhy: why,
       sourceLabel: 'Live homepage fetch (Jina Reader) — not ChatGPT/Perplexity',
       ok: true,
+      pageText: text,
     }
   } catch {
     try {
@@ -143,6 +147,7 @@ async function fetchViaPublicProxies(domain: string): Promise<LiveAnswered> {
         answeredWhy: why,
         sourceLabel: 'Live homepage fetch (HTML proxy) — not ChatGPT/Perplexity',
         ok: true,
+        pageText: stripped,
       }
     } catch {
       return failed(domain, 'blocked or down')

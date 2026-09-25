@@ -135,3 +135,43 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .tag.plain { text-transform: none; letter-spacing: 0.01em; }
 .tag.live { color: var(--yes); border-color: #065f46; }
 .badge.live { color: var(--yes); border-color: #065f46; }
+.badge-row { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
+.top-actions { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; align-items: center; }
+.text-btn {
+  background: none; border: none; color: var(--accent); font: inherit; font-weight: 650;
+  cursor: pointer; padding: 0.2rem 0;
+}
+.whoami {
+  color: var(--muted); font-size: 0.78rem; max-width: 14rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.save-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.85rem; }
+.save-row.nudge { padding: 0.75rem; border: 1px solid #2dd4bf55; border-radius: 12px; }
+.save-row button, .foil button {
+  background: var(--accent); color: var(--accent-ink); border: none; border-radius: 12px;
+  padding: 0.7rem 1rem; font-weight: 700; cursor: pointer; font: inherit;
+}
+.save-row button.secondary {
+  background: transparent; color: var(--accent); border: 1px solid #2dd4bf55;
+}
+.save-row button:disabled, .foil button:disabled { opacity: 0.7; cursor: wait; }
+.email-form { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.email-form input {
+  flex: 1 1 200px; min-width: 0; background: var(--card); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 12px; padding: 0.75rem 1rem; font: inherit;
+}
+.email-form button {
+  background: var(--accent); color: var(--accent-ink); border: none; border-radius: 12px;
+  padding: 0.75rem 1rem; font-weight: 700; cursor: pointer; font: inherit;
+}
+.email-form button:disabled { opacity: 0.7; cursor: wait; }
+.email-form .why, .email-form .err, .email-form .status { flex: 1 0 100%; margin: 0; }
+.history { list-style: none; padding: 0; margin: 1rem 0 0; }
+.history-item {
+  width: 100%; text-align: left; background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 0.5rem;
+  display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
+  cursor: pointer; font: inherit;
+}
+.history-item span { color: var(--muted); font-size: 0.82rem; }
+.upgrade { margin-top: 1rem; }
