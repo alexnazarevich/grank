@@ -725,11 +725,33 @@ describe('unbranded samples and story copy', () => {
     assert.equal(JSON.stringify(STORY).includes('what ChatGPT said'), false)
     assert.equal(
       STORY.homeSub,
-      'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand.',
+      'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand. No setup.',
     )
     assert.equal(
       STORY.proof,
       'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
     )
+  })
+
+  it('locks the homepage story lines', () => {
+    assert.equal(STORY.documentTitle, 'Grank — See if you show up in AI answers')
+    assert.equal(STORY.headerBadge, 'SIMPLE AEO · LABELED MODEL CHECKS')
+    assert.equal(STORY.homeH1, 'See if you show up in AI answers')
+    assert.equal(STORY.urlPlaceholder, 'https://yourbrand.com')
+    assert.equal(STORY.cta, 'Check visibility')
+    assert.equal(STORY.homeLoading, 'Checking how AI might talk about you…')
+    assert.equal(STORY.exampleLead, 'Or try an example:')
+    assert.equal(
+      STORY.homeProof,
+      'We generate questions and answers with OpenAI and label every block. This is not a live multi-engine scrape — and we never blend branded + unbranded into one score.',
+    )
+    assert.equal(STORY.foilTitle, 'Built for thin teams')
+    assert.equal(
+      STORY.foilBody,
+      '“Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops. You need a glance: do you show up for what you solve — and who shows up instead.',
+    )
+    assert.equal(STORY.foilFoot, 'Land on unbranded. Dig into branded when you’re ready.')
+    assert.equal(JSON.stringify(STORY).includes('11 models'), false)
+    assert.equal(JSON.stringify(STORY).includes('blended visibility'), false)
   })
 })
