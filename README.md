@@ -7,7 +7,7 @@
 | Signal | Status |
 | --- | --- |
 | **Unbranded questions** (default) | **Generated · OpenAI** — category / job-to-be-done questions. `GET /api/visibility?domain=&mode=unbranded` (mode defaults to unbranded; POST JSON also works). The brand is known for the read, but the questions do not need its name. |
-| **Branded questions** | Same endpoint with `mode=branded`, on demand from **Ask about your brand**. Questions name the brand. A failed branded check says “Couldn’t generate branded questions — try again.” |
+| **Branded questions** | Same endpoint with `mode=branded`, on demand from **Ask about your brand**. Questions name the brand. Each one includes a short `answers[]` reply from the same `gpt-4o-mini` call (or `{ question, answer }` objects, which the function normalizes). Under each question: badge **Generated · OpenAI** and “Model sample answer — not a live engine scrape”. A missing reply says “Couldn’t get an answer” — no invented praise. A failed branded check says “Couldn’t generate branded questions — try again.” |
 | **Answered by you?** | **Live model** — the verdict belongs to the active set only (unbranded or branded). Yes / partial / no, conservative, one-sentence why. Not a multi-engine scan and not a blended score. |
 | **Who shows up instead** | **Unbranded only.** 1–3 real alternate brand names from that call. No names → “Couldn’t find alternatives”. Branded responses omit it. |
 | Homepage fetch | Small supporting line only (`GET /api/homepage`). It does not set the primary verdict. |
@@ -45,5 +45,5 @@ npx wrangler pages dev dist
 1. Open homepage → paste URL or try linear.app / notion.so.
 2. Land on **Unbranded** — “Do you show up for what you solve?” Each question is badged Unbranded.
 3. Point at **Answered by you?** — that read is for the unbranded set. **Who shows up instead** is on this beat only.
-4. **Ask about your brand** → branded questions (“What do they say about you?”), badged Branded. Who-instead is gone. Switch back with **Unbranded** — the first result stays cached.
+4. **Ask about your brand** → branded questions (“What do they say about you?”), badged Branded, each with a model answer labeled **Generated · OpenAI** (or “Couldn’t get an answer”). Who-instead is gone. Switch back with **Unbranded** — the first result stays cached, still a question list with no answer blocks.
 5. Close: one screen, one model, two labeled sets. No blended score.

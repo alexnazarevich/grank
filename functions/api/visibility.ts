@@ -2,7 +2,8 @@
  * Cloudflare Pages Function: GET or POST /api/visibility?domain=linear.app&mode=unbranded
  * Live questions and answered-by-you via OpenAI gpt-4o-mini.
  * mode=unbranded (default): category / JTBD questions, plus who-instead.
- * mode=branded: questions that name the brand. No who-instead. No blended score.
+ * mode=branded: questions that name the brand, each with a short model answer.
+ * No who-instead on branded. No blended score. Missing answers stay empty.
  * OPENAI_API_KEY is read from the Pages env only. Never returned.
  */
 
@@ -33,16 +34,18 @@ Questions are unbranded: category or job-to-be-done only. Do not put the brand n
 "why" must be one honest sentence and must not overclaim.
 "whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those unbranded questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.`
 
-/** Questions that name the brand. No competitor list — who-instead stays on the unbranded beat. */
+/** Questions that name the brand, plus a short reply under each. No competitor list. */
 const BRANDED_SYSTEM_PROMPT = `You estimate how an AI assistant describes a brand when people ask questions that name it.
 ${SHARED_RULES}
 Return JSON only:
 {
   "questions": ["3 to 5 natural questions that name this brand"],
+  "answers": ["one brief assistant reply for each question, same order and same length as questions"],
   "answered": "yes" | "partial" | "no",
   "why": "one honest sentence"
 }
 Questions are branded: every question must include the brand name. Ask about tone, claims, and how the brand is described. Do not ask generic category questions that omit the name.
+"answers" must align 1:1 with "questions". Each answer is a plausible assistant reply about this brand in 2 to 4 sentences, conservative and based on public knowledge. If you are unsure, say so plainly in that answer. Do not invent praise, quotes, citations, or URLs. Do not write "ChatGPT said", "Perplexity said", or "Gemini said", and do not claim you scraped a live engine. If you cannot answer a question, use an empty string for that item.
 "answered" means whether an AI assistant is likely to describe THIS brand when those branded questions are asked.
 "why" must be one honest sentence and must not overclaim.
 Do not name competitors or alternate brands. Do not return a competitor list.`
@@ -67,9 +70,51 @@ type Answered = 'yes' | 'partial' | 'no'
 
 export type ParsedVisibility = {
   questions: string[]
+  /** Aligned to questions. Empty string means that question had no usable answer. */
+  answers: string[]
   answered: Answered
   why: string
   whoInstead: string[]
+}
+
+const ANSWER_MAX = 900
+
+/** Trim a model reply. Non-strings and blanks become "" — never a filled-in compliment. */
+export function normalizeAnswer(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/g, ' ').trim().slice(0, ANSWER_MAX)
+}
+
+/**
+ * Questions may be strings (with a parallel answers array) or `{ question, answer }` objects.
+ * Dropped questions drop their answer so the lists stay aligned. Cap at 5.
+ */
+export function readQuestionAnswers(
+  questionsField: unknown,
+  answersField: unknown,
+): { questions: string[]; answers: string[] } {
+  if (!Array.isArray(questionsField)) return { questions: [], answers: [] }
+  const parallel = Array.isArray(answersField) ? answersField : []
+  const questions: string[] = []
+  const answers: string[] = []
+  for (let i = 0; i < questionsField.length && questions.length < 5; i++) {
+    const item = questionsField[i]
+    let question = ''
+    let answer: unknown = parallel[i]
+    if (typeof item === 'string') {
+      question = item
+    } else if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>
+      if (typeof rec.question === 'string') question = rec.question
+      if (typeof rec.answer === 'string') answer = rec.answer
+    }
+    const q = question.replace(/\s+/g, ' ').trim()
+    if (!q || q.length > 240) continue
+    const fromItem = normalizeAnswer(answer)
+    questions.push(q)
+    answers.push(fromItem || normalizeAnswer(parallel[i]))
+  }
+  return { questions, answers }
 }
 
 const WHO_INSTEAD_MAX = 3
@@ -134,20 +179,20 @@ export function parseVisibilityContent(raw: string, domain?: string): ParsedVisi
   }
   if (!data || typeof data !== 'object') return null
   const rec = data as Record<string, unknown>
-  const questions = Array.isArray(rec.questions)
-    ? rec.questions
-        .filter((q): q is string => typeof q === 'string')
-        .map((q) => q.replace(/\s+/g, ' ').trim())
-        .filter((q) => q.length > 0 && q.length <= 240)
-        .slice(0, 5)
-    : []
+  const { questions, answers } = readQuestionAnswers(rec.questions, rec.answers)
   if (questions.length < 3) return null
   const answered = rec.answered
   if (answered !== 'yes' && answered !== 'partial' && answered !== 'no') return null
   if (typeof rec.why !== 'string') return null
   const why = rec.why.replace(/\s+/g, ' ').trim().slice(0, 400)
   if (!why) return null
-  return { questions, answered, why, whoInstead: parseWhoInstead(rec.whoInstead, domain) }
+  return {
+    questions,
+    answers,
+    answered,
+    why,
+    whoInstead: parseWhoInstead(rec.whoInstead, domain),
+  }
 }
 
 async function fieldsFromRequest(request: Request): Promise<{
@@ -239,7 +284,7 @@ async function completeVisibility(
       body: JSON.stringify({
         model: MODEL,
         temperature: 0.2,
-        max_tokens: 600,
+        max_tokens: mode === 'branded' ? 1400 : 600,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: systemPromptFor(mode) },
@@ -289,8 +334,9 @@ async function completeVisibility(
     answered: parsed.answered,
     why: parsed.why,
   }
-  // Who-instead stays on the unbranded beat. Branded responses omit it entirely.
+  // Who-instead stays on the unbranded beat. Answers stay on the branded beat.
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
+  if (mode === 'branded') body.answers = parsed.answers
   return json(200, body)
 }
 

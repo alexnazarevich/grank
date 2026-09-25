@@ -34,6 +34,7 @@ function unbrandedBeat(domain: string, visibility: VisibilityOk | VisibilityFail
     return {
       mode: 'unbranded',
       questions: visibility.questions,
+      answers: [],
       questionsGenerated: true,
       answered: visibility.answered,
       answeredWhy: visibility.why,
@@ -46,6 +47,7 @@ function unbrandedBeat(domain: string, visibility: VisibilityOk | VisibilityFail
   return {
     mode: 'unbranded',
     questions: stubQuestionsFor(domain).questions,
+    answers: [],
     questionsGenerated: false,
     answered: null,
     answeredWhy: visibility.error,
@@ -61,6 +63,7 @@ function brandedBeat(visibility: VisibilityOk | VisibilityFail): ModeBeat {
     return {
       mode: 'branded',
       questions: visibility.questions,
+      answers: visibility.answers,
       questionsGenerated: true,
       answered: visibility.answered,
       answeredWhy: visibility.why,
@@ -73,6 +76,7 @@ function brandedBeat(visibility: VisibilityOk | VisibilityFail): ModeBeat {
   return {
     mode: 'branded',
     questions: [],
+    answers: [],
     questionsGenerated: false,
     answered: null,
     answeredWhy: visibility.ok ? STORY.digFail : visibility.error,
@@ -299,15 +303,31 @@ export default function App() {
               ) : null}
 
               {!brandedLoading && beat && beat.questions.length > 0 ? (
-                <ul>
-                  {beat.questions.map((q, i) => (
-                    <li key={`${beat.mode}-${i}`} className="q">
-                      <span className="tag plain q-badge">
-                        {land ? STORY.landBadge : STORY.digBadge}
-                      </span>
-                      <span>{q}</span>
-                    </li>
-                  ))}
+                <ul className={land ? undefined : 'answers'}>
+                  {beat.questions.map((q, i) => {
+                    const answer = land ? '' : (beat.answers[i] || '').trim()
+                    return (
+                      <li key={`${beat.mode}-${i}`} className={land ? 'q' : 'q with-answer'}>
+                        <div className="q-line">
+                          <span className="tag plain q-badge">
+                            {land ? STORY.landBadge : STORY.digBadge}
+                          </span>
+                          <span>{q}</span>
+                        </div>
+                        {land ? null : (
+                          <div className={answer ? 'answer' : 'answer miss'}>
+                            {answer ? (
+                              <div className="answer-meta">
+                                <span className="tag plain live">{STORY.answerLabel}</span>
+                                <span className="answer-helper">{STORY.answerHelper}</span>
+                              </div>
+                            ) : null}
+                            <p className="answer-body">{answer || STORY.answerMiss}</p>
+                          </div>
+                        )}
+                      </li>
+                    )
+                  })}
                 </ul>
               ) : null}
 
