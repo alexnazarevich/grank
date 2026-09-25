@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { onRequest, parseVisibilityContent, parseWhoInstead, scrubSecret } from '../functions/api/visibility.ts'
-import { interpretVisibilityResponse, parseClientWhoInstead } from '../src/visibilityClient.ts'
+import { onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, scrubSecret } from '../functions/api/visibility.ts'
+import { stubQuestionsFor } from '../src/demoData.ts'
+import { STORY } from '../src/story.ts'
+import { fetchVisibility, interpretVisibilityResponse, parseClientWhoInstead } from '../src/visibilityClient.ts'
 
 const KEY = 'sk-test-visibility-secret'
 
@@ -147,6 +149,9 @@ describe('onRequest /api/visibility', () => {
       assert.equal(sent.includes(KEY), false)
       assert.match(sent, /gpt-4o-mini/)
       assert.match(sent, /issue tracker/)
+      assert.match(sent, /Mode: unbranded/)
+      assert.match(sent, /whoInstead/)
+      assert.match(sent, /Do not put the brand name/)
       return new Response(modelPayload(GOOD), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -164,10 +169,12 @@ describe('onRequest /api/visibility', () => {
         ok?: boolean
         answered?: string
         model?: string
+        mode?: string
         questions?: string[]
         whoInstead?: string[]
       }
       assert.equal(body.ok, true)
+      assert.equal(body.mode, 'unbranded')
       assert.equal(body.answered, 'partial')
       assert.equal(body.model, 'gpt-4o-mini')
       assert.equal(body.questions?.length, 3)
@@ -190,7 +197,7 @@ describe('onRequest /api/visibility', () => {
       }
       prompts.push(String(init?.body || ''))
       const sent = JSON.parse(String(init?.body || '')) as { messages?: { content?: string }[] }
-      const user = sent.messages?.find((m) => m.content?.startsWith('Brand domain:'))?.content || ''
+      const user = sent.messages?.map((m) => m.content || '').find((content) => content.includes('Brand domain:')) || ''
       const domain = /Brand domain: (\S+)/.exec(user)?.[1] || 'unknown'
       const alts = domain.startsWith('linear') ? ['Jira', 'Height'] : ['Coda', 'Slite']
       return new Response(
@@ -291,7 +298,10 @@ describe('interpretVisibilityResponse', () => {
       whoInstead: ['  Jira ', 'Asana', 'Height', 'Shortcut'],
     }, false, 'linear.app')
     assert.equal(ok.ok, true)
-    if (ok.ok) assert.deepEqual(ok.whoInstead, ['Jira', 'Asana', 'Height'])
+    if (ok.ok) {
+      assert.equal(ok.mode, 'unbranded')
+      assert.deepEqual(ok.whoInstead, ['Jira', 'Asana', 'Height'])
+    }
 
     const failed = interpretVisibilityResponse(502, {
       ok: false,
@@ -323,5 +333,218 @@ describe('interpretVisibilityResponse', () => {
     const missing = interpretVisibilityResponse(503, { error: 'OPENAI_API_KEY not configured' }, false)
     assert.equal(missing.ok, false)
     if (!missing.ok) assert.equal(missing.error, 'OPENAI_API_KEY not configured')
+  })
+
+  it('drops whoInstead on a branded payload', () => {
+    const ok = interpretVisibilityResponse(200, {
+      ok: true,
+      mode: 'branded',
+      model: 'gpt-4o-mini',
+      questions: ['What is Linear?', 'How do people describe Linear?', 'What does Linear claim?'],
+      answered: 'yes',
+      why: 'Named questions usually get a description.',
+      whoInstead: ['Jira', 'Asana'],
+    }, false, 'linear.app', 'branded')
+    assert.equal(ok.ok, true)
+    if (ok.ok) {
+      assert.equal(ok.mode, 'branded')
+      assert.deepEqual(ok.whoInstead, [])
+    }
+  })
+
+  it('rejects a mode that does not match the request', () => {
+    const failed = interpretVisibilityResponse(200, {
+      ok: true,
+      mode: 'unbranded',
+      model: 'gpt-4o-mini',
+      questions: GOOD.questions,
+      answered: 'partial',
+      why: GOOD.why,
+      whoInstead: ['Jira'],
+    }, false, 'linear.app', 'branded')
+    assert.equal(failed.ok, false)
+  })
+})
+
+describe('parseVisibilityMode', () => {
+  it('treats blank as absent and accepts either mode', () => {
+    assert.equal(parseVisibilityMode(undefined), 'absent')
+    assert.equal(parseVisibilityMode(null), 'absent')
+    assert.equal(parseVisibilityMode(''), 'absent')
+    assert.equal(parseVisibilityMode('  '), 'absent')
+    assert.equal(parseVisibilityMode('Unbranded'), 'unbranded')
+    assert.equal(parseVisibilityMode('BRANDED'), 'branded')
+  })
+
+  it('rejects an unknown mode', () => {
+    assert.equal(parseVisibilityMode('both'), 'invalid')
+    assert.equal(parseVisibilityMode(1), 'invalid')
+  })
+})
+
+describe('onRequest mode', () => {
+  it('rejects an unknown mode and does not call fetch', async () => {
+    let called = false
+    const prev = globalThis.fetch
+    globalThis.fetch = (() => {
+      called = true
+      throw new Error('should not fetch')
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=both'),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      assert.equal(res.status, 400)
+      const body = (await res.json()) as { error?: string }
+      assert.equal(body.error, 'mode must be unbranded or branded')
+      assert.equal(called, false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('branded mode asks for named questions and omits whoInstead', async () => {
+    let sent = ''
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (!url.includes('api.openai.com')) {
+        return new Response('<title>Linear</title><p>Linear is an issue tracker for software teams.</p>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      }
+      sent = String(init?.body || '')
+      return new Response(modelPayload({
+        ...GOOD,
+        questions: [
+          'What is Linear?',
+          'How do people describe Linear?',
+          'What does Linear claim about speed?',
+        ],
+        whoInstead: ['Jira', 'Asana'],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=branded'),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      assert.equal(res.status, 200)
+      assert.match(sent, /Mode: branded/)
+      assert.match(sent, /every question must include the brand name/)
+      assert.equal(sent.includes('whoInstead'), false)
+      const body = (await res.json()) as { mode?: string; questions?: string[] }
+      assert.equal(body.mode, 'branded')
+      assert.equal('whoInstead' in body, false)
+      assert.equal(body.questions?.length, 3)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('accepts branded mode from POST JSON', async () => {
+    let sent = ''
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (!url.includes('api.openai.com')) {
+        return new Response('nope', { status: 404 })
+      }
+      sent = String(init?.body || '')
+      return new Response(modelPayload({
+        questions: ['What is Notion?', 'How is Notion described?', 'What does Notion claim?'],
+        answered: 'partial',
+        why: 'Named questions get a partial description.',
+        whoInstead: ['Coda'],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ domain: 'notion.so', mode: 'branded' }),
+        }),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      assert.equal(res.status, 200)
+      assert.match(sent, /Mode: branded/)
+      assert.match(sent, /notion\.so/)
+      assert.equal(sent.includes('whoInstead'), false)
+      const body = (await res.json()) as { mode?: string }
+      assert.equal(body.mode, 'branded')
+      assert.equal('whoInstead' in body, false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+})
+
+describe('fetchVisibility', () => {
+  it('requests the branded mode and keeps whoInstead empty', async () => {
+    const prev = globalThis.fetch
+    let called = ''
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      called = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      return new Response(JSON.stringify({
+        ok: true,
+        mode: 'branded',
+        model: 'gpt-4o-mini',
+        questions: ['What is Linear?', 'How is Linear described?', 'What does Linear claim?'],
+        answered: 'partial',
+        why: 'Named questions get a partial description.',
+        whoInstead: ['Jira'],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const result = await fetchVisibility('linear.app', 'branded')
+      assert.match(called, /mode=branded/)
+      assert.match(called, /domain=linear\.app/)
+      assert.equal(result.ok, true)
+      if (result.ok) {
+        assert.equal(result.mode, 'branded')
+        assert.deepEqual(result.whoInstead, [])
+      }
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+})
+
+describe('unbranded samples and story copy', () => {
+  it('does not put the brand name in sample questions', () => {
+    const { questions } = stubQuestionsFor('linear.app')
+    assert.equal(questions.length >= 3, true)
+    assert.equal(questions.some((q) => /linear/i.test(q)), false)
+  })
+
+  it('keeps the land and dig lines', () => {
+    assert.equal(STORY.landEyebrow, 'Unbranded')
+    assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
+    assert.equal(
+      STORY.landHelper,
+      'Category questions — no brand name required. This is the usual first ask.',
+    )
+    assert.equal(STORY.landBadge, 'Unbranded')
+    assert.equal(STORY.ask, 'Ask about your brand')
+    assert.equal(STORY.digLoading, 'Checking what they say when people name you…')
+    assert.equal(STORY.digEyebrow, 'Branded')
+    assert.equal(STORY.digTitle, 'What do they say about you?')
+    assert.equal(
+      STORY.digHelper,
+      'Questions that name your brand — tone, claims, how you’re described.',
+    )
+    assert.equal(STORY.digBadge, 'Branded')
+    assert.equal(STORY.digFail, 'Couldn’t generate branded questions — try again.')
+    assert.equal(
+      STORY.homeSub,
+      'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand.',
+    )
+    assert.equal(
+      STORY.proof,
+      'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
+    )
   })
 })

@@ -1,6 +1,8 @@
 /**
- * Cloudflare Pages Function: GET or POST /api/visibility?domain=linear.app
- * Live questions, answered-by-you, and who-instead via OpenAI gpt-4o-mini.
+ * Cloudflare Pages Function: GET or POST /api/visibility?domain=linear.app&mode=unbranded
+ * Live questions and answered-by-you via OpenAI gpt-4o-mini.
+ * mode=unbranded (default): category / JTBD questions, plus who-instead.
+ * mode=branded: questions that name the brand. No who-instead. No blended score.
  * OPENAI_API_KEY is read from the Pages env only. Never returned.
  */
 
@@ -12,19 +14,50 @@ const TIMEOUT_MS = 20_000
 const EXCERPT_TIMEOUT_MS = 4_000
 const USER_AGENT = 'GrankBot/0.1 (+https://grank.pages.dev)'
 
-const SYSTEM_PROMPT = `You estimate whether a brand is likely cited when people ask an AI assistant about it.
-Use public brand knowledge only. Be conservative: obscure or thin brands are "no" or "partial", not "yes".
+const SHARED_RULES = `Use public brand knowledge only. Be conservative: obscure or thin brands are "no" or "partial", not "yes".
 Do not invent citations, rankings, traffic, or claims that you queried other engines.
+Do not return a visibility percentage or a score that blends question types.`
+
+/** Category / JTBD questions. The brand is known, but it must not appear in the question text. */
+const UNBRANDED_SYSTEM_PROMPT = `You estimate whether a brand is likely cited when people ask an AI assistant category or job-to-be-done questions. Those questions must not name the brand.
+${SHARED_RULES}
 Return JSON only:
 {
-  "questions": ["3 to 5 natural questions a buyer might ask an AI assistant about this brand or its category"],
+  "questions": ["3 to 5 natural category or job-to-be-done questions a buyer might ask without naming this brand"],
   "answered": "yes" | "partial" | "no",
   "why": "one honest sentence",
   "whoInstead": ["1 to 3 real alternate brand or product names"]
 }
-"answered" means whether THIS brand is likely cited when those questions are asked of an AI assistant.
+Questions are unbranded: category or job-to-be-done only. Do not put the brand name, product name, or domain in the question text.
+"answered" means whether THIS brand is likely cited when those unbranded questions are asked of an AI assistant.
 "why" must be one honest sentence and must not overclaim.
-"whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.`
+"whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those unbranded questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.`
+
+/** Questions that name the brand. No competitor list — who-instead stays on the unbranded beat. */
+const BRANDED_SYSTEM_PROMPT = `You estimate how an AI assistant describes a brand when people ask questions that name it.
+${SHARED_RULES}
+Return JSON only:
+{
+  "questions": ["3 to 5 natural questions that name this brand"],
+  "answered": "yes" | "partial" | "no",
+  "why": "one honest sentence"
+}
+Questions are branded: every question must include the brand name. Ask about tone, claims, and how the brand is described. Do not ask generic category questions that omit the name.
+"answered" means whether an AI assistant is likely to describe THIS brand when those branded questions are asked.
+"why" must be one honest sentence and must not overclaim.
+Do not name competitors or alternate brands. Do not return a competitor list.`
+
+export type VisibilityMode = 'unbranded' | 'branded'
+
+/** Missing or blank → unbranded. Anything else that is not branded|unbranded is invalid. */
+export function parseVisibilityMode(value: unknown): VisibilityMode | 'invalid' | 'absent' {
+  if (value == null) return 'absent'
+  if (typeof value !== 'string') return 'invalid'
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed) return 'absent'
+  if (trimmed === 'unbranded' || trimmed === 'branded') return trimmed
+  return 'invalid'
+}
 
 export type VisibilityEnv = {
   OPENAI_API_KEY?: string
@@ -117,17 +150,37 @@ export function parseVisibilityContent(raw: string, domain?: string): ParsedVisi
   return { questions, answered, why, whoInstead: parseWhoInstead(rec.whoInstead, domain) }
 }
 
-async function domainFromRequest(request: Request): Promise<string | null> {
-  const fromQuery = new URL(request.url).searchParams.get('domain')
-  if (fromQuery !== null && fromQuery !== '') return canonicalHostname(fromQuery)
-  if (request.method !== 'POST') return null
-  const type = request.headers.get('content-type') || ''
-  if (!type.includes('application/json')) return null
-  try {
-    const body = (await request.json()) as { domain?: unknown }
-    return canonicalHostname(body?.domain)
-  } catch {
-    return null
+async function fieldsFromRequest(request: Request): Promise<{
+  domain: string | null
+  mode: VisibilityMode | 'invalid'
+}> {
+  const url = new URL(request.url)
+  const queryDomain = url.searchParams.get('domain')
+  const queryMode = url.searchParams.has('mode')
+    ? parseVisibilityMode(url.searchParams.get('mode'))
+    : 'absent'
+
+  let bodyDomain: unknown
+  let bodyMode: VisibilityMode | 'invalid' | 'absent' = 'absent'
+  const domainMissing = queryDomain === null || queryDomain === ''
+  const modeMissing = queryMode === 'absent'
+  if (request.method === 'POST' && (domainMissing || modeMissing)) {
+    const type = request.headers.get('content-type') || ''
+    if (type.includes('application/json')) {
+      try {
+        const body = (await request.json()) as { domain?: unknown; mode?: unknown }
+        bodyDomain = body?.domain
+        bodyMode = parseVisibilityMode(body?.mode)
+      } catch {
+        if (domainMissing) return { domain: null, mode: 'unbranded' }
+      }
+    }
+  }
+
+  const modeSource = queryMode === 'absent' ? bodyMode : queryMode
+  return {
+    domain: canonicalHostname(domainMissing ? bodyDomain : queryDomain),
+    mode: modeSource === 'absent' ? 'unbranded' : modeSource,
   }
 }
 
@@ -160,14 +213,19 @@ function failureDetail(err: unknown): string {
   return 'network error'
 }
 
+function systemPromptFor(mode: VisibilityMode): string {
+  return mode === 'branded' ? BRANDED_SYSTEM_PROMPT : UNBRANDED_SYSTEM_PROMPT
+}
+
 async function completeVisibility(
   apiKey: string,
   domain: string,
   excerpt: string | null,
+  mode: VisibilityMode,
 ): Promise<Response> {
-  const user = excerpt
-    ? `Brand domain: ${domain}\nHomepage excerpt (may be incomplete):\n${excerpt}`
-    : `Brand domain: ${domain}`
+  const lines = [`Mode: ${mode}`, `Brand domain: ${domain}`]
+  if (excerpt) lines.push(`Homepage excerpt (may be incomplete):\n${excerpt}`)
+  const user = lines.join('\n')
 
   let res: Response
   try {
@@ -184,7 +242,7 @@ async function completeVisibility(
         max_tokens: 600,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: systemPromptFor(mode) },
           { role: 'user', content: user },
         ],
       }),
@@ -222,15 +280,18 @@ async function completeVisibility(
     return json(502, { error: 'OpenAI request failed: model output was not usable JSON' })
   }
 
-  return json(200, {
+  const body: Record<string, unknown> = {
     ok: true,
     domain,
     model: MODEL,
+    mode,
     questions: parsed.questions,
     answered: parsed.answered,
     why: parsed.why,
-    whoInstead: parsed.whoInstead,
-  })
+  }
+  // Who-instead stays on the unbranded beat. Branded responses omit it entirely.
+  if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
+  return json(200, body)
 }
 
 export async function onRequest(context: {
@@ -242,8 +303,9 @@ export async function onRequest(context: {
     return json(405, { error: 'Use GET or POST' })
   }
 
-  const domain = await domainFromRequest(request)
+  const { domain, mode } = await fieldsFromRequest(request)
   if (!domain) return json(400, { error: 'domain must be a simple public hostname' })
+  if (mode === 'invalid') return json(400, { error: 'mode must be unbranded or branded' })
 
   const secret = context.env?.OPENAI_API_KEY
   const apiKey = typeof secret === 'string' ? secret.trim() : ''
@@ -251,5 +313,5 @@ export async function onRequest(context: {
 
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
-  return completeVisibility(apiKey, domain, safeExcerpt)
+  return completeVisibility(apiKey, domain, safeExcerpt, mode)
 }

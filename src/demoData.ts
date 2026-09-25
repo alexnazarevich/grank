@@ -1,9 +1,12 @@
-/** Sample questions are only a last resort when /api/visibility fails. Who-instead is never sampled. */
+/** Sample questions are only a last resort when unbranded /api/visibility fails. Who-instead is never sampled. */
 
 export type Answered = 'yes' | 'partial' | 'no'
 
-export type AhaResult = {
-  domain: string
+export type VisibilityMode = 'unbranded' | 'branded'
+
+/** One mode's read. Answered-by-you belongs to this set only — never a blend of both. */
+export type ModeBeat = {
+  mode: VisibilityMode
   questions: string[]
   /** True when questions came from the model, not the sample bank. */
   questionsGenerated: boolean
@@ -12,12 +15,10 @@ export type AhaResult = {
   answeredWhy: string
   answeredLive: boolean
   model: string | null
-  /** Live alternate brand names. Empty when the model named none. */
+  /** Live alternate brand names. Unbranded only. Empty when the model named none. */
   whoInstead: string[]
-  /** False when the visibility call failed — say we couldn’t find alternatives, never invent competitors. */
+  /** False when the unbranded call failed — say we couldn’t find alternatives, never invent competitors. */
   whoInsteadLive: boolean
-  /** Short supporting line from the homepage fetch. Not the primary verdict. */
-  homepageSupport: string | null
 }
 
 export const EXAMPLES: { label: string; url: string }[] = [
@@ -38,16 +39,17 @@ export function normalizeUrl(raw: string): string | null {
   }
 }
 
-/** Last-resort questions when /api/visibility fails. Always labeled Sample in the UI. */
+/**
+ * Last-resort questions when the unbranded call fails. Category / JTBD only —
+ * they do not name the brand, and the UI still marks them Sample.
+ */
 export function stubQuestionsFor(domain: string): { questions: string[] } {
-  const brand = domain.split('.')[0] || domain
-  const Brand = brand.charAt(0).toUpperCase() + brand.slice(1)
+  void domain
   return {
     questions: [
-      `What is ${Brand}?`,
-      `Is ${Brand} worth it for small teams?`,
-      `${Brand} vs alternatives — which should I pick?`,
-      `How do I get started with ${Brand}?`,
+      'What should I use to solve this kind of problem?',
+      'Which tools do teams pick for this job?',
+      'What do people compare when choosing in this category?',
     ],
   }
 }
