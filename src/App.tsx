@@ -302,6 +302,10 @@ export default function App() {
                 <p className="why">{STORY.digFail}</p>
               ) : null}
 
+              {!brandedLoading && !land && beat && beat.questions.length > 0 ? (
+                <p className="why answer-helper">{STORY.answerHelper}</p>
+              ) : null}
+
               {!brandedLoading && beat && beat.questions.length > 0 ? (
                 <ul className={land ? undefined : 'answers'}>
                   {beat.questions.map((q, i) => {
@@ -319,7 +323,6 @@ export default function App() {
                             {answer ? (
                               <div className="answer-meta">
                                 <span className="tag plain live">{STORY.answerLabel}</span>
-                                <span className="answer-helper">{STORY.answerHelper}</span>
                               </div>
                             ) : null}
                             <p className="answer-body">{answer || STORY.answerMiss}</p>

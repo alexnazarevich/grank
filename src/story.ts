@@ -13,8 +13,9 @@ export const STORY = {
   digBadge: 'Branded',
   digFail: 'Couldn’t generate branded questions — try again.',
   answerLabel: 'Generated · OpenAI',
-  answerHelper: 'Model sample answer — not a live engine scrape',
-  answerMiss: 'Couldn’t get an answer',
+  answerHelper:
+    'Answers below are from our model for these questions — not a live multi-engine scrape.',
+  answerMiss: 'Couldn’t get an answer.',
   homeSub:
     'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand.',
   proof: 'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',

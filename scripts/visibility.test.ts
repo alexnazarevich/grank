@@ -717,8 +717,12 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.digBadge, 'Branded')
     assert.equal(STORY.digFail, 'Couldn’t generate branded questions — try again.')
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
-    assert.equal(STORY.answerHelper, 'Model sample answer — not a live engine scrape')
-    assert.equal(STORY.answerMiss, 'Couldn’t get an answer')
+    assert.equal(
+      STORY.answerHelper,
+      'Answers below are from our model for these questions — not a live multi-engine scrape.',
+    )
+    assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
+    assert.equal(JSON.stringify(STORY).includes('what ChatGPT said'), false)
     assert.equal(
       STORY.homeSub,
       'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand.',
