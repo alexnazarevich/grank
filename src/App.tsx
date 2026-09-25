@@ -167,7 +167,7 @@ export default function App() {
                 <p className="engines">
                   {result.answeredLive
                     ? `OpenAI · ${result.model}`
-                    : 'Model call failed — questions below are a labeled sample. Answered-by-you and who-instead are unavailable.'}
+                    : 'Model call failed — questions below are a labeled sample. Answered-by-you is unavailable.'}
                 </p>
               </div>
               <span className={`badge ${result.answeredLive ? 'live' : 'warn'}`}>
@@ -215,10 +215,10 @@ export default function App() {
               <h2>
                 Who shows up instead{' '}
                 <span className={`tag plain ${result.whoInsteadLive ? 'live' : ''}`}>
-                  {result.whoInsteadLive ? 'Generated · OpenAI' : 'Unavailable'}
+                  Generated · OpenAI
                 </span>
               </h2>
-              {result.whoInsteadLive && result.whoInstead.length > 0 ? (
+              {result.whoInstead.length > 0 ? (
                 <ul className="who">
                   {result.whoInstead.map((name) => (
                     <li key={name}>
@@ -226,13 +226,8 @@ export default function App() {
                     </li>
                   ))}
                 </ul>
-              ) : result.whoInsteadLive ? (
-                <p className="why">No clear alternatives from this model.</p>
               ) : (
-                <>
-                  <div className="signal unavailable">Unavailable</div>
-                  <p className="why">The model call failed, so no alternate brands are shown.</p>
-                </>
+                <p className="why">Couldn’t find alternatives</p>
               )}
             </section>
 

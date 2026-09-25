@@ -14,7 +14,7 @@ export type AhaResult = {
   model: string | null
   /** Live alternate brand names. Empty when the model named none. */
   whoInstead: string[]
-  /** False when the visibility call failed — show Unavailable, never a sample bank. */
+  /** False when the visibility call failed — say we couldn’t find alternatives, never invent competitors. */
   whoInsteadLive: boolean
   /** Short supporting line from the homepage fetch. Not the primary verdict. */
   homepageSupport: string | null

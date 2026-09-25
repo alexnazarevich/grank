@@ -8,10 +8,10 @@
 | --- | --- |
 | **Questions people ask** | **Generated · OpenAI** — `gpt-4o-mini` via `GET /api/visibility?domain=` (POST JSON also works). |
 | **Answered by you?** | **Live model** — same call. Yes / partial / no from the model, conservative, one-sentence why. Not a multi-engine scan. |
-| **Who shows up instead** | **Generated · OpenAI** — same call. 1–3 real alternate brand names. Empty list → “No clear alternatives from this model”. |
+| **Who shows up instead** | **Generated · OpenAI** — same call. 1–3 real alternate brand names. No names → “Couldn’t find alternatives”. |
 | Homepage fetch | Small supporting line only (`GET /api/homepage`). It does not set the primary verdict. |
 
-`OPENAI_API_KEY` lives in the Cloudflare Pages env (Production and Preview). It is not a `VITE_*` variable and is never sent to the browser. Missing key → `503` `{ "error": "OPENAI_API_KEY not configured" }`. Model failure → `502` with an honest error (no fake Yes, no invented competitors). If the function fails entirely, the screen shows labeled sample questions and **Unavailable** for answered-by-you and who-instead.
+`OPENAI_API_KEY` lives in the Cloudflare Pages env (Production and Preview). It is not a `VITE_*` variable and is never sent to the browser. Missing key → `503` `{ "error": "OPENAI_API_KEY not configured" }`. Model failure → `502` with an honest error (no fake Yes, no invented competitors). If the function fails entirely, the screen shows labeled sample questions, **Unavailable** for answered-by-you, and “Couldn’t find alternatives” for who-instead.
 
 ## Run
 
@@ -42,5 +42,5 @@ npx wrangler pages dev dist
 1. Open homepage → paste URL or try linear.app / notion.so.
 2. Point at **Questions** — Generated · OpenAI.
 3. Point at **Answered by you?** — Live model (gpt-4o-mini), plus the small homepage line if it loaded.
-4. Point at **Who shows up instead** — Generated · OpenAI (1–3 other brands, or an honest empty line).
+4. Point at **Who shows up instead** — badge **Generated · OpenAI**, or “Couldn’t find alternatives” when there are no names.
 5. Close: one screen, one model. Two domains get different who-instead sets.
