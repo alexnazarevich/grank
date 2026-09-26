@@ -1,5 +1,5 @@
 /**
- * Product knobs for save/re-run (8) and quota/paid (9).
+ * Product knobs for save/re-run (8), quota/paid (9), and the full report (10).
  * Safe defaults, then an optional JSON blob, then server env aliases.
  * Pages Functions enforce from env. The UI only displays the resolved config.
  */
@@ -15,6 +15,14 @@ export type ProductCopy = {
   upgradeHeadline: string
   upgradeBody: string
   upgradeCta: string
+  showFullReportCta: string
+  fullReportMagicLinkHint: string
+  fullReportTitle: string
+  fullReportSub: string
+  fullReportLoading: string
+  fullReportEmptyThemes: string
+  fullReportLimitHit: string
+  themeSectionEyebrow: string
 }
 
 export type ProductConfig = {
@@ -34,6 +42,15 @@ export type ProductConfig = {
   paidInterval: PaidInterval
   paidQuotaAmount: number
   paidMaxSavedChecks: number
+  /** How many questions the full report asks the model for. ~50–60. */
+  fullReportQuestionTarget: number
+  /** Inclusive theme count bounds. Empty themes are omitted after generation. */
+  fullReportThemeMin: number
+  fullReportThemeMax: number
+  /** Complimentary full reports per account. Further runs use the (9) check quota when the paywall is on. */
+  freeFullReports: number
+  /** When false, branded dig questions are left out of the full set. */
+  fullReportIncludesBranded: boolean
   copy: ProductCopy
 }
 
@@ -54,6 +71,11 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
   paidInterval: 'month',
   paidQuotaAmount: 100,
   paidMaxSavedChecks: 100,
+  fullReportQuestionTarget: 55,
+  fullReportThemeMin: 3,
+  fullReportThemeMax: 6,
+  freeFullReports: 1,
+  fullReportIncludesBranded: true,
   copy: {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
@@ -61,6 +83,15 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     upgradeHeadline: 'Need more checks?',
     upgradeBody: 'A paid plan raises your check limit. Limits come from settings, not this sentence.',
     upgradeCta: 'Upgrade',
+    showFullReportCta: 'Show full report',
+    fullReportMagicLinkHint: 'Sign in with a magic link to unlock your full report. No password.',
+    fullReportTitle: 'Full visibility report',
+    fullReportSub:
+      'More questions about this site, grouped by theme. Still Generated · OpenAI — not a multi-engine scrape.',
+    fullReportLoading: 'Building your full report…',
+    fullReportEmptyThemes: 'No themes yet — try again.',
+    fullReportLimitHit: 'You’ve used your free full report.',
+    themeSectionEyebrow: 'Theme',
   },
 }
 
@@ -82,6 +113,11 @@ export const PRODUCT_ENV_ALIASES = {
   paidInterval: 'PAID_INTERVAL',
   paidQuotaAmount: 'PAID_QUOTA_AMOUNT',
   paidMaxSavedChecks: 'PAID_MAX_SAVED_CHECKS',
+  fullReportQuestionTarget: 'FULL_REPORT_QUESTION_TARGET',
+  fullReportThemeMin: 'FULL_REPORT_THEME_MIN',
+  fullReportThemeMax: 'FULL_REPORT_THEME_MAX',
+  freeFullReports: 'FREE_FULL_REPORTS',
+  fullReportIncludesBranded: 'FULL_REPORT_INCLUDES_BRANDED',
 } as const
 
 const COPY_KEYS: (keyof ProductCopy)[] = [
@@ -91,6 +127,14 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'upgradeHeadline',
   'upgradeBody',
   'upgradeCta',
+  'showFullReportCta',
+  'fullReportMagicLinkHint',
+  'fullReportTitle',
+  'fullReportSub',
+  'fullReportLoading',
+  'fullReportEmptyThemes',
+  'fullReportLimitHit',
+  'themeSectionEyebrow',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +159,10 @@ function parseIntMin(value: unknown, fallback: number, min: number): number {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN
   if (!Number.isFinite(n)) return fallback
   return Math.max(min, Math.floor(n))
+}
+
+function parseIntRange(value: unknown, fallback: number, min: number, max: number): number {
+  return Math.min(max, parseIntMin(value, fallback, min))
 }
 
 function parseEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -211,8 +259,44 @@ export function mergeProductConfig(base: ProductConfig, patch: unknown): Product
       base.paidMaxSavedChecks,
       0,
     ),
+    fullReportQuestionTarget: parseIntRange(
+      field(patch, 'fullReportQuestionTarget', 'FULL_REPORT_QUESTION_TARGET'),
+      base.fullReportQuestionTarget,
+      1,
+      80,
+    ),
+    ...themeBounds(
+      parseIntRange(
+        field(patch, 'fullReportThemeMin', 'FULL_REPORT_THEME_MIN'),
+        base.fullReportThemeMin,
+        1,
+        6,
+      ),
+      parseIntRange(
+        field(patch, 'fullReportThemeMax', 'FULL_REPORT_THEME_MAX'),
+        base.fullReportThemeMax,
+        1,
+        6,
+      ),
+    ),
+    freeFullReports: parseIntRange(
+      field(patch, 'freeFullReports', 'FREE_FULL_REPORTS'),
+      base.freeFullReports,
+      0,
+      100,
+    ),
+    fullReportIncludesBranded: parseBool(
+      field(patch, 'fullReportIncludesBranded', 'FULL_REPORT_INCLUDES_BRANDED'),
+      base.fullReportIncludesBranded,
+    ),
     copy: parseCopy(patch.copy, base.copy),
   }
+}
+
+/** Min cannot sit above max. Both stay inside the six-theme catalog. */
+function themeBounds(min: number, max: number): { fullReportThemeMin: number; fullReportThemeMax: number } {
+  if (min > max) return { fullReportThemeMin: max, fullReportThemeMax: min }
+  return { fullReportThemeMin: min, fullReportThemeMax: max }
 }
 
 export function parseConfigJson(raw: string | undefined): unknown {

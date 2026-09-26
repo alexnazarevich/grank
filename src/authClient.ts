@@ -2,6 +2,7 @@ import type { CheckDraft } from './savedResult.ts'
 
 const SESSION_KEY = 'grank.auth.session'
 const PENDING_KEY = 'grank.pendingSave'
+const PENDING_REPORT_KEY = 'grank.pendingFullReport'
 const GUEST_KEY = 'grank.guestChecks'
 const VERIFIER_KEY = 'grank.pkce.verifier'
 const ANON_KEY = 'grank.anon'
@@ -319,9 +320,15 @@ export async function signOut(session: AuthSession | null): Promise<void> {
   clearSession()
 }
 
+export type PendingFullReport = {
+  domain: string
+  draft: CheckDraft | null
+}
+
 export type AuthBoot = {
   session: AuthSession | null
   pending: CheckDraft | null
+  pendingReport: PendingFullReport | null
 }
 
 let bootPromise: Promise<AuthBoot> | null = null
@@ -339,18 +346,61 @@ function peekPendingRaw(): string | null {
  * it was already stored before boot (magic-link return), so a save started
  * while session restore is in flight is left for the next visit.
  */
+function peekReportRaw(): string | null {
+  try {
+    return localStorage.getItem(PENDING_REPORT_KEY)
+  } catch {
+    return null
+  }
+}
+
 export function bootAuth(): Promise<AuthBoot> {
   if (!bootPromise) {
     const pendingAtStart = peekPendingRaw()
+    const reportAtStart = peekReportRaw()
     bootPromise = (async () => {
       const session = await currentSession()
-      if (!session || !pendingAtStart || peekPendingRaw() !== pendingAtStart) {
-        return { session, pending: null }
-      }
-      return { session, pending: takePendingSave() }
+      const pending =
+        session && pendingAtStart && peekPendingRaw() === pendingAtStart ? takePendingSave() : null
+      const pendingReport =
+        session && reportAtStart && peekReportRaw() === reportAtStart ? takePendingFullReport() : null
+      return { session, pending, pendingReport }
     })()
   }
   return bootPromise
+}
+
+export function stashPendingFullReport(payload: PendingFullReport): void {
+  try {
+    localStorage.setItem(PENDING_REPORT_KEY, JSON.stringify(payload))
+  } catch {
+    // The result still shows on this page. The report needs storage for the email round trip.
+  }
+}
+
+let reportLock = false
+
+/** Take the full-report intent waiting on a magic link. One take per page load. */
+export function takePendingFullReport(): PendingFullReport | null {
+  if (reportLock) return null
+  reportLock = true
+  try {
+    const raw = localStorage.getItem(PENDING_REPORT_KEY)
+    localStorage.removeItem(PENDING_REPORT_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw) as { domain?: unknown; draft?: unknown }
+    const domain = typeof data.domain === 'string' ? data.domain.trim() : ''
+    if (!domain) return null
+    const draft =
+      data.draft &&
+      typeof data.draft === 'object' &&
+      typeof (data.draft as CheckDraft).domain === 'string'
+        ? (data.draft as CheckDraft)
+        : null
+    return { domain, draft }
+  } catch {
+    return null
+  }
 }
 
 export function stashPendingSave(draft: CheckDraft): void {

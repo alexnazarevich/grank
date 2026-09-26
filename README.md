@@ -92,6 +92,14 @@ Subscribe it to `checkout.session.completed`, `checkout.session.async_payment_su
 
 Apply `supabase/migrations/20260926150000_quota_paid.sql` after the save migration. `profiles.plan`, `stripe_customer_id`, and `usage_events` already come from `20260925120000_save_and_rerun.sql`; this file adds the lookup indexes and is safe to re-run.
 
+## Full report
+
+After the short land/dig result, **Show full report** asks for a magic link when you are signed out (same Supabase auth as Save). The first look stays free. Signed in, `POST /api/full-report` builds one themed report (~50–60 questions, 3–6 themes) with **Generated · OpenAI** on every question and answer. Alternatives stay unbranded. Empty themes are omitted. There is still no blended score and no multi-engine scrape.
+
+The first `freeFullReports` (default 1 per account) do not use the check quota. Later reports, while `paywallEnabled` is on, count as a normal check and hit the same upgrade wall. The button and section copy come from `productConfig.copy` (`showFullReportCta`, `fullReportMagicLinkHint`, `fullReportTitle`, `fullReportSub`, `fullReportLoading`, `fullReportEmptyThemes`, `fullReportLimitHit`, `themeSectionEyebrow`).
+
+Knobs: `FULL_REPORT_QUESTION_TARGET` (default 55), `FULL_REPORT_THEME_MIN` / `FULL_REPORT_THEME_MAX` (3–6), `FREE_FULL_REPORTS` (default 1), `FULL_REPORT_INCLUDES_BRANDED` (default true). The server enforces the allotment with a `usage_events.kind` of `full_report`. Apply `supabase/migrations/20260926203000_full_report.sql` before the first full report. The saved row reuses `checks` (`result.report = full`); `checks.mode` stays `unbranded` or `branded` so the existing constraint holds. **Your checks** shows a Full report badge.
+
 ## Run
 
 ```bash
@@ -105,6 +113,7 @@ npm test
 Cloudflare Pages: build `npm run build`, output `dist`. Pages Functions:
 
 - `functions/api/visibility.ts` → `/api/visibility` (`mode=unbranded|branded`; unbranded includes who-instead)
+- `functions/api/full-report.ts` → `/api/full-report` (signed-in themed report; service role + OpenAI stay server-side)
 - `functions/api/homepage.ts` → `/api/homepage` (supporting page-content line)
 - `functions/api/checks.ts` → `/api/checks` (save and list; service role)
 - `functions/api/product-config.ts` → `/api/product-config` (non-secret knobs)

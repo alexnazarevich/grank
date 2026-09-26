@@ -21,10 +21,14 @@ import {
   readGuestChecks,
   sendMagicLink,
   signOut,
+  stashPendingFullReport,
   stashPendingSave,
   supabasePublicConfig,
   type AuthSession,
 } from './authClient'
+import { FullReportSection } from './FullReportSection'
+import { fetchFullReport, type FullReportFail, type FullReportOk } from './fullReportClient'
+import { fullReportFromStored, type FullReport } from './fullReport'
 import { startCheckout } from './billingClient'
 import { listChecks, saveCheck } from './checksClient'
 import {
@@ -38,6 +42,8 @@ import './App.css'
 type Phase = 'home' | 'loading' | 'result' | 'error' | 'history'
 type DigStatus = 'idle' | 'loading' | 'ready' | 'error'
 type SaveState = 'idle' | 'email' | 'sent' | 'saving' | 'saved' | 'error'
+type ReportPhase = 'idle' | 'email' | 'sent' | 'loading' | 'ready' | 'error' | 'limit'
+type EmailPurpose = 'save' | 'report' | 'history' | 'upgrade'
 
 type Screen = {
   domain: string
@@ -154,6 +160,30 @@ function brandedBeat(visibility: VisibilityOk | VisibilityFail): ModeBeat {
   }
 }
 
+function screenFromDraft(draft: CheckDraft): Screen {
+  const beat = (source: CheckDraft['unbranded'], mode: VisibilityMode): ModeBeat => ({
+    mode,
+    questions: source.questions,
+    answers: mode === 'branded' ? source.replies : [],
+    questionsGenerated: source.questionsGenerated,
+    answered: source.answered,
+    answeredWhy: source.answeredWhy,
+    answeredLive: source.answeredLive,
+    model: source.model,
+    whoInstead: mode === 'unbranded' ? source.whoInstead : [],
+    whoInsteadLive: mode === 'unbranded' ? source.whoInsteadLive : false,
+  })
+  return {
+    domain: draft.domain,
+    homepageSupport: draft.homepageSupport,
+    unbranded: beat(draft.unbranded, 'unbranded'),
+    branded: draft.branded ? beat(draft.branded, 'branded') : null,
+    omittedQuestions: false,
+    omittedAnswers: false,
+    omittedWhoInstead: false,
+  }
+}
+
 function liveScreen(
   domain: string,
   homepageSupport: string | null,
@@ -209,6 +239,11 @@ function savedFromDraft(draft: CheckDraft): SavedCheck {
   }
 }
 
+function historyKind(check: SavedCheck): string {
+  if (check.result?.report === 'full') return 'Full report'
+  return check.mode === 'branded' ? 'Branded' : 'Unbranded'
+}
+
 function formatWhen(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
@@ -244,6 +279,10 @@ export default function App() {
   const [upgradeNote, setUpgradeNote] = useState(checkoutReturnNote)
   const [upgradeEmail, setUpgradeEmail] = useState(false)
   const [upgradeBusy, setUpgradeBusy] = useState(false)
+  const [reportPhase, setReportPhase] = useState<ReportPhase>('idle')
+  const [reportMessage, setReportMessage] = useState('')
+  const [fullReport, setFullReport] = useState<FullReport | null>(null)
+  const [emailPurpose, setEmailPurpose] = useState<EmailPurpose>('save')
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -264,6 +303,30 @@ export default function App() {
     setHistory(listed.checks)
   }
 
+  function applyReportResult(result: FullReportOk | FullReportFail) {
+    if (!result.ok) {
+      if (result.code === 'quota_exceeded') {
+        setQuotaWall(true)
+        setQuotaPlan(result.plan === 'paid' ? 'paid' : 'free')
+        setReportPhase('limit')
+        setReportMessage('')
+        return
+      }
+      if (result.code === 'full_report_limit') {
+        setReportPhase('limit')
+        setReportMessage('')
+        return
+      }
+      setReportPhase('error')
+      setReportMessage(result.error)
+      return
+    }
+    setQuotaWall(false)
+    setFullReport(result.report)
+    setReportPhase('ready')
+    setReportMessage('')
+  }
+
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -276,24 +339,32 @@ export default function App() {
       } catch {
         afterLogin = ''
       }
+      const reportIntent = Boolean(booted.session && booted.pendingReport)
       if (booted.session && booted.pending) {
         setSaveState('saving')
         const saved = await flushPending(booted.session, booted.pending)
         if (!alive) return
         if (saved.ok) {
-          applySaved(saved.check)
+          if (!reportIntent) applySaved(saved.check)
           setSaveState('saved')
           setSaveMessage('Saved.')
-          setPhase('history')
-          await showHistory(booted.session)
-        } else {
+          if (!reportIntent) {
+            setPhase('history')
+            await showHistory(booted.session)
+          } else {
+            setSavedId(saved.check.id)
+          }
+        } else if (!reportIntent) {
           applySaved(savedFromDraft(booted.pending))
           setSavedId(null)
           setSaveState('error')
           setSaveMessage(saved.error)
           setPhase('result')
+        } else {
+          setSaveState('error')
+          setSaveMessage(saved.error)
         }
-      } else if (booted.session && afterLogin === 'history') {
+      } else if (booted.session && afterLogin === 'history' && !reportIntent) {
         try {
           sessionStorage.removeItem(AFTER_LOGIN_KEY)
         } catch {
@@ -301,6 +372,30 @@ export default function App() {
         }
         setPhase('history')
         await showHistory(booted.session)
+      }
+      if (booted.session && booted.pendingReport) {
+        const draft = booted.pendingReport.draft
+        if (draft) {
+          const restored = screenFromDraft(draft)
+          const dig: DigStatus = restored.branded
+            ? restored.branded.questionsGenerated
+              ? 'ready'
+              : 'error'
+            : 'idle'
+          digReq.current += 1
+          digState.current = dig
+          setScreen(restored)
+          setActiveMode(draft.mode === 'branded' ? 'branded' : 'unbranded')
+          setDigStatus(dig)
+          setUrl(draft.domain)
+          setPageText(null)
+        }
+        setPhase('result')
+        setReportPhase('loading')
+        const result = await fetchFullReport(booted.pendingReport.domain, booted.session.accessToken)
+        if (!alive) return
+        applyReportResult(result)
+        return
       }
       if (!alive || !booted.session || afterLogin !== 'upgrade') return
       try {
@@ -345,6 +440,9 @@ export default function App() {
     setSavedId(check.id)
     setUrl(check.domain)
     setPageText(null)
+    setFullReport(null)
+    setReportPhase('idle')
+    setReportMessage('')
   }
 
   function currentDraft(next = screen, mode = activeMode): CheckDraft | null {
@@ -383,6 +481,9 @@ export default function App() {
     setSaveState('idle')
     setSaveMessage('')
     setSavedId(null)
+    setFullReport(null)
+    setReportPhase('idle')
+    setReportMessage('')
     setActiveMode('unbranded')
     digState.current = 'idle'
     setDigStatus('idle')
@@ -504,6 +605,10 @@ export default function App() {
     setSaveMessage('')
     setPageText(null)
     setUpgradeEmail(false)
+    setFullReport(null)
+    setReportPhase('idle')
+    setReportMessage('')
+    setEmailPurpose('save')
   }
 
   async function goCheckout(accessToken: string) {
@@ -535,6 +640,7 @@ export default function App() {
       } catch {
         // They can send the link again.
       }
+      setEmailPurpose('upgrade')
       setUpgradeEmail(true)
       setQuotaWall(true)
       return
@@ -562,6 +668,8 @@ export default function App() {
       return
     }
     if (!session) {
+      setEmailPurpose('save')
+      setReportPhase((prev) => (prev === 'email' || prev === 'sent' ? 'idle' : prev))
       setSaveState('email')
       setSaveMessage(
         config.saveRequiresAuth
@@ -576,6 +684,10 @@ export default function App() {
   async function onEmail(e: FormEvent) {
     e.preventDefault()
     if (!isValidEmail(email)) {
+      if (emailPurpose === 'report') {
+        setReportMessage('Enter a valid email.')
+        return
+      }
       setSaveState('error')
       setSaveMessage('Enter a valid email.')
       return
@@ -583,6 +695,25 @@ export default function App() {
     if (!supabasePublicConfig()) {
       setSaveState('error')
       setSaveMessage(AUTH_NOT_CONFIGURED)
+      return
+    }
+    if (emailPurpose === 'report') {
+      const draft = currentDraft()
+      const domain = draft?.domain || screen?.domain || ''
+      if (!domain) {
+        setReportPhase('error')
+        setReportMessage('Add a website to check.')
+        return
+      }
+      stashPendingFullReport({ domain, draft })
+      const sentReport = await sendMagicLink(email.trim())
+      if (!sentReport.ok) {
+        setReportPhase('error')
+        setReportMessage(sentReport.error)
+        return
+      }
+      setReportPhase('sent')
+      setReportMessage('Check your email for a sign-in link. This page will build your full report when you come back.')
       return
     }
     const draft = currentDraft()
@@ -605,6 +736,7 @@ export default function App() {
   }
 
   async function openHistory() {
+    setEmailPurpose('history')
     setPhase('history')
     setHistory(null)
     setHistoryError('')
@@ -619,10 +751,72 @@ export default function App() {
   }
 
   function openSaved(check: SavedCheck) {
+    const report = fullReportFromStored(check.result)
+    if (report) {
+      digReq.current += 1
+      digState.current = 'idle'
+      setScreen({
+        domain: check.domain,
+        homepageSupport: null,
+        unbranded: {
+          mode: 'unbranded',
+          questions: [],
+          answers: [],
+          questionsGenerated: false,
+          answered: null,
+          answeredWhy: '',
+          answeredLive: false,
+          model: report.model,
+          whoInstead: [],
+          whoInsteadLive: false,
+        },
+        branded: null,
+        omittedQuestions: true,
+        omittedAnswers: true,
+        omittedWhoInstead: true,
+      })
+      setFullReport(report)
+      setReportPhase('ready')
+      setReportMessage('')
+      setActiveMode('unbranded')
+      setDigStatus('idle')
+      setSavedId(check.id)
+      setUrl(check.domain)
+      setPageText(null)
+      setSaveState('saved')
+      setSaveMessage('Saved.')
+      setPhase('result')
+      return
+    }
+    setFullReport(null)
+    setReportPhase('idle')
+    setReportMessage('')
     applySaved(check)
     setSaveState('saved')
     setSaveMessage('Saved.')
     setPhase('result')
+  }
+
+  async function onShowFullReport() {
+    if (!screen || reportPhase === 'loading' || busy) return
+    if (reportPhase === 'ready' && fullReport?.domain === screen.domain) return
+    if (!supabasePublicConfig()) {
+      setReportPhase('error')
+      setReportMessage(AUTH_NOT_CONFIGURED)
+      return
+    }
+    if (!session) {
+      setEmailPurpose('report')
+      setSaveState((prev) => (prev === 'email' || prev === 'sent' ? 'idle' : prev))
+      setSaveMessage('')
+      setReportPhase('email')
+      setReportMessage('')
+      return
+    }
+    setReportPhase('loading')
+    setReportMessage('')
+    const result = await fetchFullReport(screen.domain, session.accessToken)
+    applyReportResult(result)
   }
 
   async function onSignOut() {
@@ -649,6 +843,9 @@ export default function App() {
   const beat = screen ? (land ? screen.unbranded : screen.branded) : null
   const emphasizeSave = !session && guestChecks >= config.freeChecksBeforeSave
   const authConfigured = supabasePublicConfig() !== null
+  const reportOnly = Boolean(
+    fullReport && screen && screen.unbranded.questions.length === 0 && !screen.branded?.questions.length,
+  )
 
   return (
     <div className="app">
@@ -699,7 +896,9 @@ export default function App() {
                 <li key={check.id}>
                   <button type="button" className="history-item" onClick={() => openSaved(check)}>
                     <strong>{check.domain}</strong>
-                    <span>{check.mode === 'branded' ? 'Branded' : 'Unbranded'}</span>
+                    <span className={check.result?.report === 'full' ? 'full-badge' : undefined}>
+                      {historyKind(check)}
+                    </span>
                     <span>{formatWhen(check.createdAt)}</span>
                   </button>
                 </li>
@@ -776,6 +975,52 @@ export default function App() {
             <p className="foil-body">{STORY.foilBody}</p>
             <p className="foil-foot">{STORY.foilFoot}</p>
           </section>
+        </main>
+      ) : !screen && reportPhase === 'loading' ? (
+        <main className="result-wrap">
+          <p className="status" role="status">
+            {config.copy.fullReportLoading}
+          </p>
+        </main>
+      ) : !screen && (reportPhase === 'error' || reportPhase === 'limit') ? (
+        <main className="result-wrap">
+          <button type="button" className="back" onClick={reset}>
+            ← Check another site
+          </button>
+          {reportPhase === 'limit' ? <p className="why">{config.copy.fullReportLimitHit}</p> : null}
+          {reportPhase === 'error' && reportMessage ? <p className="err">{reportMessage}</p> : null}
+          {quotaWall ? (
+            <UpgradeWall
+              config={config}
+              plan={quotaPlan}
+              note={upgradeNote}
+              busy={upgradeBusy}
+              onUpgrade={onUpgrade}
+              showEmail={upgradeEmail && authConfigured}
+              email={email}
+              onEmail={setEmail}
+              onSubmitEmail={onEmail}
+              saveState={saveState}
+              saveMessage={saveMessage}
+            />
+          ) : null}
+        </main>
+      ) : screen && fullReport && reportOnly ? (
+        <main className="result-wrap">
+          <button type="button" className="back" onClick={reset}>
+            ← Check another site
+          </button>
+          <article className="result">
+            <div className="result-head">
+              <div>
+                <h1>{config.copy.fullReportTitle}</h1>
+                <p className="engines">{screen.domain}</p>
+              </div>
+              <span className="badge live">Generated · OpenAI</span>
+            </div>
+            <p className="why">{config.copy.fullReportSub}</p>
+            <FullReportSection report={fullReport} copy={config.copy} themesOnly />
+          </article>
         </main>
       ) : screen ? (
         <main className="result-wrap">
@@ -965,7 +1210,7 @@ export default function App() {
                 {saveState === 'saving' ? 'Saving…' : config.copy.saveCta}
               </button>
             </div>
-            {saveMessage && !(quotaWall && saveState === 'error') ? (
+            {emailPurpose === 'report' ? null : saveMessage && !(quotaWall && saveState === 'error') ? (
               <p className={saveState === 'error' ? 'err' : 'status'}>{saveMessage}</p>
             ) : saveMessage ? null : (
               <p className="footer-micro">
@@ -974,7 +1219,7 @@ export default function App() {
                   : 'The first look does not need an account. Save keeps this check under your email.'}
               </p>
             )}
-            {saveState === 'email' && authConfigured ? (
+            {saveState === 'email' && emailPurpose === 'save' && authConfigured ? (
               <EmailForm
                 email={email}
                 onEmail={setEmail}
@@ -985,6 +1230,36 @@ export default function App() {
                 hint=""
               />
             ) : null}
+            <div className="full-report-door">
+              <button
+                type="button"
+                className="ask"
+                onClick={() => void onShowFullReport()}
+                disabled={busy || reportPhase === 'loading' || reportPhase === 'ready' || reportPhase === 'limit'}
+              >
+                {reportPhase === 'loading' ? config.copy.fullReportLoading : config.copy.showFullReportCta}
+              </button>
+              {reportPhase === 'loading' ? (
+                <p className="status" role="status">
+                  {config.copy.fullReportLoading}
+                </p>
+              ) : null}
+              {reportPhase === 'limit' ? <p className="why">{config.copy.fullReportLimitHit}</p> : null}
+              {reportPhase === 'error' && reportMessage ? <p className="err">{reportMessage}</p> : null}
+              {reportPhase === 'sent' && reportMessage ? <p className="status">{reportMessage}</p> : null}
+              {(reportPhase === 'email' || reportPhase === 'sent') && emailPurpose === 'report' && authConfigured ? (
+                <EmailForm
+                  email={email}
+                  onEmail={setEmail}
+                  onSubmit={onEmail}
+                  saveState={reportPhase === 'sent' ? 'sent' : reportMessage ? 'error' : 'idle'}
+                  saveMessage={reportPhase === 'sent' ? '' : reportMessage}
+                  submitLabel="Send magic link"
+                  hint={config.copy.fullReportMagicLinkHint}
+                />
+              ) : null}
+            </div>
+            {fullReport && !reportOnly ? <FullReportSection report={fullReport} copy={config.copy} /> : null}
             {quotaWall ? (
               <UpgradeWall
                 config={config}
