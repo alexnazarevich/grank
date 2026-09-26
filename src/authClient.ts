@@ -4,6 +4,7 @@ const SESSION_KEY = 'grank.auth.session'
 const PENDING_KEY = 'grank.pendingSave'
 const GUEST_KEY = 'grank.guestChecks'
 const VERIFIER_KEY = 'grank.pkce.verifier'
+const ANON_KEY = 'grank.anon'
 
 export const AUTH_NOT_CONFIGURED =
   'Auth not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
@@ -395,4 +396,19 @@ export function bumpGuestChecks(): number {
     // Private mode can block storage. The nudge is optional.
   }
   return next
+}
+
+/** Stable browser id for guest quota. Not an account. */
+export function readAnonKey(): string {
+  try {
+    const existing = localStorage.getItem(ANON_KEY) || ''
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(existing)) {
+      return existing.toLowerCase()
+    }
+    const next = crypto.randomUUID()
+    localStorage.setItem(ANON_KEY, next)
+    return next
+  } catch {
+    return ''
+  }
 }

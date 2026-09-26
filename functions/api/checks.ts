@@ -6,104 +6,26 @@
 
 import { historyCapForPlan, productConfigFromEnv, type ProductConfig } from '../../src/config/productConfig.ts'
 import { json, scrubSecret } from './http.ts'
+import { admitUsage, anonKeyFromRequest, linkAnonUsage } from './quota.ts'
 import { idsBeyondCap, retentionCutoffIso, shapeStoredCheck, type CheckRow } from './shapeCheck.ts'
+import {
+  bearer,
+  ensureProfile,
+  readPlan,
+  sbConfig,
+  sbFetch,
+  SERVER_AUTH_NOT_CONFIGURED,
+  serviceHeaders,
+  userFromToken,
+  UUID_RE,
+  type ServiceDb,
+} from './supabaseAuth.ts'
 
-export const SERVER_AUTH_NOT_CONFIGURED =
-  'Auth not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export { SERVER_AUTH_NOT_CONFIGURED }
 
 type ChecksEnv = Record<string, string | undefined>
 
-type Sb = { url: string; serviceRole: string }
-
-function sbConfig(env: ChecksEnv | undefined): Sb | null {
-  const url = env?.SUPABASE_URL?.trim().replace(/\/$/, '') || ''
-  const serviceRole = env?.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
-  if (!url || !serviceRole) return null
-  if (!/^https:\/\//i.test(url)) return null
-  return { url, serviceRole }
-}
-
-function bearer(request: Request): string | null {
-  const header = request.headers.get('authorization') || ''
-  const match = /^Bearer\s+(\S+)/i.exec(header.trim())
-  return match?.[1] ?? null
-}
-
-function serviceHeaders(serviceRole: string, prefer?: string): Headers {
-  const headers = new Headers({
-    apikey: serviceRole,
-    authorization: `Bearer ${serviceRole}`,
-    'content-type': 'application/json',
-  })
-  if (prefer) headers.set('prefer', prefer)
-  return headers
-}
-
-async function sbFetch(sb: Sb, path: string, init: RequestInit): Promise<Response> {
-  return fetch(`${sb.url}${path}`, init)
-}
-
-type AuthUser = { id: string; email: string | null }
-
-async function userFromToken(
-  sb: Sb,
-  accessToken: string,
-): Promise<{ ok: true; user: AuthUser } | { ok: false; status: number; error: string }> {
-  if (accessToken === sb.serviceRole) {
-    return { ok: false, status: 401, error: 'Sign in to save this check.' }
-  }
-  let res: Response
-  try {
-    res = await sbFetch(sb, '/auth/v1/user', {
-      headers: { apikey: sb.serviceRole, authorization: `Bearer ${accessToken}` },
-    })
-  } catch {
-    return { ok: false, status: 502, error: 'Could not reach auth.' }
-  }
-  if (res.status === 401 || res.status === 403) {
-    return { ok: false, status: 401, error: 'Sign in to save this check.' }
-  }
-  if (!res.ok) return { ok: false, status: 502, error: 'Could not verify the session.' }
-  let data: unknown
-  try {
-    data = await res.json()
-  } catch {
-    return { ok: false, status: 502, error: 'Could not verify the session.' }
-  }
-  const rec = data && typeof data === 'object' ? (data as Record<string, unknown>) : null
-  const id = rec && typeof rec.id === 'string' ? rec.id : ''
-  if (!UUID_RE.test(id)) return { ok: false, status: 401, error: 'Sign in to save this check.' }
-  const email = rec && typeof rec.email === 'string' ? rec.email : null
-  return { ok: true, user: { id, email } }
-}
-
-async function ensureProfile(sb: Sb, userId: string): Promise<void> {
-  await sbFetch(sb, '/rest/v1/profiles?on_conflict=user_id', {
-    method: 'POST',
-    headers: serviceHeaders(sb.serviceRole, 'resolution=ignore-duplicates,return=minimal'),
-    body: JSON.stringify({ user_id: userId, plan: 'free' }),
-  })
-}
-
-async function readPlan(sb: Sb, userId: string, config: ProductConfig): Promise<string> {
-  if (!config.paywallEnabled) return 'free'
-  try {
-    const res = await sbFetch(
-      sb,
-      `/rest/v1/profiles?user_id=eq.${userId}&select=plan&limit=1`,
-      { headers: serviceHeaders(sb.serviceRole) },
-    )
-    if (!res.ok) return 'free'
-    const rows = (await res.json()) as { plan?: string }[]
-    return rows?.[0]?.plan === 'paid' ? 'paid' : 'free'
-  } catch {
-    return 'free'
-  }
-}
-
-async function listIds(sb: Sb, userId: string): Promise<CheckRow[]> {
+async function listIds(sb: ServiceDb, userId: string): Promise<CheckRow[]> {
   const res = await sbFetch(
     sb,
     `/rest/v1/checks?user_id=eq.${userId}&select=id,created_at&order=created_at.desc`,
@@ -118,7 +40,7 @@ async function listIds(sb: Sb, userId: string): Promise<CheckRow[]> {
   )
 }
 
-async function deleteIds(sb: Sb, userId: string, ids: string[]): Promise<void> {
+async function deleteIds(sb: ServiceDb, userId: string, ids: string[]): Promise<void> {
   const safe = ids.filter((id) => UUID_RE.test(id))
   if (safe.length === 0) return
   await sbFetch(sb, `/rest/v1/checks?user_id=eq.${userId}&id=in.(${safe.join(',')})`, {
@@ -127,14 +49,14 @@ async function deleteIds(sb: Sb, userId: string, ids: string[]): Promise<void> {
   })
 }
 
-async function deleteExpired(sb: Sb, userId: string, cutoffIso: string): Promise<void> {
+async function deleteExpired(sb: ServiceDb, userId: string, cutoffIso: string): Promise<void> {
   await sbFetch(sb, `/rest/v1/checks?user_id=eq.${userId}&created_at=lt.${encodeURIComponent(cutoffIso)}`, {
     method: 'DELETE',
     headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
   })
 }
 
-async function recordSave(sb: Sb, userId: string): Promise<void> {
+async function recordSave(sb: ServiceDb, userId: string): Promise<void> {
   await sbFetch(sb, '/rest/v1/usage_events', {
     method: 'POST',
     headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
@@ -171,10 +93,10 @@ export async function onRequest(context: { request: Request; env?: ChecksEnv }):
   } catch {
     return json(400, { error: 'Check body must be JSON' })
   }
-  return insertCheck(sb, authed.user.id, body, config)
+  return insertCheck(sb, authed.user.id, body, config, request)
 }
 
-async function listChecks(sb: Sb, userId: string, config: ProductConfig): Promise<Response> {
+async function listChecks(sb: ServiceDb, userId: string, config: ProductConfig): Promise<Response> {
   const cutoff = retentionCutoffIso(config.checkRetentionDays)
   if (cutoff) await deleteExpired(sb, userId, cutoff).catch(() => {})
   let res: Response
@@ -210,16 +132,31 @@ async function listChecks(sb: Sb, userId: string, config: ProductConfig): Promis
 }
 
 async function insertCheck(
-  sb: Sb,
+  sb: ServiceDb,
   userId: string,
   body: unknown,
   config: ProductConfig,
+  request: Request,
 ): Promise<Response> {
   const shaped = shapeStoredCheck(body, config, sb.serviceRole)
   if (!shaped.ok) return json(400, { error: shaped.error })
 
   await ensureProfile(sb, userId).catch(() => {})
   const plan = await readPlan(sb, userId, config)
+  const anon = anonKeyFromRequest(request)
+  if (config.paywallEnabled && anon) {
+    const linked = await linkAnonUsage(sb, anon, userId)
+    if (!linked) return json(503, { error: 'Could not check the save limit.' })
+  }
+  const admitted = await admitUsage({
+    sb,
+    userId,
+    anonKey: anon,
+    plan,
+    config,
+    kind: 'save',
+  })
+  if (!admitted.ok) return admitted.response
   const cap = historyCapForPlan(config, plan)
 
   let res: Response
@@ -235,19 +172,27 @@ async function insertCheck(
       }),
     })
   } catch {
+    await admitted.release()
     return json(502, { error: 'Could not save this check.' })
   }
-  if (!res.ok) return json(502, { error: 'Could not save this check.' })
+  if (!res.ok) {
+    await admitted.release()
+    return json(502, { error: 'Could not save this check.' })
+  }
 
   let created: unknown
   try {
     created = await res.json()
   } catch {
+    await admitted.release()
     return json(502, { error: 'Could not save this check.' })
   }
   const row = Array.isArray(created) ? (created[0] as Record<string, unknown>) : null
   const id = row && typeof row.id === 'string' ? row.id : ''
-  if (!id) return json(502, { error: 'Could not save this check.' })
+  if (!id) {
+    await admitted.release()
+    return json(502, { error: 'Could not save this check.' })
+  }
 
   try {
     const rows = await listIds(sb, userId)
@@ -257,7 +202,7 @@ async function insertCheck(
   } catch {
     // The row is saved. Trim is best-effort on a flaky round trip.
   }
-  await recordSave(sb, userId)
+  if (!admitted.recorded) await recordSave(sb, userId)
 
   const text = JSON.stringify({
     ok: true,

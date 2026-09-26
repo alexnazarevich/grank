@@ -1,5 +1,6 @@
 /** Same-origin call to the Pages Function. Unbranded is the default; branded adds answers and omits who-instead. */
 
+import { readAnonKey } from './authClient.ts'
 import type { Answered } from './demoData'
 
 export type VisibilityMode = 'unbranded' | 'branded'
@@ -86,6 +87,13 @@ export function parseClientWhoInstead(value: unknown, domain?: string): string[]
 export type VisibilityFail = {
   ok: false
   error: string
+  code?: 'quota_exceeded'
+  plan?: 'free' | 'paid'
+}
+
+function planOf(value: unknown): 'free' | 'paid' | undefined {
+  if (value === 'paid' || value === 'free') return value
+  return undefined
 }
 
 function scrubPublic(value: string): string {
@@ -111,6 +119,15 @@ export function interpretVisibilityResponse(
 
   if (status === 503) {
     return { ok: false, error: serverError || 'OPENAI_API_KEY not configured' }
+  }
+
+  if (status === 402 || rec?.code === 'quota_exceeded') {
+    return {
+      ok: false,
+      error: serverError || 'Check limit reached.',
+      code: 'quota_exceeded',
+      plan: planOf(rec?.plan),
+    }
   }
 
   if (!rec || status < 200 || status >= 300 || rec.ok !== true) {
@@ -157,12 +174,17 @@ export function interpretVisibilityResponse(
 export async function fetchVisibility(
   domain: string,
   mode: VisibilityMode = 'unbranded',
+  accessToken?: string | null,
 ): Promise<VisibilityOk | VisibilityFail> {
+  const headers = new Headers({ Accept: 'application/json' })
+  const anon = readAnonKey()
+  if (anon) headers.set('x-grank-anon', anon)
+  if (accessToken) headers.set('authorization', `Bearer ${accessToken}`)
   let res: Response
   try {
     res = await fetch(
       `/api/visibility?domain=${encodeURIComponent(domain)}&mode=${mode}`,
-      { headers: { Accept: 'application/json' } },
+      { headers },
     )
   } catch {
     return { ok: false, error: 'Could not reach question generation. Try again.' }

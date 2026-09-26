@@ -28,6 +28,11 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.saveCta, 'Save this check')
     assert.equal(config.copy.runAgainCta, 'Run again')
     assert.equal(config.copy.historyTitle, 'Your checks')
+    assert.equal(config.copy.upgradeHeadline, 'Need more checks?')
+    assert.equal(
+      config.copy.upgradeBody,
+      'A paid plan raises your check limit. Limits come from settings, not this sentence.',
+    )
     assert.equal(config.copy.upgradeCta, 'Upgrade')
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
@@ -97,8 +102,8 @@ describe('GET /api/product-config', () => {
   })
 })
 
-describe('POST /api/billing stub', () => {
-  it('stays off without calling Stripe', async () => {
+describe('POST /api/billing', () => {
+  it('stays off without calling Stripe while the paywall flag is false', async () => {
     let called = false
     const prev = globalThis.fetch
     globalThis.fetch = (() => {
@@ -122,7 +127,7 @@ describe('POST /api/billing stub', () => {
     }
   })
 
-  it('refuses checkout when the paywall flag is on, still without calling Stripe', async () => {
+  it('reports checkout as not configured when the price id is missing, without calling Stripe', async () => {
     let called = false
     const prev = globalThis.fetch
     globalThis.fetch = (() => {
@@ -131,13 +136,13 @@ describe('POST /api/billing stub', () => {
     }) as typeof fetch
     try {
       const res = await onBilling({
-        request: new Request('https://grank.pages.dev/api/billing'),
+        request: new Request('https://grank.pages.dev/api/billing', { method: 'POST' }),
         env: { PAYWALL_ENABLED: 'true', STRIPE_SECRET_KEY: 'sk_test_billing_secret' },
       })
-      assert.equal(res.status, 501)
+      assert.equal(res.status, 503)
       const text = await res.text()
       assert.equal(text.includes('sk_test_billing_secret'), false)
-      assert.match(text, /not available yet/)
+      assert.match(text, /Checkout is not configured/)
       assert.equal(called, false)
     } finally {
       globalThis.fetch = prev
@@ -145,18 +150,19 @@ describe('POST /api/billing stub', () => {
   })
 })
 
-describe('guest aha stays ungated', () => {
-  it('does not mention Supabase or the paywall in the visibility function', () => {
+describe('guest aha stays ungated until the paywall is on', () => {
+  it('does not embed Stripe, Vite, or the service role in the visibility function', () => {
     const src = readFileSync(new URL('../functions/api/visibility.ts', import.meta.url), 'utf8')
-    assert.equal(src.includes('SUPABASE'), false)
-    assert.equal(src.includes('paywall'), false)
     assert.equal(src.includes('VITE_'), false)
+    assert.equal(src.includes('STRIPE_'), false)
+    assert.equal(src.includes('SERVICE_ROLE'), false)
   })
 
   it('does not put privileged keys in client source', () => {
     const files = [
       '../src/App.tsx',
       '../src/authClient.ts',
+      '../src/billingClient.ts',
       '../src/checksClient.ts',
       '../src/config/clientConfig.ts',
       '../src/config/productConfig.ts',

@@ -1,10 +1,16 @@
+import { readAnonKey } from './authClient.ts'
 import type { CheckDraft, CheckMode, SavedCheck, StoredResult } from './savedResult.ts'
 
 export const SAVE_UNAVAILABLE = 'Save is unavailable (/api/checks is not running).'
 
 type SaveOk = { ok: true; check: SavedCheck }
 type ListOk = { ok: true; checks: SavedCheck[] }
-type Fail = { ok: false; error: string }
+type Fail = { ok: false; error: string; code?: string; plan?: 'free' | 'paid' }
+
+function planOf(value: unknown): 'free' | 'paid' | undefined {
+  if (value === 'paid' || value === 'free') return value
+  return undefined
+}
 
 function asMode(value: unknown): CheckMode {
   return value === 'branded' ? 'branded' : 'unbranded'
@@ -40,7 +46,12 @@ async function interpret(res: Response): Promise<SaveOk | ListOk | Fail | 'html'
   const rec = data && typeof data === 'object' ? (data as Record<string, unknown>) : null
   const serverError = rec && typeof rec.error === 'string' ? rec.error : ''
   if (!res.ok || !rec || rec.ok !== true) {
-    return { ok: false, error: serverError || `Save failed (HTTP ${res.status}).` }
+    return {
+      ok: false,
+      error: serverError || `Save failed (HTTP ${res.status}).`,
+      code: rec && typeof rec.code === 'string' ? rec.code : undefined,
+      plan: planOf(rec?.plan),
+    }
   }
   if (Array.isArray(rec.checks)) {
     return {
@@ -54,15 +65,18 @@ async function interpret(res: Response): Promise<SaveOk | ListOk | Fail | 'html'
 }
 
 export async function saveCheck(accessToken: string, draft: CheckDraft): Promise<SaveOk | Fail> {
+  const headers = new Headers({
+    Accept: 'application/json',
+    'content-type': 'application/json',
+    authorization: `Bearer ${accessToken}`,
+  })
+  const anon = readAnonKey()
+  if (anon) headers.set('x-grank-anon', anon)
   let res: Response
   try {
     res = await fetch('/api/checks', {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'content-type': 'application/json',
-        authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       body: JSON.stringify(draft),
     })
   } catch {

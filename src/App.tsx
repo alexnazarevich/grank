@@ -25,6 +25,7 @@ import {
   supabasePublicConfig,
   type AuthSession,
 } from './authClient'
+import { startCheckout } from './billingClient'
 import { listChecks, saveCheck } from './checksClient'
 import {
   draftFromScreen,
@@ -49,6 +50,32 @@ type Screen = {
 }
 
 const AFTER_LOGIN_KEY = 'grank.afterLogin'
+
+let seenCheckoutNote: string | null = null
+
+function checkoutReturnNote(): string {
+  if (seenCheckoutNote !== null) return seenCheckoutNote
+  let note = ''
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const checkout = params.get('checkout')
+    if (checkout === 'success') {
+      note =
+        'Stripe sent you back. Paid checks unlock after the webhook confirms — run the check again in a moment.'
+    } else if (checkout === 'cancel') {
+      note = 'Checkout canceled.'
+    }
+    if (checkout) {
+      params.delete('checkout')
+      const next = params.toString()
+      window.history.replaceState({}, '', next ? `/?${next}` : window.location.pathname)
+    }
+  } catch {
+    note = ''
+  }
+  seenCheckoutNote = note
+  return note
+}
 
 function verdictWord(answered: Answered): string {
   if (answered === 'yes') return 'Yes'
@@ -199,6 +226,11 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
   const [pageText, setPageText] = useState<string | null>(null)
+  const [quotaWall, setQuotaWall] = useState(false)
+  const [quotaPlan, setQuotaPlan] = useState<'free' | 'paid' | null>(null)
+  const [upgradeNote, setUpgradeNote] = useState(checkoutReturnNote)
+  const [upgradeEmail, setUpgradeEmail] = useState(false)
+  const [upgradeBusy, setUpgradeBusy] = useState(false)
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -225,11 +257,11 @@ export default function App() {
       const booted = await bootAuth()
       if (!alive) return
       setSession(booted.session)
-      let openHistoryAfter = false
+      let afterLogin = ''
       try {
-        openHistoryAfter = sessionStorage.getItem(AFTER_LOGIN_KEY) === 'history'
+        afterLogin = sessionStorage.getItem(AFTER_LOGIN_KEY) || ''
       } catch {
-        openHistoryAfter = false
+        afterLogin = ''
       }
       if (booted.session && booted.pending) {
         setSaveState('saving')
@@ -248,7 +280,7 @@ export default function App() {
           setSaveMessage(saved.error)
           setPhase('result')
         }
-      } else if (booted.session && openHistoryAfter) {
+      } else if (booted.session && afterLogin === 'history') {
         try {
           sessionStorage.removeItem(AFTER_LOGIN_KEY)
         } catch {
@@ -256,6 +288,25 @@ export default function App() {
         }
         setPhase('history')
         await showHistory(booted.session)
+      }
+      if (!alive || !booted.session || afterLogin !== 'upgrade') return
+      try {
+        sessionStorage.removeItem(AFTER_LOGIN_KEY)
+      } catch {
+        // Checkout can be started from the button.
+      }
+      setQuotaWall(true)
+      const checkout = await startCheckout(booted.session.accessToken)
+      if (!alive) return
+      if (checkout.ok && 'url' in checkout) {
+        window.location.assign(checkout.url)
+        return
+      }
+      if (checkout.ok) {
+        setQuotaPlan('paid')
+        setUpgradeNote('This account is already on the paid plan.')
+      } else {
+        setUpgradeNote(checkout.error)
       }
     })()
     return () => {
@@ -294,6 +345,10 @@ export default function App() {
     setSaveMessage('')
     const saved = await saveCheck(sess.accessToken, draft)
     if (!saved.ok) {
+      if (saved.code === 'quota_exceeded') {
+        setQuotaWall(true)
+        setQuotaPlan(saved.plan === 'paid' ? 'paid' : 'free')
+      }
       setSaveState('error')
       setSaveMessage(saved.error)
       return
@@ -324,9 +379,17 @@ export default function App() {
     if (!keep) setPhase('loading')
 
     const [visibility, homepage] = await Promise.all([
-      fetchVisibility(domain, 'unbranded'),
+      fetchVisibility(domain, 'unbranded', session?.accessToken),
       liveAnsweredByYou(domain),
     ])
+    if (!visibility.ok && visibility.code === 'quota_exceeded') {
+      setQuotaWall(true)
+      setQuotaPlan(visibility.plan === 'paid' ? 'paid' : 'free')
+      setBusy(false)
+      if (!keep) setPhase('home')
+      return
+    }
+    if (visibility.ok) setQuotaWall(false)
     const homepageSupport = homepage.ok
       ? `Supporting homepage fetch: ${verdictWord(homepage.answered)}. Page content only — not the model read.`
       : null
@@ -364,10 +427,20 @@ export default function App() {
     setSaveState('idle')
     setSaveMessage('')
     const [visibility, homepage] = await Promise.all([
-      fetchVisibility(domain, 'branded'),
+      fetchVisibility(domain, 'branded', session?.accessToken),
       liveAnsweredByYou(domain),
     ])
     if (req !== digReq.current) return
+    if (!visibility.ok && visibility.code === 'quota_exceeded') {
+      setQuotaWall(true)
+      setQuotaPlan(visibility.plan === 'paid' ? 'paid' : 'free')
+      const back = screen.branded?.questionsGenerated ? 'ready' : 'idle'
+      digState.current = back
+      setDigStatus(back)
+      setBusy(false)
+      return
+    }
+    if (visibility.ok) setQuotaWall(false)
     const beat = brandedBeat(visibility)
     const nextStatus = beat.questionsGenerated ? 'ready' : 'error'
     digState.current = nextStatus
@@ -417,6 +490,43 @@ export default function App() {
     setSaveState('idle')
     setSaveMessage('')
     setPageText(null)
+    setUpgradeEmail(false)
+  }
+
+  async function goCheckout(accessToken: string) {
+    setUpgradeBusy(true)
+    setUpgradeNote('')
+    const result = await startCheckout(accessToken)
+    if (result.ok && 'url' in result) {
+      window.location.assign(result.url)
+      return
+    }
+    setUpgradeBusy(false)
+    if (result.ok) {
+      setQuotaPlan('paid')
+      setUpgradeNote('This account is already on the paid plan.')
+      return
+    }
+    setUpgradeNote(result.error)
+  }
+
+  function onUpgrade() {
+    if (quotaPlan === 'paid' || upgradeBusy) return
+    if (!supabasePublicConfig()) {
+      setUpgradeNote(AUTH_NOT_CONFIGURED)
+      return
+    }
+    if (!session) {
+      try {
+        sessionStorage.setItem(AFTER_LOGIN_KEY, 'upgrade')
+      } catch {
+        // They can send the link again.
+      }
+      setUpgradeEmail(true)
+      setQuotaWall(true)
+      return
+    }
+    void goCheckout(session.accessToken)
   }
 
   async function onSave() {
@@ -601,6 +711,22 @@ export default function App() {
 
           {phase === 'loading' || busy ? <p className="status">Generating questions…</p> : null}
           {phase === 'error' && error ? <p className="err">{error}</p> : null}
+          {upgradeNote && !quotaWall ? <p className="status">{upgradeNote}</p> : null}
+          {quotaWall ? (
+            <UpgradeWall
+              config={config}
+              plan={quotaPlan}
+              note={upgradeNote}
+              busy={upgradeBusy}
+              onUpgrade={onUpgrade}
+              showEmail={upgradeEmail && authConfigured}
+              email={email}
+              onEmail={setEmail}
+              onSubmitEmail={onEmail}
+              saveState={saveState}
+              saveMessage={saveMessage}
+            />
+          ) : null}
 
           <div className="examples">
             <span className="muted">Try an example:</span>
@@ -821,9 +947,9 @@ export default function App() {
                 {saveState === 'saving' ? 'Saving…' : config.copy.saveCta}
               </button>
             </div>
-            {saveMessage ? (
+            {saveMessage && !(quotaWall && saveState === 'error') ? (
               <p className={saveState === 'error' ? 'err' : 'status'}>{saveMessage}</p>
-            ) : (
+            ) : saveMessage ? null : (
               <p className="footer-micro">
                 {session
                   ? 'Run again checks the live model and saves a new result.'
@@ -841,7 +967,21 @@ export default function App() {
                 hint=""
               />
             ) : null}
-            {config.paywallEnabled ? <UpgradeStub config={config} /> : null}
+            {quotaWall ? (
+              <UpgradeWall
+                config={config}
+                plan={quotaPlan}
+                note={upgradeNote}
+                busy={upgradeBusy}
+                onUpgrade={onUpgrade}
+                showEmail={upgradeEmail && authConfigured}
+                email={email}
+                onEmail={setEmail}
+                onSubmitEmail={onEmail}
+                saveState={saveState}
+                saveMessage={saveMessage}
+              />
+            ) : null}
           </article>
         </main>
       ) : null}
@@ -892,26 +1032,54 @@ function EmailForm({
   )
 }
 
-function UpgradeStub({ config }: { config: ProductConfig }) {
-  const [note, setNote] = useState('')
-  async function onUpgrade() {
-    setNote('')
-    try {
-      const res = await fetch('/api/billing', { headers: { Accept: 'application/json' } })
-      const data = (await res.json()) as { error?: string; paywallEnabled?: boolean }
-      setNote(data.error || (data.paywallEnabled ? 'Checkout is not available yet.' : ''))
-    } catch {
-      setNote('Checkout is not available yet.')
-    }
-  }
+function UpgradeWall({
+  config,
+  plan,
+  note,
+  busy,
+  onUpgrade,
+  showEmail,
+  email,
+  onEmail,
+  onSubmitEmail,
+  saveState,
+  saveMessage,
+}: {
+  config: ProductConfig
+  plan: 'free' | 'paid' | null
+  note: string
+  busy: boolean
+  onUpgrade: () => void
+  showEmail: boolean
+  email: string
+  onEmail: (value: string) => void
+  onSubmitEmail: (e: FormEvent) => void
+  saveState: SaveState
+  saveMessage: string
+}) {
   return (
-    <section className="foil upgrade">
+    <section className="foil upgrade" role="status">
       <h2>{config.copy.upgradeHeadline}</h2>
       <p>{config.copy.upgradeBody}</p>
-      <button type="button" onClick={() => void onUpgrade()}>
-        {config.copy.upgradeCta}
-      </button>
+      {plan === 'paid' ? (
+        <p className="why">This paid plan has no checks left in the current window.</p>
+      ) : (
+        <button type="button" onClick={onUpgrade} disabled={busy}>
+          {busy ? 'Opening checkout…' : config.copy.upgradeCta}
+        </button>
+      )}
       {note ? <p className="why">{note}</p> : null}
+      {showEmail ? (
+        <EmailForm
+          email={email}
+          onEmail={onEmail}
+          onSubmit={onSubmitEmail}
+          saveState={saveState}
+          saveMessage={saveMessage}
+          submitLabel="Send magic link"
+          hint="Sign in with a magic link to upgrade. No password."
+        />
+      ) : null}
     </section>
   )
 }

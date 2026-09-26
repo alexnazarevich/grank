@@ -22,7 +22,7 @@ Guest land/dig is unchanged: unbranded category questions first, branded when yo
 
 **Save this check** (after the result) sends a Supabase magic link. When you open the link, Grank stores the check and opens **Your checks**. Open one to see the prior land/dig result, including **Generated · OpenAI** and **Unbranded** / **Branded**. The saved blob keeps the unbranded beat and the branded dig when it was loaded. **Run again** calls `/api/visibility` for the active mode and `/api/homepage`, then inserts a new check and trims history to `maxSavedChecksPerUser`.
 
-Button labels and the history title come from `productConfig.copy` (`saveCta`, `runAgainCta`, `historyTitle`). Limits and what gets stored come from the same knobs (`storeQuestions`, `storeAnswers`, `storeWhoInstead`, `storeHomepageSnippet`, `maxSavedChecksPerUser`, `checkRetentionDays`, `freeChecksBeforeSave`, `saveRequiresAuth`). Paid checkout stays off while `paywallEnabled` is false (`/api/billing` does not call Stripe).
+Button labels and the history title come from `productConfig.copy` (`saveCta`, `runAgainCta`, `historyTitle`). Limits and what gets stored come from the same knobs (`storeQuestions`, `storeAnswers`, `storeWhoInstead`, `storeHomepageSnippet`, `maxSavedChecksPerUser`, `checkRetentionDays`, `freeChecksBeforeSave`, `saveRequiresAuth`). While `paywallEnabled` is false, checks are not quota-blocked and `/api/billing` does not call Stripe. See **Free quota and one paid plan** below.
 
 If the Supabase client vars are missing, the result still loads and Save / History say **Auth not configured**. If the Pages secrets are missing, `/api/checks` returns 503 with the same kind of setup message and `/api/visibility` keeps working.
 
@@ -39,7 +39,9 @@ Privileged values stay on Cloudflare Pages (Production and Preview). Never creat
 | `SUPABASE_URL` | `/api/checks` (server writes) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `/api/checks` only. Never ship to the browser. |
 | `PRODUCT_CONFIG_JSON` | optional knob blob. Single env aliases (`MAX_SAVED_CHECKS_PER_USER`, `STORE_QUESTIONS`, `PAYWALL_ENABLED`, …) override one field. |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` | **(9) only.** Unused while `paywallEnabled` is false. |
+| `STRIPE_SECRET_KEY` | Checkout Session. **(9).** Never a `VITE_*` var. |
+| `STRIPE_WEBHOOK_SECRET` | Verify `Stripe-Signature` on `/api/stripe-webhook`. |
+| `STRIPE_PRICE_ID` | The one recurring Price (`price_...`). |
 
 | Vite (public) | Used by |
 | --- | --- |
@@ -58,6 +60,38 @@ Server enforcement reads `PRODUCT_CONFIG_JSON` and the env aliases. The UI displ
 
 Without those keys locally, step 1 still works and step 2 shows **Auth not configured**.
 
+## Free quota and one paid plan
+
+`paywallEnabled` defaults to **false** (kill switch). Guest land/dig keeps working, and `/api/billing` does not call Stripe.
+
+Turn the wall on for **Production and Preview** without a code change. Set `PRODUCT_CONFIG_JSON`:
+
+```json
+{"paywallEnabled": true}
+```
+
+`PAYWALL_ENABLED=true` overrides that one field. The same blob sets the quota: `freeQuotaUnit` (`checks`, `saves`, or `both`; default `checks`), `freeQuotaAmount` (default `3`), `freeQuotaWindow` (`lifetime`, `day`, or `month`; default `lifetime`). A profile with `plan = paid` uses `paidQuotaAmount` and `paidMaxSavedChecks` instead of the free caps. One paid tier — not a list of SKUs. `paidPriceCents` is display-only; Stripe charges `STRIPE_PRICE_ID`.
+
+`/api/visibility` checks the quota **before** any OpenAI call. At the limit it returns HTTP 402 `{ "code": "quota_exceeded" }` and does not call the model. The page then shows `copy.upgradeHeadline`, `copy.upgradeBody`, and `copy.upgradeCta`. Upgrade copy stays off the screen until that wall.
+
+Guest checks are counted with a browser id (`x-grank-anon`, stored locally). Signing in attaches those rows to the account. A signed-in check counts against that user.
+
+### Stripe
+
+Set these on Pages **Production and Preview** (test mode is fine). If either secret or the price id is missing, checkout stays disabled and `POST /api/billing` returns a clear configuration error. It does not call Stripe.
+
+| Name | Purpose |
+| --- | --- |
+| `STRIPE_SECRET_KEY` | Create the Checkout Session |
+| `STRIPE_WEBHOOK_SECRET` | Verify the webhook |
+| `STRIPE_PRICE_ID` | The single recurring price |
+
+Webhook endpoint: `https://grank.pages.dev/api/stripe-webhook`
+
+Subscribe it to `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.updated`, and `customer.subscription.deleted`. A paid checkout sets `profiles.plan` to `paid` and stores `stripe_customer_id`. A canceled or unpaid subscription sets the plan back to `free`.
+
+Apply `supabase/migrations/20260926150000_quota_paid.sql` after the save migration. `profiles.plan`, `stripe_customer_id`, and `usage_events` already come from `20260925120000_save_and_rerun.sql`; this file adds the lookup indexes and is safe to re-run.
+
 ## Run
 
 ```bash
@@ -74,7 +108,8 @@ Cloudflare Pages: build `npm run build`, output `dist`. Pages Functions:
 - `functions/api/homepage.ts` → `/api/homepage` (supporting page-content line)
 - `functions/api/checks.ts` → `/api/checks` (save and list; service role)
 - `functions/api/product-config.ts` → `/api/product-config` (non-secret knobs)
-- `functions/api/billing.ts` → `/api/billing` (paywall stub; no Stripe call)
+- `functions/api/billing.ts` → `/api/billing` (one Checkout Session when the paywall is on)
+- `functions/api/stripe-webhook.ts` → `/api/stripe-webhook` (sets `profiles.plan`)
 
 `npm run dev` and `npm run preview` do not run Pages Functions. Question generation then shows an honest unavailable state and sample questions. The homepage supporting line falls back to Jina Reader and AllOrigins only when `/api/homepage` is missing; those proxies fail on production (Jina returns 401).
 
