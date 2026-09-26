@@ -243,3 +243,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 }
 .history-item span { color: var(--muted); font-size: 0.82rem; }
 .upgrade { margin-top: 1rem; }
+.full-report-door { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
+.full-report .beat-title { margin: 0.4rem 0 0.35rem; }
+.theme-block h2.theme-title {
+  text-transform: none; letter-spacing: -0.02em; color: var(--ink); font-size: 1.15rem; margin-bottom: 0.25rem;
+}
+.theme-count { color: var(--muted); font-size: 0.82rem; margin: 0 0 0.75rem; }
+.history-item .full-badge { color: var(--accent); }

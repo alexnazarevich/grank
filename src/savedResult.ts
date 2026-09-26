@@ -1,4 +1,5 @@
 import type { Answered, ModeBeat, VisibilityMode } from './demoData.ts'
+import type { FullReport } from './fullReport.ts'
 
 export const LABEL_GENERATED = 'Generated · OpenAI'
 export const LABEL_SAMPLE = 'Sample'
@@ -63,6 +64,9 @@ export type StoredResult = {
   model: string | null
   unbranded?: StoredBeat
   branded?: StoredBeat | null
+  /** Set when this row is a full report. The checks.mode column stays unbranded or branded. */
+  report?: 'full'
+  fullReport?: FullReport
 }
 
 export type BeatDraft = {

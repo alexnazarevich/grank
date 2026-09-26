@@ -34,6 +34,25 @@ describe('productConfigFromEnv', () => {
       'A paid plan raises your check limit. Limits come from settings, not this sentence.',
     )
     assert.equal(config.copy.upgradeCta, 'Upgrade')
+    assert.equal(config.fullReportQuestionTarget, 55)
+    assert.equal(config.fullReportThemeMin, 3)
+    assert.equal(config.fullReportThemeMax, 6)
+    assert.equal(config.freeFullReports, 1)
+    assert.equal(config.fullReportIncludesBranded, true)
+    assert.equal(config.copy.showFullReportCta, 'Show full report')
+    assert.equal(
+      config.copy.fullReportMagicLinkHint,
+      'Sign in with a magic link to unlock your full report. No password.',
+    )
+    assert.equal(config.copy.fullReportTitle, 'Full visibility report')
+    assert.equal(
+      config.copy.fullReportSub,
+      'More questions about this site, grouped by theme. Still Generated · OpenAI — not a multi-engine scrape.',
+    )
+    assert.equal(config.copy.fullReportLoading, 'Building your full report…')
+    assert.equal(config.copy.fullReportEmptyThemes, 'No themes yet — try again.')
+    assert.equal(config.copy.fullReportLimitHit, 'You’ve used your free full report.')
+    assert.equal(config.copy.themeSectionEyebrow, 'Theme')
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }
@@ -55,6 +74,30 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.saveCta, 'Keep this check')
     assert.equal(config.copy.runAgainCta, 'Run again')
     assert.equal(config.storeHomepageSnippet, false)
+    assert.equal(config.copy.showFullReportCta, 'Show full report')
+  })
+
+  it('reads full-report knobs from env aliases and clamps them', () => {
+    const config = productConfigFromEnv({
+      FULL_REPORT_QUESTION_TARGET: '60',
+      FULL_REPORT_THEME_MIN: '4',
+      FULL_REPORT_THEME_MAX: '4',
+      FREE_FULL_REPORTS: '2',
+      FULL_REPORT_INCLUDES_BRANDED: 'false',
+    })
+    assert.equal(config.fullReportQuestionTarget, 60)
+    assert.equal(config.fullReportThemeMin, 4)
+    assert.equal(config.fullReportThemeMax, 4)
+    assert.equal(config.freeFullReports, 2)
+    assert.equal(config.fullReportIncludesBranded, false)
+    const clamped = productConfigFromEnv({
+      FULL_REPORT_QUESTION_TARGET: '500',
+      FULL_REPORT_THEME_MIN: '9',
+      FULL_REPORT_THEME_MAX: '0',
+    })
+    assert.equal(clamped.fullReportQuestionTarget, 80)
+    assert.equal(clamped.fullReportThemeMin, 1)
+    assert.equal(clamped.fullReportThemeMax, 6)
   })
 
   it('ignores invalid JSON and invalid enums', () => {
