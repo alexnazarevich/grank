@@ -77,6 +77,19 @@ function checkoutReturnNote(): string {
   return note
 }
 
+function withOpenAI(text: string) {
+  const word = 'OpenAI'
+  const at = text.indexOf(word)
+  if (at < 0) return text
+  return (
+    <>
+      {text.slice(0, at)}
+      <strong>{word}</strong>
+      {text.slice(at + word.length)}
+    </>
+  )
+}
+
 function verdictWord(answered: Answered): string {
   if (answered === 'yes') return 'Yes'
   if (answered === 'partial') return 'Partial'
@@ -627,6 +640,10 @@ export default function App() {
     void runCheck(screen.domain, { autosave: true })
   }
 
+  useEffect(() => {
+    document.title = STORY.documentTitle
+  }, [])
+
   const land = activeMode === 'unbranded'
   const brandedLoading = activeMode === 'branded' && digStatus === 'loading'
   const beat = screen ? (land ? screen.unbranded : screen.branded) : null
@@ -652,7 +669,7 @@ export default function App() {
             </>
           ) : null}
         </div>
-        <span className="badge">Unbranded first · Branded on ask · OpenAI gpt-4o-mini</span>
+        <span className="badge site-badge">{STORY.headerBadge}</span>
       </header>
 
       {phase === 'history' ? (
@@ -691,25 +708,31 @@ export default function App() {
           ) : null}
         </main>
       ) : phase !== 'result' ? (
-        <main className="hero">
-          <h1>See if AI answers with you</h1>
-          <p className="sub">{STORY.homeSub}</p>
+        <main className="hero home">
+          <div className="above">
+            <h1>{STORY.homeH1}</h1>
+            <p className="sub">{STORY.homeSub}</p>
 
-          <form className="cta" onSubmit={onSubmit}>
-            <input
-              type="text"
-              inputMode="url"
-              placeholder="https://yourbrand.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              aria-label="Website URL"
-            />
-            <button type="submit" disabled={phase === 'loading' || busy}>
-              {phase === 'loading' || busy ? 'Generating…' : 'Check visibility'}
-            </button>
-          </form>
+            <form className="cta" onSubmit={onSubmit} aria-busy={phase === 'loading' || busy}>
+              <input
+                type="text"
+                inputMode="url"
+                autoComplete="url"
+                placeholder={STORY.urlPlaceholder}
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                aria-label="Website URL"
+              />
+              <button type="submit" disabled={phase === 'loading' || busy}>
+                {STORY.cta}
+              </button>
+            </form>
 
-          {phase === 'loading' || busy ? <p className="status">Generating questions…</p> : null}
+            {phase === 'loading' || busy ? (
+              <p className="status" role="status">
+                {STORY.homeLoading}
+              </p>
+            ) : null}
           {phase === 'error' && error ? <p className="err">{error}</p> : null}
           {upgradeNote && !quotaWall ? <p className="status">{upgradeNote}</p> : null}
           {quotaWall ? (
@@ -728,8 +751,10 @@ export default function App() {
             />
           ) : null}
 
+          <p className="proof">{withOpenAI(STORY.homeProof)}</p>
+
           <div className="examples">
-            <span className="muted">Try an example:</span>
+            <span className="muted lead">{STORY.exampleLead}</span>
             {EXAMPLES.map((ex) => (
               <button
                 key={ex.label}
@@ -740,23 +765,16 @@ export default function App() {
                   void runCheck(ex.url)
                 }}
               >
-                Try: {ex.label}
+                {ex.label}
               </button>
             ))}
+            </div>
           </div>
 
-          <p className="proof">{STORY.proof}</p>
-
           <section className="foil">
-            <h2>Built for thin teams</h2>
-            <p>
-              “Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops.
-              You need a glance: category questions about what you solve, then — if you want —
-              questions that name your brand.
-            </p>
-            <p className="muted small">
-              Not Cognizo/Profound suite pricing — and simpler than Gumshoe’s audit setup.
-            </p>
+            <h2>{STORY.foilTitle}</h2>
+            <p className="foil-body">{STORY.foilBody}</p>
+            <p className="foil-foot">{STORY.foilFoot}</p>
           </section>
         </main>
       ) : screen ? (
