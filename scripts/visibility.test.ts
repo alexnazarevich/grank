@@ -381,6 +381,27 @@ describe('interpretVisibilityResponse', () => {
     assert.deepEqual(parseClientWhoInstead([' Linear ', 'Coda'], 'linear.app'), ['Coda'])
   })
 
+  it('marks a quota response so the page can show the upgrade wall', () => {
+    const blocked = interpretVisibilityResponse(
+      402,
+      {
+        ok: false,
+        code: 'quota_exceeded',
+        error: 'Check limit reached.',
+        plan: 'free',
+        quota: { amount: 3 },
+      },
+      false,
+    )
+    assert.equal(blocked.ok, false)
+    if (!blocked.ok) {
+      assert.equal(blocked.code, 'quota_exceeded')
+      assert.equal(blocked.plan, 'free')
+      assert.equal(blocked.error, 'Check limit reached.')
+      assert.equal(JSON.stringify(blocked).includes('3'), false)
+    }
+  })
+
   it('surfaces the missing-key error verbatim', () => {
     const missing = interpretVisibilityResponse(503, { error: 'OPENAI_API_KEY not configured' }, false)
     assert.equal(missing.ok, false)

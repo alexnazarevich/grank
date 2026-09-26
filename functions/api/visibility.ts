@@ -7,7 +7,9 @@
  * OPENAI_API_KEY is read from the Pages env only. Never returned.
  */
 
+import { productConfigFromEnv } from '../../src/config/productConfig.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
+import { gateModelCall } from './quota.ts'
 
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -62,9 +64,7 @@ export function parseVisibilityMode(value: unknown): VisibilityMode | 'invalid' 
   return 'invalid'
 }
 
-export type VisibilityEnv = {
-  OPENAI_API_KEY?: string
-}
+export type VisibilityEnv = Record<string, string | undefined>
 
 type Answered = 'yes' | 'partial' | 'no'
 
@@ -357,7 +357,22 @@ export async function onRequest(context: {
   const apiKey = typeof secret === 'string' ? secret.trim() : ''
   if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
 
+  const gate = await gateModelCall({
+    request,
+    env: context.env,
+    config: productConfigFromEnv(context.env),
+  })
+  if (!gate.ok) return gate.response
+
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
-  return completeVisibility(apiKey, domain, safeExcerpt, mode)
+  const result = await completeVisibility(apiKey, domain, safeExcerpt, mode)
+  if (result.status !== 200) {
+    try {
+      await gate.release()
+    } catch {
+      // Keep the model error. A failed release may count a check that did not finish.
+    }
+  }
+  return result
 }

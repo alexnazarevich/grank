@@ -58,8 +58,8 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
     historyTitle: 'Your checks',
-    upgradeHeadline: 'Keep going',
-    upgradeBody: 'A paid plan raises your check limit.',
+    upgradeHeadline: 'Need more checks?',
+    upgradeBody: 'A paid plan raises your check limit. Limits come from settings, not this sentence.',
     upgradeCta: 'Upgrade',
   },
 }
@@ -249,4 +249,10 @@ export function productConfigFromEnv(env: Record<string, string | undefined> | u
 export function historyCapForPlan(config: ProductConfig, plan: string | null | undefined): number {
   if (config.paywallEnabled && plan === 'paid') return config.paidMaxSavedChecks
   return config.maxSavedChecksPerUser
+}
+
+/** Free allotment, or the paid allotment for a paid profile. Only enforced while the paywall is on. */
+export function quotaAmountForPlan(config: ProductConfig, plan: string | null | undefined): number {
+  if (plan === 'paid') return config.paidQuotaAmount
+  return config.freeQuotaAmount
 }

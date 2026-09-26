@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { saveCheck } from '../src/checksClient.ts'
 import { PRODUCT_DEFAULTS, productConfigFromEnv } from '../src/config/productConfig.ts'
 import { LABEL_GENERATED, LABEL_SAMPLE, LABEL_UNBRANDED, viewFromAha, viewFromSaved } from '../src/savedResult.ts'
 import { idsBeyondCap, retentionCutoffIso, shapeStoredCheck } from '../functions/api/shapeCheck.ts'
@@ -273,7 +274,7 @@ describe('onRequest /api/checks', () => {
         )
       }
       if (method === 'DELETE' && url.includes('/rest/v1/checks')) {
-        return new Response('', { status: 204 })
+        return new Response(null, { status: 204 })
       }
       if (url.endsWith('/rest/v1/usage_events')) {
         const sent = JSON.parse(body) as { kind?: string; user_id?: string }
@@ -318,7 +319,7 @@ describe('onRequest /api/checks', () => {
       if (url.endsWith('/auth/v1/user')) {
         return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
       }
-      if ((init?.method || 'GET') === 'DELETE') return new Response('', { status: 204 })
+      if ((init?.method || 'GET') === 'DELETE') return new Response(null, { status: 204 })
       if (url.includes('select=id,domain,mode,result,created_at')) {
         assert.match(url, new RegExp(`user_id=eq.${USER}`))
         return new Response(
@@ -348,6 +349,85 @@ describe('onRequest /api/checks', () => {
       assert.equal(body.checks?.[0]?.domain, 'linear.app')
       assert.equal(body.checks?.[0]?.createdAt, '2026-09-25T12:00:00.000Z')
       assert.ok(calls.some((call) => call.startsWith('DELETE') && call.includes('created_at=lt.')))
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('blocks a save at the saves quota and does not insert the check', async () => {
+    const usageId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const olderId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+    const calls: { url: string; method: string }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method || 'GET'
+      calls.push({ url, method })
+      if (url.endsWith('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles') && method === 'GET') {
+        return new Response(JSON.stringify([{ plan: 'free' }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.includes('/rest/v1/profiles')) return new Response('', { status: 201 })
+      if (method === 'POST' && url.includes('/rest/v1/usage_events')) {
+        return new Response(JSON.stringify([{ id: usageId }]), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (method === 'GET' && url.includes('/rest/v1/usage_events')) {
+        return new Response(JSON.stringify([{ id: olderId }, { id: usageId }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (method === 'DELETE' && url.includes('/rest/v1/usage_events')) return new Response(null, { status: 204 })
+      if (url.includes('/rest/v1/checks')) return new Response('should not insert', { status: 500 })
+      return new Response('unexpected ' + method + ' ' + url, { status: 500 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/checks', {
+          method: 'POST',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify(DRAFT),
+        }),
+        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_UNIT: 'saves', FREE_QUOTA_AMOUNT: '1' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 402, text)
+      assert.equal(text.includes(SECRET), false)
+      const body = JSON.parse(text) as { code?: string; plan?: string }
+      assert.equal(body.code, 'quota_exceeded')
+      assert.equal(body.plan, 'free')
+      assert.equal(calls.some((call) => call.url.includes('/rest/v1/checks')), false)
+      assert.ok(calls.some((call) => call.method === 'DELETE' && call.url.includes(usageId)))
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+})
+
+describe('saveCheck quota signal', () => {
+  it('keeps quota_exceeded on the client result', async () => {
+    const prev = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ ok: false, code: 'quota_exceeded', error: 'Check limit reached.', plan: 'paid' }),
+        { status: 402, headers: { 'content-type': 'application/json' } },
+      )) as typeof fetch
+    try {
+      const result = await saveCheck('token', DRAFT as never)
+      assert.equal(result.ok, false)
+      if (!result.ok) {
+        assert.equal(result.code, 'quota_exceeded')
+        assert.equal(result.plan, 'paid')
+        assert.equal(result.error, 'Check limit reached.')
+      }
     } finally {
       globalThis.fetch = prev
     }
