@@ -178,7 +178,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
     flex-direction: column; background: transparent; border: none; padding: 0; box-shadow: none;
   }
   .cta:focus-within { box-shadow: none; }
-  .cta input { background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+  .cta input {
+    flex: none; width: 100%;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  }
   .cta button { width: 100%; }
   .home > .foil { margin-top: 2rem; }
 }
