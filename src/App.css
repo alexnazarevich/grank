@@ -159,6 +159,20 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   flex: 1 1 12rem; min-width: 0; background: var(--bg); color: var(--ink);
   border: 1px solid var(--line); border-radius: 10px; padding: 0.45rem 0.65rem; font: inherit;
 }
+.owned-add {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.85rem;
+}
+.owned-add label { display: flex; flex-direction: column; gap: 0.25rem; color: var(--muted); font-size: 0.78rem; }
+.owned-add input, .owned-add select {
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.45rem 0.65rem; font: inherit;
+}
+.owned-add input { flex: 1 1 14rem; min-width: 0; }
+.owned-add button {
+  background: transparent; color: var(--accent); border: 1px solid #2dd4bf55; border-radius: 999px;
+  padding: 0.45rem 0.8rem; font: inherit; font-weight: 700; cursor: pointer;
+}
+.owned-add button:disabled { opacity: 0.55; cursor: not-allowed; }
 .pinned-run { margin: 0.75rem 0; }
 .pinned-run h3 { margin: 0 0 0.45rem; font-size: 0.95rem; }
 .pinned-run ul { list-style: none; padding: 0; margin: 0; }

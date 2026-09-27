@@ -1,10 +1,29 @@
 import { useState } from 'react'
+import type { FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
-import type { FullReport, FullReportQuestion } from './fullReport.ts'
+import { THEME_CATALOG, type FullReport, type FullReportQuestion } from './fullReport.ts'
+import type { ThemeId } from './mentionFacts.ts'
 import { mentionStatusLabel, whoInsteadNames } from './mentionLabel.ts'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
+
+export type ReportEditor = {
+  disabled?: boolean
+  editingKey: string | null
+  editText: string
+  addText: string
+  addThemeId: ThemeId
+  atCap: boolean
+  canDelete: boolean
+  onEdit: (key: string, question: string) => void
+  onEditText: (value: string) => void
+  onRename: (themeId: ThemeId, index: number) => void
+  onDelete: (themeId: ThemeId, index: number) => void
+  onAddText: (value: string) => void
+  onAddTheme: (id: ThemeId) => void
+  onAdd: () => void
+}
 
 /** Question toggles the answer already on the row. No extra model call. */
 function ReportQuestion({
@@ -13,12 +32,20 @@ function ReportQuestion({
   panelId,
   chipId,
   showFraming,
+  editor,
+  rowKey,
+  themeId,
+  index,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   panelId: string
   chipId: string
   showFraming: boolean
+  editor?: ReportEditor
+  rowKey: string
+  themeId: ThemeId
+  index: number
 }) {
   const [open, setOpen] = useState(false)
   const text = item.answer.trim()
@@ -52,6 +79,37 @@ function ReportQuestion({
           </span>
         ) : null}
       </div>
+      {editor && editor.editingKey === rowKey ? (
+        <div className="pin-edit">
+          <input
+            aria-label="Question"
+            value={editor.editText}
+            maxLength={240}
+            disabled={editor.disabled}
+            onChange={(event) => editor.onEditText(event.target.value)}
+          />
+          <button
+            type="button"
+            disabled={editor.disabled || !editor.editText.replace(/\s+/g, ' ').trim()}
+            onClick={() => editor.onRename(themeId, index)}
+          >
+            {copy.saveEditedQuestionCta}
+          </button>
+        </div>
+      ) : editor ? (
+        <div className="q-tools">
+          <button type="button" disabled={editor.disabled} onClick={() => editor.onEdit(rowKey, item.question)}>
+            {copy.editQuestionCta}
+          </button>
+          <button
+            type="button"
+            disabled={editor.disabled || !editor.canDelete}
+            onClick={() => editor.onDelete(themeId, index)}
+          >
+            {copy.deleteQuestionCta}
+          </button>
+        </div>
+      ) : null}
       {open ? (
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? (
@@ -79,10 +137,12 @@ export function FullReportSection({
   report,
   copy,
   themesOnly = false,
+  editor,
 }: {
   report: FullReport
   copy: ProductCopy
   themesOnly?: boolean
+  editor?: ReportEditor
 }) {
   return (
     <section className="full-report" aria-label={copy.fullReportTitle}>
@@ -109,11 +169,50 @@ export function FullReportSection({
                 panelId={`report-a-${theme.id}-${index}`}
                 chipId={`report-m-${theme.id}-${index}`}
                 showFraming={report.includesBranded}
+                editor={editor}
+                rowKey={`${theme.id}:${index}`}
+                themeId={theme.id}
+                index={index}
               />
             ))}
           </ul>
         </section>
       ))}
+      {editor ? (
+        <form
+          className="owned-add"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault()
+            editor.onAdd()
+          }}
+        >
+          <label>
+            Theme
+            <select
+              aria-label="Theme"
+              value={editor.addThemeId}
+              disabled={editor.disabled || editor.atCap}
+              onChange={(event) => editor.onAddTheme(event.target.value as ThemeId)}
+            >
+              {THEME_CATALOG.map((theme) => (
+                <option key={theme.id} value={theme.id}>
+                  {theme.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <input
+            aria-label="New question"
+            value={editor.addText}
+            maxLength={240}
+            disabled={editor.disabled || editor.atCap}
+            onChange={(event) => editor.onAddText(event.target.value)}
+          />
+          <button type="submit" disabled={editor.disabled || editor.atCap || !editor.addText.trim()}>
+            {copy.addQuestionCta}
+          </button>
+        </form>
+      ) : null}
     </section>
   )
 }

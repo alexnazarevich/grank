@@ -1,5 +1,6 @@
 import { readAnonKey } from './authClient.ts'
 import { fullReportFromStored, type FullReport, type RunPin } from './fullReport.ts'
+import type { OwnedQuestion } from './ownedQuestions.ts'
 
 export type FullReportFail = {
   ok: false
@@ -91,6 +92,43 @@ export async function fetchFullReport(
       method: 'POST',
       headers,
       body: JSON.stringify(pins.length > 0 ? { domain, pins } : { domain }),
+    })
+  } catch {
+    return { ok: false, error: 'Could not reach the full report. Try again.' }
+  }
+  const raw = await res.text()
+  const type = res.headers.get('content-type') || ''
+  if (type.includes('text/html') || raw.trimStart().startsWith('<')) {
+    return interpretFullReportResponse(res.status, null, true)
+  }
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return { ok: false, error: `Full report failed (HTTP ${res.status}).` }
+  }
+  return interpretFullReportResponse(res.status, data, false)
+}
+
+/** Answer a saved question set. The server must not replace it with a generated roster. */
+export async function fetchOwnedReport(
+  domain: string,
+  accessToken: string,
+  owned: OwnedQuestion[],
+): Promise<FullReportOk | FullReportFail> {
+  const headers = new Headers({
+    Accept: 'application/json',
+    'content-type': 'application/json',
+    authorization: `Bearer ${accessToken}`,
+  })
+  const anon = readAnonKey()
+  if (anon) headers.set('x-grank-anon', anon)
+  let res: Response
+  try {
+    res = await fetch('/api/full-report', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ domain, owned }),
     })
   } catch {
     return { ok: false, error: 'Could not reach the full report. Try again.' }
