@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import type { Framing, Mention } from './mentionFacts.ts'
 
@@ -13,11 +14,13 @@ export function MentionMark({
   whoInstead,
   framing,
   copy,
+  children,
 }: {
   mention?: Mention
   whoInstead: string[]
   framing: Framing
   copy: ProductCopy
+  children?: ReactNode
 }) {
   if (!mention) return null
   const names = framing === 'unbranded' ? whoInstead.filter((name) => name.trim()).slice(0, 3) : []
@@ -43,6 +46,7 @@ export function MentionMark({
       ) : (
         <p className="mention-help">{HELP[mention]}</p>
       )}
+      {children}
     </div>
   )
 }

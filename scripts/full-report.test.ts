@@ -13,6 +13,7 @@ import {
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { interpretFullReportResponse } from '../src/fullReportClient.ts'
+import { ANSWER_SKIM_CHARS, splitAnswerSkim } from '../src/answerSkim.ts'
 import { STORY } from '../src/story.ts'
 
 const KEY = 'sk-openai-full-report-secret'
@@ -766,5 +767,37 @@ describe('guest aha copy stays put', () => {
     assert.match(ui, /fullReportLimitHit/)
     assert.match(ui, /themeSectionEyebrow/)
     assert.equal(app.includes('report SKU'), false)
+    assert.equal(app.includes('showFullAnswer'), false)
+    assert.equal(app.includes('hideAnswer'), false)
+    assert.equal(app.includes('answer-expand'), false)
+    assert.match(section, /STORY\.showFullAnswer/)
+    assert.match(section, /STORY\.hideAnswer/)
+    assert.match(section, /splitAnswerSkim/)
+    assert.equal(/fetch\s*\(/.test(section), false)
+  })
+})
+
+describe('full-report answer skim', () => {
+  it('keeps short answers whole and previews a prefix of a long one', () => {
+    const short = 'Linear is a fast issue tracker for software teams.'
+    assert.equal(short.length < ANSWER_SKIM_CHARS, true)
+    assert.deepEqual(splitAnswerSkim(short), { preview: short, long: false })
+    assert.deepEqual(splitAnswerSkim(`  ${short}  `), { preview: short, long: false })
+    assert.deepEqual(splitAnswerSkim('x'.repeat(ANSWER_SKIM_CHARS)), {
+      preview: 'x'.repeat(ANSWER_SKIM_CHARS),
+      long: false,
+    })
+
+    const sentence = 'Teams often compare a few issue trackers when they plan work.'
+    const long = `${sentence} ${'Buyers still ask for proof from larger incumbents. '.repeat(6)}`.trim()
+    assert.equal(long.length > ANSWER_SKIM_CHARS, true)
+    const skim = splitAnswerSkim(long)
+    assert.equal(skim.long, true)
+    assert.equal(skim.preview.endsWith('…'), true)
+    const prefix = skim.preview.slice(0, -1)
+    assert.equal(long.startsWith(prefix), true)
+    assert.equal(prefix.length <= ANSWER_SKIM_CHARS, true)
+    assert.equal(prefix.endsWith(' '), false)
+    assert.equal(splitAnswerSkim('y'.repeat(ANSWER_SKIM_CHARS + 1)).preview, `${'y'.repeat(ANSWER_SKIM_CHARS)}…`)
   })
 })
