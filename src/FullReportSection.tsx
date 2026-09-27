@@ -44,7 +44,10 @@ function ReportQuestion({
           <span className="report-q-text">{item.question}</span>
         </button>
         {label ? (
-          <span id={chipId} className="tag plain mention report-mention">
+          <span
+            id={chipId}
+            className={`tag plain mention report-mention${item.mention === 'mentioned' ? ' mentioned' : ''}`}
+          >
             {label}
           </span>
         ) : null}

@@ -142,6 +142,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .report-q-head .report-mention {
   flex: none; max-width: 100%; margin-left: auto; align-self: flex-start;
 }
+.report-q-head .report-mention.mentioned {
+  background: #064e3b; color: var(--yes); border-color: #065f46;
+}
 .report-q-panel {
   display: flex; flex-direction: column; align-items: stretch; gap: 0.45rem; min-width: 0;
 }
