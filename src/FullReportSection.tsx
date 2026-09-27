@@ -22,7 +22,7 @@ function ReportQuestion({
 }) {
   const [open, setOpen] = useState(false)
   const text = item.answer.trim()
-  const label = item.mention ? mentionStatusLabel(item.mention, item.whoInstead, item.framing, copy) : ''
+  const label = item.mention ? mentionStatusLabel(item.mention, copy) : ''
   const names =
     open && item.mention && item.mention !== 'mentioned' ? whoInsteadNames(item.whoInstead, item.framing) : []
   return (
