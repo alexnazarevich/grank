@@ -810,8 +810,10 @@ describe('unbranded samples and story copy', () => {
       'Answers below are from our model for these questions — not a live multi-engine scrape.',
     )
     assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
-    assert.equal(STORY.showFullAnswer, 'Show full answer')
-    assert.equal(STORY.hideAnswer, 'Hide answer')
+    assert.equal('showFullAnswer' in STORY, false)
+    assert.equal('hideAnswer' in STORY, false)
+    assert.equal(JSON.stringify(STORY).includes('Show full answer'), false)
+    assert.equal(JSON.stringify(STORY).includes('Hide answer'), false)
     assert.equal(JSON.stringify(STORY).includes('what ChatGPT said'), false)
     assert.equal(
       STORY.homeSub,

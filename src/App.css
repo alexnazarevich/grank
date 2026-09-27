@@ -125,7 +125,27 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .mention-help { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
 .mention-names { list-style: none; padding: 0; margin: 0.25rem 0 0; }
 .mention-names li { margin: 0.1rem 0; }
-.mention-skim .answer-expand { margin-top: 0.35rem; }
+.report-q-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.35rem 0.65rem;
+}
+.report-q-toggle {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem;
+  flex: 1 1 auto; min-width: 0; min-height: 0; max-width: 100%;
+  margin: 0; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; line-height: 1.4; text-align: left; cursor: pointer;
+}
+.report-q-toggle:focus-visible {
+  outline: 2px solid #5eead466; outline-offset: 3px; border-radius: 6px;
+}
+.report-q-toggle .tag { margin-left: 0; flex: none; }
+.report-q-text { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-wrap: anywhere; }
+.report-q-head .report-mention {
+  flex: none; max-width: 100%; margin-left: auto; align-self: flex-start;
+}
+.report-q-panel {
+  display: flex; flex-direction: column; align-items: stretch; gap: 0.45rem; min-width: 0;
+}
+.report-who { margin: 0; }
 .q-tools, .pin-edit { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; align-items: center; }
 .q-tools button, .pin-edit button, .pinned-run button {
   background: transparent; color: var(--accent); border: 1px solid #2dd4bf55; border-radius: 999px;
@@ -145,10 +165,6 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 }
 .answer .tag { margin-left: 0; }
 .answer-helper { font-size: 0.82rem; }
-.answer-expand {
-  display: inline-block; margin: 0 0 0.45rem; padding: 0;
-  font-size: 0.82rem; line-height: 1.4; text-align: left;
-}
 .answer-body { margin: 0; line-height: 1.5; }
 .answer.miss .answer-body { color: var(--muted); }
 .ask {
@@ -183,6 +199,9 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
     background: var(--card); border: 1px solid var(--line); border-radius: 14px;
   }
   .cta button { width: 100%; }
+  .report-q-toggle { flex: none; width: 100%; min-height: 0; }
+  .report-q-text { flex: none; max-width: 100%; }
+  .report-q-head .report-mention { flex: none; max-width: 100%; margin-left: 0; }
   .home > .foil { margin-top: 2rem; }
 }
 .muted { color: var(--muted); }

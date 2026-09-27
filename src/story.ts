@@ -16,8 +16,6 @@ export const STORY = {
   answerHelper:
     'Answers below are from our model for these questions — not a live multi-engine scrape.',
   answerMiss: 'Couldn’t get an answer.',
-  showFullAnswer: 'Show full answer',
-  hideAnswer: 'Hide answer',
   /** Result-screen honesty. Homepage uses homeProof. */
   proof: 'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
   documentTitle: 'Grank — See if you show up in AI answers',
