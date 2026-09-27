@@ -1,9 +1,57 @@
+import { useState } from 'react'
+import { splitAnswerSkim } from './answerSkim.ts'
 import type { ProductCopy } from './config/productConfig.ts'
-import type { FullReport } from './fullReport.ts'
+import type { FullReport, FullReportQuestion } from './fullReport.ts'
 import { MentionMark } from './MentionMark.tsx'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
+
+/** Expand/collapse text already on the row. No extra model call. */
+function ReportAnswer({
+  item,
+  copy,
+  bodyId,
+}: {
+  item: FullReportQuestion
+  copy: ProductCopy
+  bodyId: string
+}) {
+  const [open, setOpen] = useState(false)
+  const text = item.answer.trim()
+  const skim = text && item.mention ? splitAnswerSkim(text) : { preview: text, long: false }
+  const shown = skim.long && !open ? skim.preview : text
+  return (
+    <div className={text ? 'answer' : 'answer miss'}>
+      <div className="answer-meta">
+        <span className="tag plain live">{GENERATED}</span>
+      </div>
+      {text && item.mention ? (
+        <MentionMark
+          mention={item.mention}
+          whoInstead={item.whoInstead}
+          framing={item.framing}
+          copy={copy}
+        >
+          {skim.long ? (
+            <button
+              type="button"
+              className="text-btn answer-expand"
+              aria-expanded={open}
+              aria-controls={bodyId}
+              onClick={() => setOpen((value) => !value)}
+            >
+              {open ? STORY.hideAnswer : STORY.showFullAnswer}
+            </button>
+          ) : null}
+        </MentionMark>
+      ) : null}
+      <p id={bodyId} className="answer-body">
+        {shown || STORY.answerMiss}
+      </p>
+    </div>
+  )
+}
 
 export function FullReportSection({
   report,
@@ -42,20 +90,7 @@ export function FullReportSection({
                   ) : null}
                   <span>{item.question}</span>
                 </div>
-                <div className={item.answer ? 'answer' : 'answer miss'}>
-                  <div className="answer-meta">
-                    <span className="tag plain live">{GENERATED}</span>
-                  </div>
-                  {item.answer && item.mention ? (
-                    <MentionMark
-                      mention={item.mention}
-                      whoInstead={item.whoInstead}
-                      framing={item.framing}
-                      copy={copy}
-                    />
-                  ) : null}
-                  <p className="answer-body">{item.answer || STORY.answerMiss}</p>
-                </div>
+                <ReportAnswer item={item} copy={copy} bodyId={`${theme.id}-${index}`} />
               </li>
             ))}
           </ul>
