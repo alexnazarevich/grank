@@ -23,7 +23,7 @@ export function MentionMark({
   if (!mention) return null
   const names = whoInsteadNames(whoInstead, framing)
   const who = names.length > 0 && mention !== 'mentioned'
-  const label = mentionStatusLabel(mention, whoInstead, framing, copy)
+  const label = mentionStatusLabel(mention, copy)
   return (
     <div className="mention-skim">
       <span className="tag plain mention">{label}</span>

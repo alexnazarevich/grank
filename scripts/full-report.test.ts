@@ -834,14 +834,11 @@ describe('guest aha copy stays put', () => {
 describe('full-report question accordion', () => {
   it('uses the same mention labels as the land skim', () => {
     const copy = PRODUCT_DEFAULTS.copy
-    assert.equal(mentionStatusLabel('mentioned', ['Jira'], 'unbranded', copy), 'Mentioned')
-    assert.equal(mentionStatusLabel('mentioned', ['Jira'], 'branded', copy), 'Mentioned')
-    assert.equal(mentionStatusLabel('not_mentioned', [], 'unbranded', copy), 'Not mentioned')
-    assert.equal(mentionStatusLabel('unclear', [], 'branded', copy), 'Unclear')
-    assert.equal(mentionStatusLabel('not_mentioned', ['Jira', 'Asana'], 'unbranded', copy), 'Who instead')
-    assert.equal(mentionStatusLabel('unclear', [' Height '], 'unbranded', copy), 'Who instead')
-    assert.equal(mentionStatusLabel('not_mentioned', ['Jira'], 'branded', copy), 'Not mentioned')
+    assert.equal(mentionStatusLabel('mentioned', copy), 'Mentioned')
+    assert.equal(mentionStatusLabel('not_mentioned', copy), 'Not mentioned')
+    assert.equal(mentionStatusLabel('unclear', copy), 'Unclear')
     assert.deepEqual(whoInsteadNames([' Jira ', 'Asana', 'Height', 'Extra'], 'unbranded'), [' Jira ', 'Asana', 'Height'])
+    assert.deepEqual(whoInsteadNames(['Jira', 'Asana'], 'unbranded'), ['Jira', 'Asana'])
     assert.deepEqual(whoInsteadNames(['Jira'], 'branded'), [])
   })
 
@@ -852,7 +849,8 @@ describe('full-report question accordion', () => {
     assert.match(section, /aria-expanded=\{open\}/)
     assert.match(section, /className="report-q-toggle"/)
     assert.match(section, /aria-label=\{item\.question\}/)
-    assert.match(section, /mentionStatusLabel/)
+    assert.match(section, /mentionStatusLabel\(item\.mention, copy\)/)
+    assert.match(section, /whoInsteadNames\(item\.whoInstead, item\.framing\)/)
     assert.match(
       section,
       /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' \? ' mentioned' : ''\}`\}/,
@@ -866,7 +864,9 @@ describe('full-report question accordion', () => {
     assert.match(openBranch, /answer-body/)
     assert.equal(section.slice(0, openAt).includes('mention-names'), false)
     assert.equal(section.slice(0, openAt).includes('answer-body'), false)
-    assert.match(mark, /mentionStatusLabel/)
+    assert.match(mark, /mentionStatusLabel\(mention, copy\)/)
+    assert.match(mark, /whoInsteadNames\(whoInstead, framing\)/)
+    assert.match(mark, /mention-names/)
     assert.equal(mark.includes('answer-expand'), false)
     assert.equal(mark.includes('showFullAnswer'), false)
     assert.match(css, /\.report-q-head\s*\{[^}]*flex-wrap:\s*wrap/)
