@@ -368,7 +368,12 @@ export function fullReportPrompt(
       )
     }
     if (theme.id === 'problems') {
-      lines.push(`For "${theme.id}", ask category or job-to-be-done questions only. Do not name ${brand}.`)
+      lines.push(
+        `For "${theme.id}", ask recommendation-shaped questions only: what tools, platforms, or software for the job, or what teams use for the job. Take the job from the homepage excerpt. Do not name ${brand}, the product, or ${domain}. Do not ask abstract how-do-I-solve questions.`,
+      )
+      lines.push(
+        'On problems answers, you may name real products you already know; if unsure, say so plainly and leave whoInstead empty — never invent names, and do not force a company roster.',
+      )
     }
   }
   if (pins.length > 0) {
@@ -391,7 +396,8 @@ Return JSON only:
 Each answer is 1 or 2 conservative sentences from public knowledge. If unsure, say so. Do not invent praise. If you cannot answer, use an empty string.
 framing "branded" means the question names the brand. framing "unbranded" means it does not.
 The theme id "alternatives" is unbranded only: who else shows up in the category. Never put a branded question in alternatives. Never use the brand name, product name, or domain in that theme.
-The theme id "problems" is unbranded-first: category or job-to-be-done questions that do not name the brand.
+The theme id "problems" is unbranded-first: recommendation-shaped questions that do not name the brand, product, or domain. Ask what tools, platforms, or software for the job, or what teams use for the job, using the homepage excerpt for the job. Do not ask abstract how-do-I-solve questions.
+On problems answers, you may name real products you already know; if unsure, say so plainly and leave whoInstead empty — never invent names, and do not force a company roster.
 ${SHARPER_Q_RULES}
 ${MENTION_FACT_RULES}`
 
