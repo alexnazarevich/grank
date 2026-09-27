@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import type { Framing, Mention } from './mentionFacts.ts'
+import { mentionStatusLabel, whoInsteadNames } from './mentionLabel.ts'
 
 const HELP: Record<Mention, string> = {
   mentioned: 'Your brand shows up in this answer.',
@@ -14,24 +14,16 @@ export function MentionMark({
   whoInstead,
   framing,
   copy,
-  children,
 }: {
   mention?: Mention
   whoInstead: string[]
   framing: Framing
   copy: ProductCopy
-  children?: ReactNode
 }) {
   if (!mention) return null
-  const names = framing === 'unbranded' ? whoInstead.filter((name) => name.trim()).slice(0, 3) : []
+  const names = whoInsteadNames(whoInstead, framing)
   const who = names.length > 0 && mention !== 'mentioned'
-  const label = who
-    ? copy.mentionWhoInstead
-    : mention === 'mentioned'
-      ? copy.mentionYes
-      : mention === 'unclear'
-        ? copy.mentionUnclear
-        : copy.mentionNo
+  const label = mentionStatusLabel(mention, whoInstead, framing, copy)
   return (
     <div className="mention-skim">
       <span className="tag plain mention">{label}</span>
@@ -46,7 +38,6 @@ export function MentionMark({
       ) : (
         <p className="mention-help">{HELP[mention]}</p>
       )}
-      {children}
     </div>
   )
 }

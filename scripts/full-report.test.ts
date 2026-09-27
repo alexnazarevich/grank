@@ -13,7 +13,7 @@ import {
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { interpretFullReportResponse } from '../src/fullReportClient.ts'
-import { ANSWER_SKIM_CHARS, splitAnswerSkim } from '../src/answerSkim.ts'
+import { mentionStatusLabel, whoInsteadNames } from '../src/mentionLabel.ts'
 import { STORY } from '../src/story.ts'
 
 const KEY = 'sk-openai-full-report-secret'
@@ -770,34 +770,66 @@ describe('guest aha copy stays put', () => {
     assert.equal(app.includes('showFullAnswer'), false)
     assert.equal(app.includes('hideAnswer'), false)
     assert.equal(app.includes('answer-expand'), false)
-    assert.match(section, /STORY\.showFullAnswer/)
-    assert.match(section, /STORY\.hideAnswer/)
-    assert.match(section, /splitAnswerSkim/)
+    assert.equal(app.includes('report-q-toggle'), false)
+    assert.equal(app.includes('aria-expanded'), false)
+    assert.match(app, /<p className="answer-body">\{answer \|\| STORY\.answerMiss\}<\/p>/)
+    assert.equal(section.includes('showFullAnswer'), false)
+    assert.equal(section.includes('hideAnswer'), false)
+    assert.equal(section.includes('Show full answer'), false)
+    assert.equal(section.includes('Hide answer'), false)
+    assert.equal(section.includes('answer-expand'), false)
+    assert.equal(section.includes('splitAnswerSkim'), false)
+    assert.equal(section.includes('answerSkim'), false)
     assert.equal(/fetch\s*\(/.test(section), false)
+    assert.equal(section.includes('openai.com'), false)
+    assert.equal(section.includes('useEffect'), false)
   })
 })
 
-describe('full-report answer skim', () => {
-  it('keeps short answers whole and previews a prefix of a long one', () => {
-    const short = 'Linear is a fast issue tracker for software teams.'
-    assert.equal(short.length < ANSWER_SKIM_CHARS, true)
-    assert.deepEqual(splitAnswerSkim(short), { preview: short, long: false })
-    assert.deepEqual(splitAnswerSkim(`  ${short}  `), { preview: short, long: false })
-    assert.deepEqual(splitAnswerSkim('x'.repeat(ANSWER_SKIM_CHARS)), {
-      preview: 'x'.repeat(ANSWER_SKIM_CHARS),
-      long: false,
-    })
+describe('full-report question accordion', () => {
+  it('uses the same mention labels as the land skim', () => {
+    const copy = PRODUCT_DEFAULTS.copy
+    assert.equal(mentionStatusLabel('mentioned', ['Jira'], 'unbranded', copy), 'Mentioned')
+    assert.equal(mentionStatusLabel('mentioned', ['Jira'], 'branded', copy), 'Mentioned')
+    assert.equal(mentionStatusLabel('not_mentioned', [], 'unbranded', copy), 'Not mentioned')
+    assert.equal(mentionStatusLabel('unclear', [], 'branded', copy), 'Unclear')
+    assert.equal(mentionStatusLabel('not_mentioned', ['Jira', 'Asana'], 'unbranded', copy), 'Who instead')
+    assert.equal(mentionStatusLabel('unclear', [' Height '], 'unbranded', copy), 'Who instead')
+    assert.equal(mentionStatusLabel('not_mentioned', ['Jira'], 'branded', copy), 'Not mentioned')
+    assert.deepEqual(whoInsteadNames([' Jira ', 'Asana', 'Height', 'Extra'], 'unbranded'), [' Jira ', 'Asana', 'Height'])
+    assert.deepEqual(whoInsteadNames(['Jira'], 'branded'), [])
+  })
 
-    const sentence = 'Teams often compare a few issue trackers when they plan work.'
-    const long = `${sentence} ${'Buyers still ask for proof from larger incumbents. '.repeat(6)}`.trim()
-    assert.equal(long.length > ANSWER_SKIM_CHARS, true)
-    const skim = splitAnswerSkim(long)
-    assert.equal(skim.long, true)
-    assert.equal(skim.preview.endsWith('…'), true)
-    const prefix = skim.preview.slice(0, -1)
-    assert.equal(long.startsWith(prefix), true)
-    assert.equal(prefix.length <= ANSWER_SKIM_CHARS, true)
-    assert.equal(prefix.endsWith(' '), false)
-    assert.equal(splitAnswerSkim('y'.repeat(ANSWER_SKIM_CHARS + 1)).preview, `${'y'.repeat(ANSWER_SKIM_CHARS)}…`)
+  it('opens the answer from the question and keeps the chip trailing', () => {
+    const section = readFileSync(new URL('../src/FullReportSection.tsx', import.meta.url), 'utf8')
+    const mark = readFileSync(new URL('../src/MentionMark.tsx', import.meta.url), 'utf8')
+    const css = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+    assert.match(section, /aria-expanded=\{open\}/)
+    assert.match(section, /className="report-q-toggle"/)
+    assert.match(section, /aria-label=\{item\.question\}/)
+    assert.match(section, /mentionStatusLabel/)
+    assert.match(section, /className="tag plain mention report-mention"/)
+    assert.match(section, /item\.answer/)
+    assert.match(section, /STORY\.answerMiss/)
+    const openAt = section.indexOf('{open ?')
+    assert.equal(openAt > 0, true)
+    const openBranch = section.slice(openAt)
+    assert.match(openBranch, /mention-names/)
+    assert.match(openBranch, /answer-body/)
+    assert.equal(section.slice(0, openAt).includes('mention-names'), false)
+    assert.equal(section.slice(0, openAt).includes('answer-body'), false)
+    assert.match(mark, /mentionStatusLabel/)
+    assert.equal(mark.includes('answer-expand'), false)
+    assert.equal(mark.includes('showFullAnswer'), false)
+    assert.match(css, /\.report-q-head\s*\{[^}]*flex-wrap:\s*wrap/)
+    assert.match(css, /\.report-q-head\s*\{[^}]*align-items:\s*flex-start/)
+    assert.match(css, /\.report-q-toggle\s*\{[^}]*flex:\s*1\s+1\s+auto/)
+    assert.match(css, /\.report-q-toggle\s*\{[^}]*min-width:\s*0/)
+    assert.match(css, /\.report-mention\s*\{[^}]*flex:\s*none/)
+    assert.equal(/\.report-mention\s*\{[^}]*flex:\s*0\s+0/.test(css), false)
+    assert.equal(/\.report-mention\s*\{[^}]*flex-basis:\s*\d/.test(css), false)
+    assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-q-toggle\s*\{[^}]*flex:\s*none/)
+    assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-q-toggle\s*\{[^}]*width:\s*100%/)
+    assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-mention\s*\{[^}]*flex:\s*none/)
   })
 })

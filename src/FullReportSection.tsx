@@ -1,55 +1,74 @@
 import { useState } from 'react'
-import { splitAnswerSkim } from './answerSkim.ts'
 import type { ProductCopy } from './config/productConfig.ts'
 import type { FullReport, FullReportQuestion } from './fullReport.ts'
-import { MentionMark } from './MentionMark.tsx'
+import { mentionStatusLabel, whoInsteadNames } from './mentionLabel.ts'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
 
-/** Expand/collapse text already on the row. No extra model call. */
-function ReportAnswer({
+/** Question toggles the answer already on the row. No extra model call. */
+function ReportQuestion({
   item,
   copy,
-  bodyId,
+  panelId,
+  chipId,
+  showFraming,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
-  bodyId: string
+  panelId: string
+  chipId: string
+  showFraming: boolean
 }) {
   const [open, setOpen] = useState(false)
   const text = item.answer.trim()
-  const skim = text && item.mention ? splitAnswerSkim(text) : { preview: text, long: false }
-  const shown = skim.long && !open ? skim.preview : text
+  const label = item.mention ? mentionStatusLabel(item.mention, item.whoInstead, item.framing, copy) : ''
+  const names =
+    open && item.mention && item.mention !== 'mentioned' ? whoInsteadNames(item.whoInstead, item.framing) : []
   return (
-    <div className={text ? 'answer' : 'answer miss'}>
-      <div className="answer-meta">
-        <span className="tag plain live">{GENERATED}</span>
-      </div>
-      {text && item.mention ? (
-        <MentionMark
-          mention={item.mention}
-          whoInstead={item.whoInstead}
-          framing={item.framing}
-          copy={copy}
+    <li className="q with-answer report-q">
+      <div className="report-q-head">
+        <button
+          type="button"
+          className="report-q-toggle"
+          aria-expanded={open}
+          aria-controls={panelId}
+          aria-label={item.question}
+          aria-describedby={label ? chipId : undefined}
+          onClick={() => setOpen((value) => !value)}
         >
-          {skim.long ? (
-            <button
-              type="button"
-              className="text-btn answer-expand"
-              aria-expanded={open}
-              aria-controls={bodyId}
-              onClick={() => setOpen((value) => !value)}
-            >
-              {open ? STORY.hideAnswer : STORY.showFullAnswer}
-            </button>
+          <span className="tag plain live">{GENERATED}</span>
+          {showFraming ? (
+            <span className="tag plain q-badge">{item.framing === 'branded' ? STORY.digBadge : STORY.landBadge}</span>
           ) : null}
-        </MentionMark>
+          <span className="report-q-text">{item.question}</span>
+        </button>
+        {label ? (
+          <span id={chipId} className="tag plain mention report-mention">
+            {label}
+          </span>
+        ) : null}
+      </div>
+      {open ? (
+        <div id={panelId} className="report-q-panel">
+          {names.length > 0 ? (
+            <ul className="mention-names report-who">
+              {names.map((name) => (
+                <li key={name}>
+                  <strong>{name}</strong>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className={text ? 'answer' : 'answer miss'}>
+            <div className="answer-meta">
+              <span className="tag plain live">{GENERATED}</span>
+            </div>
+            <p className="answer-body">{text || STORY.answerMiss}</p>
+          </div>
+        </div>
       ) : null}
-      <p id={bodyId} className="answer-body">
-        {shown || STORY.answerMiss}
-      </p>
-    </div>
+    </li>
   )
 }
 
@@ -80,18 +99,14 @@ export function FullReportSection({
           </p>
           <ul className="answers">
             {theme.questions.map((item, index) => (
-              <li key={`${theme.id}-${index}`} className="q with-answer">
-                <div className="q-line">
-                  <span className="tag plain live">{GENERATED}</span>
-                  {report.includesBranded ? (
-                    <span className="tag plain q-badge">
-                      {item.framing === 'branded' ? STORY.digBadge : STORY.landBadge}
-                    </span>
-                  ) : null}
-                  <span>{item.question}</span>
-                </div>
-                <ReportAnswer item={item} copy={copy} bodyId={`${theme.id}-${index}`} />
-              </li>
+              <ReportQuestion
+                key={`${theme.id}-${index}`}
+                item={item}
+                copy={copy}
+                panelId={`report-a-${theme.id}-${index}`}
+                chipId={`report-m-${theme.id}-${index}`}
+                showFraming={report.includesBranded}
+              />
             ))}
           </ul>
         </section>
