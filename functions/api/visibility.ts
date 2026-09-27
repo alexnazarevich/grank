@@ -8,8 +8,17 @@
  */
 
 import { productConfigFromEnv } from '../../src/config/productConfig.ts'
+import {
+  DIG_MENTION_RULES,
+  LAND_MENTION_RULES,
+  SHARPER_Q_RULES,
+  factsFromVisibility,
+  parseWhoInstead,
+} from '../../src/mentionFacts.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
 import { gateModelCall } from './quota.ts'
+
+export { parseWhoInstead }
 
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -22,7 +31,7 @@ Do not invent citations, rankings, traffic, or claims that you queried other eng
 Do not return a visibility percentage or a score that blends question types.`
 
 /** Category / JTBD questions. The brand is known, but it must not appear in the question text. */
-const UNBRANDED_SYSTEM_PROMPT = `You estimate whether a brand is likely cited when people ask an AI assistant category or job-to-be-done questions. Those questions must not name the brand.
+export const UNBRANDED_SYSTEM_PROMPT = `You estimate whether a brand is likely cited when people ask an AI assistant category or job-to-be-done questions. Those questions must not name the brand.
 ${SHARED_RULES}
 Return JSON only:
 {
@@ -34,10 +43,12 @@ Return JSON only:
 Questions are unbranded: category or job-to-be-done only. Do not put the brand name, product name, or domain in the question text.
 "answered" means whether THIS brand is likely cited when those unbranded questions are asked of an AI assistant.
 "why" must be one honest sentence and must not overclaim.
-"whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those unbranded questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.`
+"whoInstead" is required. Name 1 to 3 real alternate brands or products that an AI assistant might cite instead of this brand when answering those unbranded questions. Specific product or company names only — not this brand, not categories, not listicles, not placeholders. If you cannot name a real alternative, return an empty array. Never invent competitors.
+${SHARPER_Q_RULES}
+${LAND_MENTION_RULES}`
 
 /** Questions that name the brand, plus a short reply under each. No competitor list. */
-const BRANDED_SYSTEM_PROMPT = `You estimate how an AI assistant describes a brand when people ask questions that name it.
+export const BRANDED_SYSTEM_PROMPT = `You estimate how an AI assistant describes a brand when people ask questions that name it.
 ${SHARED_RULES}
 Return JSON only:
 {
@@ -50,7 +61,9 @@ Questions are branded: every question must include the brand name. Ask about ton
 "answers" must align 1:1 with "questions". Each answer is a plausible assistant reply about this brand in 2 to 4 sentences, conservative and based on public knowledge. If you are unsure, say so plainly in that answer. Do not invent praise, quotes, citations, or URLs. Do not write "ChatGPT said", "Perplexity said", or "Gemini said", and do not claim you scraped a live engine. If you cannot answer a question, use an empty string for that item.
 "answered" means whether an AI assistant is likely to describe THIS brand when those branded questions are asked.
 "why" must be one honest sentence and must not overclaim.
-Do not name competitors or alternate brands. Do not return a competitor list.`
+Do not name competitors or alternate brands. Do not return a competitor list.
+${SHARPER_Q_RULES}
+${DIG_MENTION_RULES}`
 
 export type VisibilityMode = 'unbranded' | 'branded'
 
@@ -75,6 +88,8 @@ export type ParsedVisibility = {
   answered: Answered
   why: string
   whoInstead: string[]
+  /** Parallel to questions when the model sent them. Missing slots stay unset. */
+  mentions: unknown[]
 }
 
 const ANSWER_MAX = 900
@@ -117,34 +132,6 @@ export function readQuestionAnswers(
   return { questions, answers }
 }
 
-const WHO_INSTEAD_MAX = 3
-const WHO_INSTEAD_NAME_MAX = 80
-
-/** Trim, drop blanks and non-names, skip this brand, cap at 3. Missing → []. */
-export function parseWhoInstead(value: unknown, domain?: string): string[] {
-  if (!Array.isArray(value)) return []
-  const blocked = new Set<string>()
-  if (domain) {
-    const host = domain.toLowerCase()
-    const stem = host.split('.')[0] || host
-    blocked.add(stem.replace(/[^a-z0-9]+/g, ''))
-    blocked.add(host.replace(/[^a-z0-9]+/g, ''))
-  }
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const item of value) {
-    if (typeof item !== 'string') continue
-    const name = item.replace(/\s+/g, ' ').trim()
-    if (!name || name.length > WHO_INSTEAD_NAME_MAX) continue
-    const key = name.toLowerCase()
-    const compact = key.replace(/[^a-z0-9]+/g, '')
-    if (!compact || blocked.has(compact) || seen.has(key)) continue
-    seen.add(key)
-    out.push(name)
-    if (out.length >= WHO_INSTEAD_MAX) break
-  }
-  return out
-}
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -192,6 +179,7 @@ export function parseVisibilityContent(raw: string, domain?: string): ParsedVisi
     answered,
     why,
     whoInstead: parseWhoInstead(rec.whoInstead, domain),
+    mentions: Array.isArray(rec.mentions) ? rec.mentions : [],
   }
 }
 
@@ -325,6 +313,19 @@ async function completeVisibility(
     return json(502, { error: 'OpenAI request failed: model output was not usable JSON' })
   }
 
+  const facts = factsFromVisibility({
+    domain,
+    mode,
+    questions: parsed.questions,
+    answers: parsed.answers,
+    answered: parsed.answered,
+    whoInstead: parsed.whoInstead,
+    mentions: parsed.mentions,
+  }).map((fact) => ({
+    ...fact,
+    question: scrubSecret(fact.question, apiKey),
+    whoInstead: fact.whoInstead.map((name) => scrubSecret(name, apiKey)),
+  }))
   const body: Record<string, unknown> = {
     ok: true,
     domain,
@@ -333,6 +334,7 @@ async function completeVisibility(
     questions: parsed.questions,
     answered: parsed.answered,
     why: parsed.why,
+    facts,
   }
   // Who-instead stays on the unbranded beat. Answers stay on the branded beat.
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead

@@ -53,6 +53,21 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.fullReportEmptyThemes, 'No themes yet — try again.')
     assert.equal(config.copy.fullReportLimitHit, 'You’ve used your free full report.')
     assert.equal(config.copy.themeSectionEyebrow, 'Theme')
+    assert.equal(config.pinnedQuestionMax, 5)
+    assert.equal(config.copy.mentionYes, 'Mentioned')
+    assert.equal(config.copy.mentionNo, 'Not mentioned')
+    assert.equal(config.copy.mentionUnclear, 'Unclear')
+    assert.equal(config.copy.mentionWhoInstead, 'Who instead')
+    assert.equal(config.copy.pinQuestionCta, 'Pin')
+    assert.equal(config.copy.unpinQuestionCta, 'Unpin')
+    assert.equal(config.copy.editQuestionCta, 'Edit')
+    assert.equal(config.copy.saveEditedQuestionCta, 'Save question')
+    assert.equal(config.copy.pinnedQuestionsTitle, 'Pinned for this run')
+    assert.equal(
+      config.copy.editQuestionsHint,
+      'Pin or tweak a few questions before you generate. We’ll use these for this run only — not a saved prompt library.',
+    )
+    assert.equal(config.copy.regenerateWithPinsCta, 'Run with these questions')
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }
@@ -98,6 +113,10 @@ describe('productConfigFromEnv', () => {
     assert.equal(clamped.fullReportQuestionTarget, 80)
     assert.equal(clamped.fullReportThemeMin, 1)
     assert.equal(clamped.fullReportThemeMax, 6)
+    const pins = productConfigFromEnv({ PINNED_QUESTION_MAX: '3' })
+    assert.equal(pins.pinnedQuestionMax, 3)
+    const pinClamp = productConfigFromEnv({ PINNED_QUESTION_MAX: '40' })
+    assert.equal(pinClamp.pinnedQuestionMax, 8)
   })
 
   it('ignores invalid JSON and invalid enums', () => {

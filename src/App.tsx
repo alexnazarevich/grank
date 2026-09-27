@@ -28,7 +28,10 @@ import {
 } from './authClient'
 import { FullReportSection } from './FullReportSection'
 import { fetchFullReport, type FullReportFail, type FullReportOk } from './fullReportClient'
-import { fullReportFromStored, type FullReport } from './fullReport'
+import { fullReportFromStored, type FullReport, type RunPin } from './fullReport'
+import { MentionMark } from './MentionMark'
+import type { AnswerFact } from './mentionFacts'
+import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
 import { startCheckout } from './billingClient'
 import { listChecks, saveCheck } from './checksClient'
 import {
@@ -96,6 +99,12 @@ function withOpenAI(text: string) {
   )
 }
 
+function factFor(facts: AnswerFact[] | undefined, index: number, question: string): AnswerFact | undefined {
+  const fact = facts?.[index]
+  if (fact?.question === question) return fact
+  return facts?.find((item) => item.question === question)
+}
+
 function verdictWord(answered: Answered): string {
   if (answered === 'yes') return 'Yes'
   if (answered === 'partial') return 'Partial'
@@ -115,6 +124,7 @@ function unbrandedBeat(domain: string, visibility: VisibilityOk | VisibilityFail
       model: visibility.model,
       whoInstead: visibility.whoInstead,
       whoInsteadLive: true,
+      facts: visibility.facts,
     }
   }
   return {
@@ -128,6 +138,7 @@ function unbrandedBeat(domain: string, visibility: VisibilityOk | VisibilityFail
     model: null,
     whoInstead: [],
     whoInsteadLive: false,
+    facts: [],
   }
 }
 
@@ -144,6 +155,7 @@ function brandedBeat(visibility: VisibilityOk | VisibilityFail): ModeBeat {
       model: visibility.model,
       whoInstead: [],
       whoInsteadLive: false,
+      facts: visibility.facts,
     }
   }
   return {
@@ -157,6 +169,7 @@ function brandedBeat(visibility: VisibilityOk | VisibilityFail): ModeBeat {
     model: null,
     whoInstead: [],
     whoInsteadLive: false,
+    facts: [],
   }
 }
 
@@ -172,6 +185,7 @@ function screenFromDraft(draft: CheckDraft): Screen {
     model: source.model,
     whoInstead: mode === 'unbranded' ? source.whoInstead : [],
     whoInsteadLive: mode === 'unbranded' ? source.whoInsteadLive : false,
+    facts: source.facts,
   })
   return {
     domain: draft.domain,
@@ -283,6 +297,10 @@ export default function App() {
   const [reportMessage, setReportMessage] = useState('')
   const [fullReport, setFullReport] = useState<FullReport | null>(null)
   const [emailPurpose, setEmailPurpose] = useState<EmailPurpose>('save')
+  const [pins, setPins] = useState<PinItem[]>([])
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [ranPins, setRanPins] = useState<string | null>(null)
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -392,7 +410,18 @@ export default function App() {
         }
         setPhase('result')
         setReportPhase('loading')
-        const result = await fetchFullReport(booted.pendingReport.domain, booted.session.accessToken)
+        const pendingPins = booted.pendingReport.pins ?? []
+        if (pendingPins.length > 0) {
+          setPins(pendingPins.map((pin, index) => ({ ...pin, key: `pending:${index}` })))
+        }
+        const result = await fetchFullReport(
+          booted.pendingReport.domain,
+          booted.session.accessToken,
+          pendingPins,
+        )
+        if (result.ok) {
+          setRanPins(pendingPins.map((pin) => `${pin.framing}:${pin.question}`).join('\n'))
+        }
         if (!alive) return
         applyReportResult(result)
         return
@@ -440,6 +469,9 @@ export default function App() {
     setSavedId(check.id)
     setUrl(check.domain)
     setPageText(null)
+    setPins([])
+    setEditingKey(null)
+    setRanPins(null)
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
@@ -484,6 +516,10 @@ export default function App() {
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
+    setPins([])
+    setEditingKey(null)
+    setEditText('')
+    setRanPins(null)
     setActiveMode('unbranded')
     digState.current = 'idle'
     setDigStatus('idle')
@@ -608,6 +644,10 @@ export default function App() {
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
+    setPins([])
+    setEditingKey(null)
+    setEditText('')
+    setRanPins(null)
     setEmailPurpose('save')
   }
 
@@ -705,7 +745,11 @@ export default function App() {
         setReportMessage('Add a website to check.')
         return
       }
-      stashPendingFullReport({ domain, draft })
+      stashPendingFullReport({
+        domain,
+        draft,
+        pins: pins.map((pin) => ({ question: pin.question, framing: pin.framing })),
+      })
       const sentReport = await sendMagicLink(email.trim())
       if (!sentReport.ok) {
         setReportPhase('error')
@@ -783,6 +827,9 @@ export default function App() {
       setSavedId(check.id)
       setUrl(check.domain)
       setPageText(null)
+      setPins([])
+      setEditingKey(null)
+      setRanPins(null)
       setSaveState('saved')
       setSaveMessage('Saved.')
       setPhase('result')
@@ -791,15 +838,27 @@ export default function App() {
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
+    setPins([])
+    setEditingKey(null)
+    setRanPins(null)
     applySaved(check)
     setSaveState('saved')
     setSaveMessage('Saved.')
     setPhase('result')
   }
 
+  function pinSignature(list: PinItem[] = pins): string {
+    return list.map((pin) => `${pin.framing}:${pin.question}`).join('\n')
+  }
+
+  function reportPins(): RunPin[] {
+    return pins.map((pin) => ({ question: pin.question, framing: pin.framing }))
+  }
+
   async function onShowFullReport() {
     if (!screen || reportPhase === 'loading' || busy) return
-    if (reportPhase === 'ready' && fullReport?.domain === screen.domain) return
+    const signature = pinSignature()
+    if (reportPhase === 'ready' && fullReport?.domain === screen.domain && signature === (ranPins ?? '')) return
     if (!supabasePublicConfig()) {
       setReportPhase('error')
       setReportMessage(AUTH_NOT_CONFIGURED)
@@ -815,7 +874,8 @@ export default function App() {
     }
     setReportPhase('loading')
     setReportMessage('')
-    const result = await fetchFullReport(screen.domain, session.accessToken)
+    const result = await fetchFullReport(screen.domain, session.accessToken, reportPins())
+    if (result.ok) setRanPins(signature)
     applyReportResult(result)
   }
 
@@ -846,6 +906,38 @@ export default function App() {
   const reportOnly = Boolean(
     fullReport && screen && screen.unbranded.questions.length === 0 && !screen.branded?.questions.length,
   )
+  const pinRunMatches = pinSignature() === (ranPins ?? '')
+
+  function onPin(item: PinItem) {
+    setPins((prev) => {
+      if (prev.some((pin) => pin.key === item.key) || prev.length >= config.pinnedQuestionMax) return prev
+      return [...prev, item]
+    })
+  }
+
+  function onUnpin(key: string) {
+    setPins((prev) => prev.filter((pin) => pin.key !== key))
+    if (editingKey === key) {
+      setEditingKey(null)
+      setEditText('')
+    }
+  }
+
+  function onEditPin(key: string, question: string) {
+    const current = pins.find((pin) => pin.key === key)
+    setEditingKey(key)
+    setEditText(current?.question || question)
+  }
+
+  function onSavePin(item: PinItem) {
+    setPins((prev) => {
+      const without = prev.filter((pin) => pin.key !== item.key)
+      if (!prev.some((pin) => pin.key === item.key) && without.length >= config.pinnedQuestionMax) return prev
+      return [...without, item]
+    })
+    setEditingKey(null)
+    setEditText('')
+  }
 
   return (
     <div className="app">
@@ -1103,14 +1195,31 @@ export default function App() {
                 <ul className={land ? undefined : 'answers'}>
                   {beat.questions.map((q, i) => {
                     const answer = land ? '' : (beat.answers[i] || '').trim()
+                    const fact = factFor(beat.facts, i, q)
+                    const rowKey = `${beat.mode}:${i}`
+                    const pinned = pins.find((pin) => pin.key === rowKey)
+                    const shown = pinned?.question || q
                     return (
-                      <li key={`${beat.mode}-${i}`} className={land ? 'q' : 'q with-answer'}>
+                      <li key={rowKey} className={land ? 'q' : 'q with-answer'}>
                         <div className="q-line">
                           <span className="tag plain q-badge">
                             {land ? STORY.landBadge : STORY.digBadge}
                           </span>
-                          <span>{q}</span>
+                          <span>{shown}</span>
                         </div>
+                        {land && beat.questionsGenerated && fact?.mention ? (
+                          <>
+                            <div className="answer-meta">
+                              <span className="tag plain live">{STORY.answerLabel}</span>
+                            </div>
+                            <MentionMark
+                              mention={fact.mention}
+                              whoInstead={fact.whoInstead}
+                              framing="unbranded"
+                              copy={config.copy}
+                            />
+                          </>
+                        ) : null}
                         {land ? null : (
                           <div className={answer ? 'answer' : 'answer miss'}>
                             {answer ? (
@@ -1118,9 +1227,33 @@ export default function App() {
                                 <span className="tag plain live">{STORY.answerLabel}</span>
                               </div>
                             ) : null}
+                            {answer && fact?.mention ? (
+                              <MentionMark
+                                mention={fact.mention}
+                                whoInstead={fact.whoInstead}
+                                framing="branded"
+                                copy={config.copy}
+                              />
+                            ) : null}
                             <p className="answer-body">{answer || STORY.answerMiss}</p>
                           </div>
                         )}
+                        <QuestionPinControls
+                          rowKey={rowKey}
+                          question={shown}
+                          framing={beat.mode}
+                          pins={pins}
+                          max={config.pinnedQuestionMax}
+                          editing={editingKey === rowKey}
+                          editText={editText}
+                          copy={config.copy}
+                          disabled={busy}
+                          onPin={onPin}
+                          onUnpin={onUnpin}
+                          onEdit={onEditPin}
+                          onEditText={setEditText}
+                          onSave={onSavePin}
+                        />
                       </li>
                     )
                   })}
@@ -1231,13 +1364,19 @@ export default function App() {
               />
             ) : null}
             <div className="full-report-door">
+              <p className="why">{config.copy.editQuestionsHint}</p>
+              <PinnedRun pins={pins} copy={config.copy} disabled={busy} onUnpin={onUnpin} />
               <button
                 type="button"
                 className="ask"
                 onClick={() => void onShowFullReport()}
-                disabled={busy || reportPhase === 'loading' || reportPhase === 'ready' || reportPhase === 'limit'}
+                disabled={busy || reportPhase === 'loading' || reportPhase === 'limit' || (reportPhase === 'ready' && pinRunMatches)}
               >
-                {reportPhase === 'loading' ? config.copy.fullReportLoading : config.copy.showFullReportCta}
+                {reportPhase === 'loading'
+                  ? config.copy.fullReportLoading
+                  : pins.length > 0
+                    ? config.copy.regenerateWithPinsCta
+                    : config.copy.showFullReportCta}
               </button>
               {reportPhase === 'loading' ? (
                 <p className="status" role="status">

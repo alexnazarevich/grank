@@ -1,5 +1,5 @@
 import { readAnonKey } from './authClient.ts'
-import { fullReportFromStored, type FullReport } from './fullReport.ts'
+import { fullReportFromStored, type FullReport, type RunPin } from './fullReport.ts'
 
 export type FullReportFail = {
   ok: false
@@ -73,7 +73,11 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
   return { ok: true, report, checkId: check }
 }
 
-export async function fetchFullReport(domain: string, accessToken: string): Promise<FullReportOk | FullReportFail> {
+export async function fetchFullReport(
+  domain: string,
+  accessToken: string,
+  pins: RunPin[] = [],
+): Promise<FullReportOk | FullReportFail> {
   const headers = new Headers({
     Accept: 'application/json',
     'content-type': 'application/json',
@@ -86,7 +90,7 @@ export async function fetchFullReport(domain: string, accessToken: string): Prom
     res = await fetch('/api/full-report', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ domain }),
+      body: JSON.stringify(pins.length > 0 ? { domain, pins } : { domain }),
     })
   } catch {
     return { ok: false, error: 'Could not reach the full report. Try again.' }

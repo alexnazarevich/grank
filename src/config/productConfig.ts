@@ -23,6 +23,17 @@ export type ProductCopy = {
   fullReportEmptyThemes: string
   fullReportLimitHit: string
   themeSectionEyebrow: string
+  mentionYes: string
+  mentionNo: string
+  mentionUnclear: string
+  mentionWhoInstead: string
+  pinQuestionCta: string
+  unpinQuestionCta: string
+  editQuestionCta: string
+  saveEditedQuestionCta: string
+  pinnedQuestionsTitle: string
+  editQuestionsHint: string
+  regenerateWithPinsCta: string
 }
 
 export type ProductConfig = {
@@ -51,6 +62,8 @@ export type ProductConfig = {
   freeFullReports: number
   /** When false, branded dig questions are left out of the full set. */
   fullReportIncludesBranded: boolean
+  /** How many questions can be pinned or edited for one full-report run. */
+  pinnedQuestionMax: number
   copy: ProductCopy
 }
 
@@ -76,6 +89,7 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
   fullReportThemeMax: 6,
   freeFullReports: 1,
   fullReportIncludesBranded: true,
+  pinnedQuestionMax: 5,
   copy: {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
@@ -92,6 +106,18 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     fullReportEmptyThemes: 'No themes yet — try again.',
     fullReportLimitHit: 'You’ve used your free full report.',
     themeSectionEyebrow: 'Theme',
+    mentionYes: 'Mentioned',
+    mentionNo: 'Not mentioned',
+    mentionUnclear: 'Unclear',
+    mentionWhoInstead: 'Who instead',
+    pinQuestionCta: 'Pin',
+    unpinQuestionCta: 'Unpin',
+    editQuestionCta: 'Edit',
+    saveEditedQuestionCta: 'Save question',
+    pinnedQuestionsTitle: 'Pinned for this run',
+    editQuestionsHint:
+      'Pin or tweak a few questions before you generate. We’ll use these for this run only — not a saved prompt library.',
+    regenerateWithPinsCta: 'Run with these questions',
   },
 }
 
@@ -118,6 +144,7 @@ export const PRODUCT_ENV_ALIASES = {
   fullReportThemeMax: 'FULL_REPORT_THEME_MAX',
   freeFullReports: 'FREE_FULL_REPORTS',
   fullReportIncludesBranded: 'FULL_REPORT_INCLUDES_BRANDED',
+  pinnedQuestionMax: 'PINNED_QUESTION_MAX',
 } as const
 
 const COPY_KEYS: (keyof ProductCopy)[] = [
@@ -135,6 +162,17 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'fullReportEmptyThemes',
   'fullReportLimitHit',
   'themeSectionEyebrow',
+  'mentionYes',
+  'mentionNo',
+  'mentionUnclear',
+  'mentionWhoInstead',
+  'pinQuestionCta',
+  'unpinQuestionCta',
+  'editQuestionCta',
+  'saveEditedQuestionCta',
+  'pinnedQuestionsTitle',
+  'editQuestionsHint',
+  'regenerateWithPinsCta',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -288,6 +326,12 @@ export function mergeProductConfig(base: ProductConfig, patch: unknown): Product
     fullReportIncludesBranded: parseBool(
       field(patch, 'fullReportIncludesBranded', 'FULL_REPORT_INCLUDES_BRANDED'),
       base.fullReportIncludesBranded,
+    ),
+    pinnedQuestionMax: parseIntRange(
+      field(patch, 'pinnedQuestionMax', 'PINNED_QUESTION_MAX'),
+      base.pinnedQuestionMax,
+      1,
+      8,
     ),
     copy: parseCopy(patch.copy, base.copy),
   }

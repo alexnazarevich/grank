@@ -137,6 +137,52 @@ describe('shapeStoredCheck', () => {
     assert.equal('whoInstead' in (shaped.result.branded || {}), false)
     assert.equal(shaped.result.labels.mode, 'Branded')
   })
+
+  it('persists per-question mention facts with stable theme ids', () => {
+    const shaped = shapeStoredCheck(
+      {
+        ...DRAFT,
+        unbranded: {
+          questions: DRAFT.questions,
+          questionsGenerated: true,
+          answered: 'no',
+          answeredWhy: DRAFT.answeredWhy,
+          answeredLive: true,
+          model: 'gpt-4o-mini',
+          whoInstead: ['Jira', 'Asana'],
+          whoInsteadLive: true,
+          facts: [
+            {
+              question: 'What should a team use to track issues?',
+              framing: 'unbranded',
+              id: 'problems',
+              mention: 'not_mentioned',
+              whoInstead: ['Linear', 'Jira', 'Asana', 'Height'],
+            },
+            {
+              question: 'Who else shows up for issue tracking?',
+              framing: 'unbranded',
+              id: 'alternatives',
+              mention: 'not_mentioned',
+              whoInstead: ['Jira'],
+            },
+          ],
+        },
+      },
+      PRODUCT_DEFAULTS,
+      SECRET,
+    )
+    assert.equal(shaped.ok, true)
+    if (!shaped.ok) return
+    assert.equal(shaped.result.facts?.length, 2)
+    assert.equal(shaped.result.facts?.[0]?.id, 'problems')
+    assert.equal(shaped.result.facts?.[0]?.mention, 'not_mentioned')
+    assert.equal(shaped.result.facts?.[0]?.framing, 'unbranded')
+    assert.deepEqual(shaped.result.facts?.[0]?.whoInstead, ['Jira', 'Asana', 'Height'])
+    assert.equal(shaped.result.facts?.[1]?.id, 'alternatives')
+    assert.deepEqual(shaped.result.unbranded?.facts, shaped.result.facts)
+    assert.equal(JSON.stringify(shaped.result).includes('%'), false)
+  })
 })
 
 describe('history trim', () => {

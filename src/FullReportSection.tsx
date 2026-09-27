@@ -1,5 +1,6 @@
 import type { ProductCopy } from './config/productConfig.ts'
 import type { FullReport } from './fullReport.ts'
+import { MentionMark } from './MentionMark.tsx'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
@@ -45,6 +46,14 @@ export function FullReportSection({
                   <div className="answer-meta">
                     <span className="tag plain live">{GENERATED}</span>
                   </div>
+                  {item.answer && item.mention ? (
+                    <MentionMark
+                      mention={item.mention}
+                      whoInstead={item.whoInstead}
+                      framing={item.framing}
+                      copy={copy}
+                    />
+                  ) : null}
                   <p className="answer-body">{item.answer || STORY.answerMiss}</p>
                 </div>
               </li>

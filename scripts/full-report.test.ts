@@ -4,11 +4,14 @@ import { describe, it } from 'node:test'
 import { onRequest } from '../functions/api/full-report.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
+  FULL_REPORT_SYSTEM_PROMPT,
+  applyRunPins,
   mentionsBrand,
   selectThemePlan,
   shapeFullReport,
   type PlannedTheme,
 } from '../src/fullReport.ts'
+import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { interpretFullReportResponse } from '../src/fullReportClient.ts'
 import { STORY } from '../src/story.ts'
 
@@ -88,13 +91,131 @@ function env(extra: Record<string, string> = {}) {
   }
 }
 
-function authedRequest() {
+function authedRequest(extra: Record<string, unknown> = {}) {
   return new Request('https://grank.pages.dev/api/full-report', {
     method: 'POST',
     headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
-    body: JSON.stringify({ domain: 'linear.app' }),
+    body: JSON.stringify({ domain: 'linear.app', ...extra }),
   })
 }
+
+describe('sharper questions and mention facts', () => {
+  it('appends sharper rules and mention fields to the full-report system prompt', () => {
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes(SHARPER_Q_RULES), true)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes(MENTION_FACT_RULES), true)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('not a multi-engine scrape'), true)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('What is {brand}?'), true)
+  })
+
+  it('stores mention and whoInstead, and drops both on a failed answer', () => {
+    const plan = selectThemePlan({
+      questionTarget: 6,
+      themeMin: 3,
+      themeMax: 3,
+      includesBranded: true,
+    })
+    const themes = shapeFullReport(
+      {
+        themes: [
+          {
+            id: 'problems',
+            questions: [
+              {
+                question: 'What should a team use to track issues?',
+                answer: 'Jira and Asana show up for that job.',
+                whoInstead: ['Linear', 'Jira', 'Asana', 'Height', 'Nope'],
+                mention: 'mentioned',
+              },
+              {
+                question: 'How do teams plan a week?',
+                answer: '',
+                whoInstead: ['Jira'],
+                mention: 'not_mentioned',
+              },
+            ],
+          },
+          {
+            id: 'described',
+            questions: [
+              {
+                question: 'How do people describe Linear?',
+                answer: 'Linear is a fast issue tracker.',
+                whoInstead: ['Jira'],
+                mention: 'not_mentioned',
+              },
+            ],
+          },
+          {
+            id: 'trust',
+            questions: [
+              {
+                question: 'Is Linear trustworthy for a team?',
+                answer: 'It might be trusted, but that is unclear.',
+                mention: 'mentioned',
+              },
+            ],
+          },
+        ],
+      },
+      { domain: 'linear.app', plan, includesBranded: true, themeMin: 3, questionTarget: 6 },
+    )
+    assert.ok(themes)
+    if (!themes) return
+    const problems = themes.find((theme) => theme.id === 'problems')
+    const cited = problems?.questions.find((item) => item.question.includes('track issues'))
+    const failed = problems?.questions.find((item) => item.question.includes('plan a week'))
+    assert.equal(cited?.mention, 'unclear')
+    assert.deepEqual(cited?.whoInstead, ['Jira', 'Asana', 'Height'])
+    assert.equal(cited?.framing, 'unbranded')
+    assert.equal(failed?.mention, undefined)
+    assert.deepEqual(failed?.whoInstead, [])
+    const described = themes.find((theme) => theme.id === 'described')
+    assert.equal(described?.questions[0]?.mention, 'mentioned')
+    assert.deepEqual(described?.questions[0]?.whoInstead, [])
+    const trust = themes.find((theme) => theme.id === 'trust')
+    assert.equal(trust?.questions[0]?.mention, 'unclear')
+    assert.equal(mentionFromAnswer('', 'linear.app', 'mentioned'), undefined)
+    assert.equal(JSON.stringify(themes).includes('%'), false)
+  })
+
+  it('places this-run pins without putting a branded question in alternatives', () => {
+    const plan = selectThemePlan({
+      questionTarget: 4,
+      themeMin: 3,
+      themeMax: 3,
+      includesBranded: true,
+    })
+    const themes = shapeFullReport(
+      {
+        themes: [
+          { id: 'problems', questions: [{ question: 'What should a team use to track issues?', answer: 'A tracker.' }] },
+          { id: 'described', questions: [{ question: 'How do people describe Linear?', answer: 'Linear is fast.' }] },
+          { id: 'trust', questions: [{ question: 'Is Linear trustworthy for a team?', answer: 'Public teams cite Linear.' }] },
+        ],
+      },
+      { domain: 'linear.app', plan, includesBranded: true, themeMin: 3, questionTarget: 4 },
+    )
+    assert.ok(themes)
+    if (!themes) return
+    const pinned = applyRunPins(
+      themes,
+      [
+        { question: 'Who else should a team use to track issues?', framing: 'unbranded' },
+        { question: 'How do buyers describe Linear on speed?', framing: 'unbranded' },
+      ],
+      { domain: 'linear.app', includesBranded: true },
+    )
+    const alternatives = pinned.find((theme) => theme.id === 'alternatives')
+    const described = pinned.find((theme) => theme.id === 'described')
+    assert.equal(alternatives?.questions.some((item) => item.question.includes('Who else')), true)
+    assert.equal(alternatives?.questions.every((item) => item.framing === 'unbranded'), true)
+    assert.equal(described?.questions.some((item) => item.question.includes('buyers describe Linear')), true)
+    const injected = described?.questions.find((item) => item.question.includes('buyers describe Linear'))
+    assert.equal(injected?.answer, '')
+    assert.equal(injected?.mention, undefined)
+    assert.deepEqual(injected?.whoInstead, [])
+  })
+})
 
 describe('theme plan', () => {
   it('uses five locked themes and keeps alternatives unbranded', () => {
@@ -320,6 +441,25 @@ describe('POST /api/full-report', () => {
       assert.equal(described?.questions.every((item) => item.framing === 'branded'), true)
       const problems = body.themes?.find((theme) => theme.id === 'problems')
       assert.equal(problems?.questions.every((item) => item.framing === 'unbranded'), true)
+      const withFacts = body.themes as {
+        id: string
+        questions: { mention?: string; whoInstead?: string[]; framing: string; question: string }[]
+      }[]
+      assert.equal(
+        withFacts.every((theme) =>
+          theme.questions.every(
+            (item) =>
+              item.mention === 'not_mentioned' &&
+              Array.isArray(item.whoInstead) &&
+              (item.framing === 'branded' ? item.whoInstead.length === 0 : true),
+          ),
+        ),
+        true,
+      )
+      const openai = mock.calls.find((call) => call.url.includes('api.openai.com'))
+      assert.equal(openai?.body.includes(SHARPER_Q_RULES.split('\n')[0]), true)
+      assert.equal(openai?.body.includes('not_mentioned'), true)
+      assert.equal(openai?.body.includes('whoInstead'), true)
       assert.equal(JSON.stringify(body).includes('percent'), false)
       assert.equal(mock.calls.some((call) => call.body.includes('"kind":"check"')), false)
     } finally {
@@ -373,6 +513,58 @@ describe('POST /api/full-report', () => {
         alternatives.questions.every((item) => item.framing === 'unbranded' && !/linear/i.test(item.question)),
         true,
       )
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('keeps a pinned question in this run and in the saved result', async () => {
+    const pin = 'Who else should a product team use for issue tracking?'
+    const mock = install((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (call.url.includes('api.openai.com')) {
+        assert.match(call.body, /Pinned unbranded question: Who else should a product team/)
+        assert.equal(call.body.includes('saved prompt library'), true)
+        return new Response(completionFor(call.body), { status: 200 })
+      }
+      if (call.method === 'POST' && call.url.includes('/rest/v1/usage_events')) {
+        return new Response(JSON.stringify([{ id: USAGE }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('kind=eq.full_report')) {
+        return new Response(JSON.stringify([{ id: USAGE }]), { status: 200 })
+      }
+      if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+        assert.match(call.body, /Who else should a product team/)
+        assert.match(call.body, /"id":"alternatives"/)
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-26T00:00:00.000Z' }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-26T00:00:00.000Z' }]), { status: 200 })
+      }
+      return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({ pins: [{ question: pin, framing: 'unbranded' }, { question: pin, framing: 'branded' }] }),
+        env: env(),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      const body = JSON.parse(text) as {
+        themes: { id: string; questions: { question: string; framing: string; mention?: string; whoInstead: string[] }[] }[]
+      }
+      const alternatives = body.themes.find((theme) => theme.id === 'alternatives')
+      const pinned = alternatives?.questions.find((item) => item.question === pin)
+      assert.ok(pinned)
+      assert.equal(pinned?.framing, 'unbranded')
+      assert.equal(pinned?.mention, undefined)
+      assert.deepEqual(pinned?.whoInstead, [])
+      assert.equal(body.themes.some((theme) => theme.id === 'alternatives' && theme.questions.some((item) => /linear/i.test(item.question))), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), true)
     } finally {
       mock.restore()
     }

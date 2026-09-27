@@ -6,6 +6,7 @@
 
 import { canonicalHostname } from './homepage.ts'
 import { parseWhoInstead } from './visibility.ts'
+import { cleanAnswerFacts, type AnswerFact } from '../../src/mentionFacts.ts'
 import type { ProductConfig } from '../../src/config/productConfig.ts'
 import {
   LABEL_BRANDED,
@@ -87,7 +88,27 @@ function shapeBeat(
     beat.whoInstead = whoInstead
     beat.whoInsteadLive = value.whoInsteadLive === true
   }
+  if (config.storeQuestions && Array.isArray(value.facts)) {
+    const facts = scrubFacts(cleanAnswerFacts(value.facts, domain, mode), secret, config, mode)
+    if (facts.length > 0) beat.facts = facts
+  }
   return beat
+}
+
+function scrubFacts(facts: AnswerFact[], secret: string, config: ProductConfig, mode: CheckMode): AnswerFact[] {
+  return facts.map((fact) => {
+    const next: AnswerFact = {
+      question: scrubSecret(fact.question, secret),
+      framing: mode,
+      id: fact.id,
+      whoInstead:
+        config.storeWhoInstead && mode === 'unbranded'
+          ? fact.whoInstead.map((name) => scrubSecret(name, secret))
+          : [],
+    }
+    if (config.storeAnswers && fact.mention) next.mention = fact.mention
+    return next
+  })
 }
 
 export function shapeStoredCheck(
@@ -146,9 +167,18 @@ export function shapeStoredCheck(
     if (beat) result.unbranded = beat
   }
   if (rec.branded === null) result.branded = null
-  else if (isRecord(rec.branded)) {
+  else   if (isRecord(rec.branded)) {
     const beat = shapeBeat(rec.branded, 'branded', config, secret, domain)
     if (beat) result.branded = beat
+  }
+  if (config.storeQuestions) {
+    const active = mode === 'branded' ? result.branded : result.unbranded
+    const nested = active?.facts
+    const flat = Array.isArray(rec.facts)
+      ? scrubFacts(cleanAnswerFacts(rec.facts, domain, mode), secret, config, mode)
+      : []
+    const facts = nested && nested.length > 0 ? nested : flat
+    if (facts.length > 0) result.facts = facts
   }
   return { ok: true, domain, mode, result }
 }
