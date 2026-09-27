@@ -4,14 +4,29 @@
  * No search-engine theme names and no blended score.
  */
 
-export type Framing = 'unbranded' | 'branded'
+import {
+  MENTION_FACT_RULES,
+  SHARPER_Q_RULES,
+  landThemeId,
+  mentionFromAnswer,
+  mentionsBrand,
+  parseWhoInstead,
+  type Framing,
+  type Mention,
+  type ThemeId,
+} from './mentionFacts.ts'
 
-export type ThemeId = 'problems' | 'described' | 'trust' | 'alternatives' | 'buying' | 'edge'
+export type { Framing, Mention, ThemeId }
+export { mentionsBrand }
 
 export type FullReportQuestion = {
   question: string
   answer: string
   framing: Framing
+  /** Omitted when the answer is empty — no fake mention label. */
+  mention?: Mention
+  /** Unbranded only. Empty on branded and on a failed answer. */
+  whoInstead: string[]
 }
 
 export type FullReportTheme = {
@@ -82,11 +97,9 @@ export function brandLabel(domain: string): string {
   return stem.charAt(0).toUpperCase() + stem.slice(1)
 }
 
-export function mentionsBrand(text: string, domain: string): boolean {
-  const stem = (domain.split('.')[0] || '').toLowerCase()
-  if (stem.length < 3) return false
-  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`\\b${escaped}\\b`, 'i').test(text)
+export type RunPin = {
+  question: string
+  framing: Framing
 }
 
 export function distributeCounts(total: number, buckets: number): number[] {
@@ -249,7 +262,15 @@ export function shapeFullReport(
       if (!question) continue
       const framing = inferFraming(question, opts.domain)
       if (framing === 'branded' && !opts.includesBranded) continue
-      const draft: DraftQuestion = { question, answer: cleanAnswer(answer), framing }
+      const answerText = cleanAnswer(answer)
+      const mention = mentionFromAnswer(answerText, opts.domain, isRecord(item) ? item.mention : undefined)
+      const draft: DraftQuestion = {
+        question,
+        answer: answerText,
+        framing,
+        whoInstead: framing === 'unbranded' && mention ? parseWhoInstead(isRecord(item) ? item.whoInstead : [], opts.domain) : [],
+      }
+      if (mention) draft.mention = mention
       if (framing === 'branded' && (id === 'alternatives' || id === 'problems')) {
         rehome.push(draft)
         continue
@@ -311,7 +332,12 @@ export function mergeThemePayloads(parts: unknown[]): { themes: unknown[] } {
   return { themes }
 }
 
-export function fullReportPrompt(domain: string, plan: PlannedTheme[], excerpt: string | null): string {
+export function fullReportPrompt(
+  domain: string,
+  plan: PlannedTheme[],
+  excerpt: string | null,
+  pins: RunPin[] = [],
+): string {
   const brand = brandLabel(domain)
   const lines = [
     `Brand domain: ${domain}`,
@@ -345,8 +371,14 @@ export function fullReportPrompt(domain: string, plan: PlannedTheme[], excerpt: 
       lines.push(`For "${theme.id}", ask category or job-to-be-done questions only. Do not name ${brand}.`)
     }
   }
+  if (pins.length > 0) {
+    lines.push(
+      'Pinned questions for this run only. Include each one with this wording, in the matching theme, and answer it. This is not a saved prompt library.',
+    )
+    for (const pin of pins) lines.push(`Pinned ${pin.framing} question: ${pin.question}`)
+  }
   lines.push(
-    'Each item is {"question","answer","framing"}. Each answer is one or two conservative sentences. If you cannot answer, use an empty string.',
+    'Each item is {"question","answer","framing","mention","whoInstead"}. mention is "mentioned", "not_mentioned", or "unclear". whoInstead is an array of at most 3 real names on unbranded questions and an empty array on branded questions. Never invent competitors. Each answer is one or two conservative sentences. If you cannot answer, use an empty string and do not invent a mention.',
   )
   return lines.join('\n')
 }
@@ -359,7 +391,9 @@ Return JSON only:
 Each answer is 1 or 2 conservative sentences from public knowledge. If unsure, say so. Do not invent praise. If you cannot answer, use an empty string.
 framing "branded" means the question names the brand. framing "unbranded" means it does not.
 The theme id "alternatives" is unbranded only: who else shows up in the category. Never put a branded question in alternatives. Never use the brand name, product name, or domain in that theme.
-The theme id "problems" is unbranded-first: category or job-to-be-done questions that do not name the brand.`
+The theme id "problems" is unbranded-first: category or job-to-be-done questions that do not name the brand.
+${SHARPER_Q_RULES}
+${MENTION_FACT_RULES}`
 
 export function isFullReportResult(result: unknown): boolean {
   return isRecord(result) && result.report === 'full'
@@ -387,11 +421,92 @@ export function fullReportFromStored(result: unknown): FullReport | null {
       const framing = inferFraming(question, domain)
       if (id === 'alternatives' && (framing === 'branded' || mentionsBrand(question, domain))) continue
       if (!includesBranded && framing === 'branded') continue
-      questions.push({ question, answer: cleanAnswer(item.answer), framing })
+      const answerText = cleanAnswer(item.answer)
+      const mention = mentionFromAnswer(answerText, domain, item.mention)
+      const stored: FullReportQuestion = {
+        question,
+        answer: answerText,
+        framing,
+        whoInstead: framing === 'unbranded' && mention ? parseWhoInstead(item.whoInstead, domain) : [],
+      }
+      if (mention) stored.mention = mention
+      questions.push(stored)
     }
     if (questions.length === 0) continue
     themes.push({ id, title: catalog.title, questions })
   }
   if (themes.length === 0) return null
   return { domain, model, includesBranded, themes }
+}
+
+/** This-run pins only. Framing follows the question text, not the client’s claim. */
+export function cleanRunPins(value: unknown, domain: string, max: number): RunPin[] {
+  if (!Array.isArray(value)) return []
+  const cap = Math.min(8, Math.max(1, Math.floor(max)))
+  const seen = new Set<string>()
+  const out: RunPin[] = []
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    const question = typeof item.question === 'string' ? item.question.replace(/\s+/g, ' ').trim() : ''
+    if (!question || question.length > QUESTION_MAX) continue
+    const key = question.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ question, framing: mentionsBrand(question, domain) ? 'branded' : 'unbranded' })
+    if (out.length >= cap) break
+  }
+  return out
+}
+
+function themeById(themes: FullReportTheme[], id: ThemeId): FullReportTheme | undefined {
+  return themes.find((theme) => theme.id === id)
+}
+
+function ensureTheme(themes: FullReportTheme[], id: ThemeId): FullReportTheme {
+  const found = themeById(themes, id)
+  if (found) return found
+  const catalog = THEME_CATALOG.find((theme) => theme.id === id)
+  const created: FullReportTheme = { id, title: catalog?.title || id, questions: [] }
+  themes.push(created)
+  themes.sort(
+    (a, b) =>
+      THEME_CATALOG.findIndex((theme) => theme.id === a.id) - THEME_CATALOG.findIndex((theme) => theme.id === b.id),
+  )
+  return created
+}
+
+/**
+ * Keep pinned wording in the report when the model drops it.
+ * Branded pins never land in Alternatives. A pin with an empty answer has no mention label.
+ */
+export function applyRunPins(
+  themes: FullReportTheme[],
+  pins: RunPin[],
+  opts: { domain: string; includesBranded: boolean },
+): FullReportTheme[] {
+  if (pins.length === 0) return themes
+  const copy = themes.map((theme) => ({ ...theme, questions: [...theme.questions] }))
+  const have = (question: string) =>
+    copy.some((theme) => theme.questions.some((item) => item.question.toLowerCase() === question.toLowerCase()))
+  for (const pin of pins) {
+    if (have(pin.question)) continue
+    const branded = pin.framing === 'branded' || mentionsBrand(pin.question, opts.domain)
+    if (branded && !opts.includesBranded) continue
+    const id: ThemeId = branded ? 'described' : landThemeId(pin.question, 'unbranded')
+    let theme = branded
+      ? themeById(copy, 'described') ||
+        themeById(copy, 'trust') ||
+        themeById(copy, 'buying') ||
+        themeById(copy, 'edge')
+      : themeById(copy, id)
+    if (!theme) theme = ensureTheme(copy, branded ? 'described' : id)
+    if (theme.id === 'alternatives' && branded) continue
+    theme.questions.push({
+      question: pin.question,
+      answer: '',
+      framing: branded ? 'branded' : 'unbranded',
+      whoInstead: [],
+    })
+  }
+  return copy.filter((theme) => theme.questions.length > 0)
 }

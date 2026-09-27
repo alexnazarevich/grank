@@ -1,5 +1,6 @@
 import type { Answered, ModeBeat, VisibilityMode } from './demoData.ts'
 import type { FullReport } from './fullReport.ts'
+import { cleanAnswerFacts, type AnswerFact, type Framing } from './mentionFacts.ts'
 
 export const LABEL_GENERATED = 'Generated · OpenAI'
 export const LABEL_SAMPLE = 'Sample'
@@ -42,6 +43,7 @@ export type StoredBeat = {
   model?: string | null
   whoInstead?: string[]
   whoInsteadLive?: boolean
+  facts?: AnswerFact[]
 }
 
 export type StoredLabels = {
@@ -67,6 +69,8 @@ export type StoredResult = {
   /** Set when this row is a full report. The checks.mode column stays unbranded or branded. */
   report?: 'full'
   fullReport?: FullReport
+  /** Active-beat mention facts. Also stored on unbranded/branded when present. */
+  facts?: AnswerFact[]
 }
 
 export type BeatDraft = {
@@ -79,6 +83,7 @@ export type BeatDraft = {
   model: string | null
   whoInstead: string[]
   whoInsteadLive: boolean
+  facts?: AnswerFact[]
 }
 
 export type CheckDraft = {
@@ -142,6 +147,7 @@ function beatDraft(beat: ModeBeat): BeatDraft {
     model: beat.model,
     whoInstead: beat.mode === 'unbranded' ? beat.whoInstead : [],
     whoInsteadLive: beat.mode === 'unbranded' ? beat.whoInsteadLive : false,
+    facts: beat.facts,
   }
 }
 
@@ -268,6 +274,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function readFacts(value: unknown, mode: CheckMode): AnswerFact[] {
+  const framing: Framing = mode === 'branded' ? 'branded' : 'unbranded'
+  return cleanAnswerFacts(value, '', framing)
+}
+
 function emptyBeat(mode: CheckMode): ModeBeat {
   return {
     mode,
@@ -305,6 +316,7 @@ function beatFromStored(raw: Record<string, unknown>, mode: CheckMode): ModeBeat
     model: typeof raw.model === 'string' ? raw.model : null,
     whoInstead: mode === 'unbranded' ? (who ?? []) : [],
     whoInsteadLive: mode === 'unbranded' && raw.whoInsteadLive === true,
+    facts: readFacts(raw.facts, mode),
   }
 }
 
@@ -332,6 +344,7 @@ function beatFromFlat(result: StoredResult, mode: CheckMode): ModeBeat {
     model: typeof result.model === 'string' ? result.model : null,
     whoInstead: mode === 'unbranded' ? (who ?? []) : [],
     whoInsteadLive: mode === 'unbranded' && result.whoInsteadLive === true,
+    facts: readFacts(result.facts, mode),
   }
 }
 

@@ -1,5 +1,7 @@
 /** Sample questions are only a last resort when unbranded /api/visibility fails. Who-instead is never sampled. */
 
+import type { AnswerFact } from './mentionFacts.ts'
+
 export type Answered = 'yes' | 'partial' | 'no'
 
 export type VisibilityMode = 'unbranded' | 'branded'
@@ -21,6 +23,8 @@ export type ModeBeat = {
   whoInstead: string[]
   /** False when the unbranded call failed — say we couldn’t find alternatives, never invent competitors. */
   whoInsteadLive: boolean
+  /** Per-question mention facts. Absent on a failed generation — no fake labels. */
+  facts?: AnswerFact[]
 }
 
 export const EXAMPLES: { label: string; url: string }[] = [

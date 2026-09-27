@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT, onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { stubQuestionsFor } from '../src/demoData.ts'
 import { STORY } from '../src/story.ts'
 import { fetchVisibility, interpretVisibilityResponse, parseClientAnswers, parseClientWhoInstead } from '../src/visibilityClient.ts'
@@ -23,6 +24,56 @@ const GOOD = {
   why: 'Linear is widely known, but comparison answers often cite larger incumbents too.',
   whoInstead: ['Jira', 'Asana'],
 }
+
+describe('sharper questions and mention facts', () => {
+  it('appends the same sharper rules to both land prompts', () => {
+    assert.equal(UNBRANDED_SYSTEM_PROMPT.includes(SHARPER_Q_RULES), true)
+    assert.equal(BRANDED_SYSTEM_PROMPT.includes(SHARPER_Q_RULES), true)
+    assert.equal(BRANDED_SYSTEM_PROMPT.includes('whoInstead'), false)
+    assert.equal(UNBRANDED_SYSTEM_PROMPT.includes('What is {brand}?'), true)
+    assert.equal(BRANDED_SYSTEM_PROMPT.includes('who else for this job?'), true)
+  })
+
+  it('derives branded mention from the answer and leaves whoInstead empty', () => {
+    const facts = factsFromVisibility({
+      domain: 'linear.app',
+      mode: 'branded',
+      questions: ['How do people describe Linear?', 'What does Linear claim?', 'Does Linear fit a small team?'],
+      answers: ['Linear is an issue tracker for software teams.', '', 'Linear might fit a small team, but that is unclear.'],
+      answered: 'partial',
+      whoInstead: ['Jira', 'Asana'],
+      mentions: ['mentioned', 'mentioned', 'not_mentioned'],
+    })
+    assert.equal(facts[0]?.mention, 'mentioned')
+    assert.equal(facts[0]?.id, 'described')
+    assert.deepEqual(facts[0]?.whoInstead, [])
+    assert.equal(facts[1]?.mention, undefined)
+    assert.equal(facts[2]?.mention, 'unclear')
+    assert.equal(mentionFromAnswer('', 'linear.app', 'mentioned'), undefined)
+  })
+
+  it('maps unbranded mentions and keeps a shared whoInstead list', () => {
+    const facts = factsFromVisibility({
+      domain: 'linear.app',
+      mode: 'unbranded',
+      questions: [
+        'What should a team use to track issues?',
+        'Who else shows up for issue tracking?',
+        'How do teams plan a week of work?',
+      ],
+      answers: [],
+      answered: 'no',
+      whoInstead: ['Linear', 'Jira', 'Asana', 'Height'],
+      mentions: ['mentioned', '', 'not_mentioned'],
+    })
+    assert.equal(facts[0]?.mention, 'mentioned')
+    assert.equal(facts[0]?.id, 'problems')
+    assert.deepEqual(facts[0]?.whoInstead, ['Jira', 'Asana', 'Height'])
+    assert.equal(facts[1]?.id, 'alternatives')
+    assert.equal(facts[1]?.mention, 'not_mentioned')
+    assert.equal(facts[2]?.mention, 'not_mentioned')
+  })
+})
 
 describe('parseWhoInstead', () => {
   it('trims names and caps at 3', () => {
@@ -231,6 +282,12 @@ describe('onRequest /api/visibility', () => {
       assert.equal(body.questions?.length, 3)
       assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
       assert.equal('answers' in body, false)
+      const facts = (JSON.parse(text) as { facts?: { id?: string; mention?: string; whoInstead?: string[]; framing?: string }[] }).facts
+      assert.equal(facts?.length, 3)
+      assert.equal(facts?.[0]?.framing, 'unbranded')
+      assert.equal(facts?.[0]?.mention, 'unclear')
+      assert.equal(facts?.[1]?.id, 'problems')
+      assert.deepEqual(facts?.[0]?.whoInstead, ['Jira', 'Asana'])
     } finally {
       globalThis.fetch = prev
     }
@@ -560,9 +617,19 @@ describe('onRequest mode', () => {
       assert.match(sent, /"max_tokens":1400/)
       assert.match(sent, /gpt-4o-mini/)
       assert.equal(sent.includes('whoInstead'), false)
-      const body = (await res.json()) as { mode?: string; questions?: string[]; answers?: string[] }
+      assert.match(sent, /ban generic/)
+      assert.match(sent, /one intent/)
+      const body = (await res.json()) as {
+        mode?: string
+        questions?: string[]
+        answers?: string[]
+        facts?: { whoInstead?: string[]; mention?: string; id?: string }[]
+      }
       assert.equal(body.mode, 'branded')
       assert.equal('whoInstead' in body, false)
+      assert.equal(body.facts?.every((fact) => fact.whoInstead?.length === 0), true)
+      assert.equal(body.facts?.every((fact) => fact.mention === undefined), true)
+      assert.equal(body.facts?.[0]?.id, 'described')
       assert.equal(body.questions?.length, 3)
       assert.deepEqual(body.answers, ['', '', ''])
     } finally {

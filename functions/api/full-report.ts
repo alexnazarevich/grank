@@ -9,6 +9,8 @@
 import { historyCapForPlan, productConfigFromEnv, type ProductConfig } from '../../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
+  applyRunPins,
+  cleanRunPins,
   fullReportPrompt,
   mergeThemePayloads,
   parseModelJson,
@@ -16,6 +18,7 @@ import {
   shapeFullReport,
   type FullReportTheme,
   type PlannedTheme,
+  type RunPin,
 } from '../../src/fullReport.ts'
 import { LABEL_GENERATED } from '../../src/savedResult.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
@@ -62,18 +65,21 @@ function maxTokens(batch: PlannedTheme[]): number {
   return Math.min(4500, 350 + questions * 130)
 }
 
-async function domainFromRequest(request: Request): Promise<string | null | 'too-large'> {
+async function domainFromRequest(request: Request): Promise<{
+  domain: string | null | 'too-large'
+  pins: unknown
+}> {
   const url = new URL(request.url)
   const query = url.searchParams.get('domain')
-  if (query) return canonicalHostname(query)
+  if (query) return { domain: canonicalHostname(query), pins: [] }
   const raw = await request.text()
-  if (raw.length > 10_000) return 'too-large'
-  if (!raw.trim()) return null
+  if (raw.length > 10_000) return { domain: 'too-large', pins: [] }
+  if (!raw.trim()) return { domain: null, pins: [] }
   try {
-    const body = JSON.parse(raw) as { domain?: unknown }
-    return canonicalHostname(body.domain)
+    const body = JSON.parse(raw) as { domain?: unknown; pins?: unknown }
+    return { domain: canonicalHostname(body.domain), pins: body.pins }
   } catch {
-    return null
+    return { domain: null, pins: [] }
   }
 }
 
@@ -220,6 +226,7 @@ async function completeBatch(
   domain: string,
   excerpt: string | null,
   batch: PlannedTheme[],
+  pins: RunPin[],
 ): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
   let res: Response
   try {
@@ -237,7 +244,7 @@ async function completeBatch(
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: FULL_REPORT_SYSTEM_PROMPT },
-          { role: 'user', content: fullReportPrompt(domain, batch, excerpt) },
+          { role: 'user', content: fullReportPrompt(domain, batch, excerpt, pins) },
         ],
       }),
     })
@@ -365,7 +372,8 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
   const { request } = context
   if (request.method !== 'POST') return json(405, { error: 'Use POST' })
 
-  const domain = await domainFromRequest(request)
+  const incoming = await domainFromRequest(request)
+  const domain = incoming.domain
   if (domain === 'too-large') return json(413, { error: 'Request body is too large.' })
   if (!domain) return json(400, { error: 'domain must be a simple public hostname' })
 
@@ -399,21 +407,30 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     themeMax: config.fullReportThemeMax,
     includesBranded: config.fullReportIncludesBranded,
   })
+  const pins = cleanRunPins(incoming.pins, domain, config.pinnedQuestionMax).map((pin) => ({
+    ...pin,
+    question: scrubSecret(pin.question, apiKey),
+  }))
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
-  const parts = await Promise.all(batches(plan).map((batch) => completeBatch(apiKey, domain, safeExcerpt, batch)))
+  const parts = await Promise.all(
+    batches(plan).map((batch) => completeBatch(apiKey, domain, safeExcerpt, batch, pins)),
+  )
   const failed = parts.find((part) => !part.ok)
   if (failed && !failed.ok) {
     await reserved.release()
     return json(502, { error: failed.error })
   }
-  const themes = shapeFullReport(mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))), {
+  const shaped = shapeFullReport(mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))), {
     domain,
     plan,
     includesBranded: config.fullReportIncludesBranded,
     themeMin: config.fullReportThemeMin,
     questionTarget: config.fullReportQuestionTarget,
   })
+  const themes = shaped
+    ? applyRunPins(shaped, pins, { domain, includesBranded: config.fullReportIncludesBranded })
+    : null
   if (!themes) {
     await reserved.release()
     return json(502, { error: 'Couldn’t build the full report — try again.' })

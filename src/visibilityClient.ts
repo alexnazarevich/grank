@@ -2,6 +2,7 @@
 
 import { readAnonKey } from './authClient.ts'
 import type { Answered } from './demoData'
+import { cleanAnswerFacts, factsFromVisibility, parseWhoInstead, type AnswerFact } from './mentionFacts.ts'
 
 export type VisibilityMode = 'unbranded' | 'branded'
 
@@ -15,10 +16,10 @@ export type VisibilityOk = {
   why: string
   model: string
   whoInstead: string[]
+  /** Per-question mention facts. Branded whoInstead is empty. Failed rows omit mention. */
+  facts: AnswerFact[]
 }
 
-const WHO_INSTEAD_MAX = 3
-const WHO_INSTEAD_NAME_MAX = 80
 const ANSWER_MAX = 900
 
 function normalizeAnswer(value: unknown): string {
@@ -60,28 +61,7 @@ export function parseClientAnswers(
 
 /** Same rules as the Pages Function: trim, drop blanks, skip this brand, cap at 3. */
 export function parseClientWhoInstead(value: unknown, domain?: string): string[] {
-  if (!Array.isArray(value)) return []
-  const blocked = new Set<string>()
-  if (domain) {
-    const host = domain.toLowerCase()
-    const stem = host.split('.')[0] || host
-    blocked.add(stem.replace(/[^a-z0-9]+/g, ''))
-    blocked.add(host.replace(/[^a-z0-9]+/g, ''))
-  }
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const item of value) {
-    if (typeof item !== 'string') continue
-    const name = item.replace(/\s+/g, ' ').trim()
-    if (!name || name.length > WHO_INSTEAD_NAME_MAX) continue
-    const key = name.toLowerCase()
-    const compact = key.replace(/[^a-z0-9]+/g, '')
-    if (!compact || blocked.has(compact) || seen.has(key)) continue
-    seen.add(key)
-    out.push(name)
-    if (out.length >= WHO_INSTEAD_MAX) break
-  }
-  return out
+  return parseWhoInstead(value, domain)
 }
 
 export type VisibilityFail = {
@@ -157,6 +137,22 @@ export function interpretVisibilityResponse(
     return { ok: false, error: 'Question generation returned an unusable result.' }
   }
 
+  const answers = mode === 'branded' ? parsedQa.answers : []
+  const whoInstead = mode === 'branded' ? [] : parseClientWhoInstead(rec.whoInstead, domain)
+  const hosted = domain || (typeof rec.domain === 'string' ? rec.domain : '')
+  const cleaned = Array.isArray(rec.facts) ? cleanAnswerFacts(rec.facts, hosted, mode) : []
+  const facts =
+    cleaned.length === questions.length
+      ? cleaned
+      : factsFromVisibility({
+          domain: hosted,
+          mode,
+          questions,
+          answers,
+          answered,
+          whoInstead,
+          mentions: rec.mentions,
+        })
   return {
     ok: true,
     mode,
@@ -165,9 +161,10 @@ export function interpretVisibilityResponse(
     why,
     model,
     // Answers are the branded dig only. Unbranded stays a question list.
-    answers: mode === 'branded' ? parsedQa.answers : [],
+    answers,
     // Who-instead is the unbranded beat only, even if a branded payload includes names.
-    whoInstead: mode === 'branded' ? [] : parseClientWhoInstead(rec.whoInstead, domain),
+    whoInstead,
+    facts,
   }
 }
 

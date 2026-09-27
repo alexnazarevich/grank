@@ -323,6 +323,8 @@ export async function signOut(session: AuthSession | null): Promise<void> {
 export type PendingFullReport = {
   domain: string
   draft: CheckDraft | null
+  /** This-run pins only. Absent when the report was started without them. */
+  pins?: { question: string; framing: 'unbranded' | 'branded' }[]
 }
 
 export type AuthBoot = {
@@ -388,7 +390,7 @@ export function takePendingFullReport(): PendingFullReport | null {
     const raw = localStorage.getItem(PENDING_REPORT_KEY)
     localStorage.removeItem(PENDING_REPORT_KEY)
     if (!raw) return null
-    const data = JSON.parse(raw) as { domain?: unknown; draft?: unknown }
+    const data = JSON.parse(raw) as { domain?: unknown; draft?: unknown; pins?: unknown }
     const domain = typeof data.domain === 'string' ? data.domain.trim() : ''
     if (!domain) return null
     const draft =
@@ -397,7 +399,16 @@ export function takePendingFullReport(): PendingFullReport | null {
       typeof (data.draft as CheckDraft).domain === 'string'
         ? (data.draft as CheckDraft)
         : null
-    return { domain, draft }
+    const pins = Array.isArray(data.pins)
+      ? data.pins.flatMap((item) => {
+          if (!item || typeof item !== 'object') return []
+          const rec = item as { question?: unknown; framing?: unknown }
+          const question = typeof rec.question === 'string' ? rec.question.trim() : ''
+          if (!question) return []
+          return [{ question, framing: rec.framing === 'branded' ? ('branded' as const) : ('unbranded' as const) }]
+        })
+      : []
+    return pins.length > 0 ? { domain, draft, pins } : { domain, draft }
   } catch {
     return null
   }
