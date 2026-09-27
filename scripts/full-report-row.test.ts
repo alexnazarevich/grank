@@ -50,6 +50,20 @@ describe('full-report row markup', () => {
                     mention: undefined,
                     whoInstead: [],
                   },
+                  {
+                    question: 'Is the weekly plan obvious?',
+                    answer: 'It might be Linear, but that is only implied.',
+                    framing: 'unbranded',
+                    mention: 'unclear',
+                    whoInstead: [],
+                  },
+                  {
+                    question: 'What is missing from this category?',
+                    answer: 'The reply never names Linear.',
+                    framing: 'branded',
+                    mention: 'not_mentioned',
+                    whoInstead: [],
+                  },
                 ],
               },
             ],
@@ -59,17 +73,27 @@ describe('full-report row markup', () => {
       assert.match(html, /What should a team use to track issues\?/)
       assert.match(html, />Who instead</)
       assert.match(html, />Mentioned</)
+      assert.match(html, />Unclear</)
+      assert.match(html, />Not mentioned</)
       assert.match(html, /aria-expanded="false"/)
       assert.match(html, /report-q-toggle/)
       assert.match(html, /report-mention/)
+      const chips = [...html.matchAll(/class="([^"]*report-mention[^"]*)">([^<]*)</g)]
+      const byLabel = new Map(chips.map((match) => [match[2].trim(), match[1]]))
+      assert.equal(byLabel.get('Mentioned'), 'tag plain mention report-mention mentioned')
+      assert.equal(byLabel.get('Who instead'), 'tag plain mention report-mention')
+      assert.equal(byLabel.get('Unclear'), 'tag plain mention report-mention')
+      assert.equal(byLabel.get('Not mentioned'), 'tag plain mention report-mention')
       assert.equal(html.includes(answer), false)
       assert.equal(html.includes(branded), false)
+      assert.equal(html.includes('It might be Linear, but that is only implied.'), false)
+      assert.equal(html.includes('The reply never names Linear.'), false)
       assert.equal(html.includes('Show full answer'), false)
       assert.equal(html.includes('Hide answer'), false)
       assert.equal(html.includes('answer-body'), false)
       assert.equal(html.includes('<strong>Jira</strong>'), false)
       assert.equal(html.includes('Couldn’t get an answer.'), false)
-      assert.equal((html.match(/report-q-toggle/g) || []).length, 3)
+      assert.equal((html.match(/report-q-toggle/g) || []).length, 5)
     } finally {
       await server.close()
     }

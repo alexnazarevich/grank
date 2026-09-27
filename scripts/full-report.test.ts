@@ -808,7 +808,10 @@ describe('full-report question accordion', () => {
     assert.match(section, /className="report-q-toggle"/)
     assert.match(section, /aria-label=\{item\.question\}/)
     assert.match(section, /mentionStatusLabel/)
-    assert.match(section, /className="tag plain mention report-mention"/)
+    assert.match(
+      section,
+      /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' \? ' mentioned' : ''\}`\}/,
+    )
     assert.match(section, /item\.answer/)
     assert.match(section, /STORY\.answerMiss/)
     const openAt = section.indexOf('{open ?')
@@ -828,6 +831,10 @@ describe('full-report question accordion', () => {
     assert.match(css, /\.report-mention\s*\{[^}]*flex:\s*none/)
     assert.equal(/\.report-mention\s*\{[^}]*flex:\s*0\s+0/.test(css), false)
     assert.equal(/\.report-mention\s*\{[^}]*flex-basis:\s*\d/.test(css), false)
+    assert.match(css, /\.report-mention\.mentioned\s*\{[^}]*background:\s*#064e3b/)
+    assert.match(css, /\.report-mention\.mentioned\s*\{[^}]*color:\s*var\(--yes\)/)
+    assert.match(css, /\.report-mention\.mentioned\s*\{[^}]*border-color:\s*#065f46/)
+    assert.equal(mark.includes('report-mention'), false)
     assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-q-toggle\s*\{[^}]*flex:\s*none/)
     assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-q-toggle\s*\{[^}]*width:\s*100%/)
     assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-mention\s*\{[^}]*flex:\s*none/)
