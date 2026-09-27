@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { onRequest } from '../functions/api/full-report.ts'
+import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT } from '../functions/api/visibility.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
   applyRunPins,
+  fullReportPrompt,
   mentionsBrand,
   selectThemePlan,
   shapeFullReport,
@@ -106,6 +108,46 @@ describe('sharper questions and mention facts', () => {
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes(MENTION_FACT_RULES), true)
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('not a multi-engine scrape'), true)
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('What is {brand}?'), true)
+  })
+
+  it('asks recommendation-shaped unbranded problems questions and stays honest', () => {
+    const plan = selectThemePlan({
+      questionTarget: 8,
+      themeMin: 4,
+      themeMax: 4,
+      includesBranded: true,
+    })
+    const prompt = fullReportPrompt('linear.app', plan, 'Issue tracking for software teams.')
+    const problems = prompt.split('\n').filter((line) => line.includes('"problems"') || line.startsWith('On problems answers'))
+    assert.match(problems.join('\n'), /recommendation-shaped questions only/)
+    assert.match(problems.join('\n'), /what tools, platforms, or software for the job/)
+    assert.match(problems.join('\n'), /what teams use for the job/)
+    assert.match(problems.join('\n'), /Take the job from the homepage excerpt/)
+    assert.match(problems.join('\n'), /Do not name Linear, the product, or linear\.app/)
+    assert.match(problems.join('\n'), /Do not ask abstract how-do-I-solve questions/)
+    assert.match(
+      problems.join('\n'),
+      /you may name real products you already know; if unsure, say so plainly and leave whoInstead empty — never invent names, and do not force a company roster/,
+    )
+    assert.equal(prompt.includes('always return companies'), false)
+    assert.equal(prompt.includes('category or job-to-be-done'), false)
+    assert.match(prompt, /For "alternatives", ask who else shows up in the category\. Do not mention Linear\./)
+    assert.match(FULL_REPORT_SYSTEM_PROMPT, /recommendation-shaped questions that do not name the brand, product, or domain/)
+    assert.match(FULL_REPORT_SYSTEM_PROMPT, /what tools, platforms, or software for the job, or what teams use for the job/)
+    assert.match(FULL_REPORT_SYSTEM_PROMPT, /using the homepage excerpt for the job/)
+    assert.match(
+      FULL_REPORT_SYSTEM_PROMPT,
+      /On problems answers, you may name real products you already know; if unsure, say so plainly and leave whoInstead empty — never invent names, and do not force a company roster\./,
+    )
+    assert.match(FULL_REPORT_SYSTEM_PROMPT, /The theme id "alternatives" is unbranded only: who else shows up in the category/)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('always return companies'), false)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('category or job-to-be-done'), false)
+    assert.match(UNBRANDED_SYSTEM_PROMPT, /category or job-to-be-done/)
+    assert.equal(UNBRANDED_SYSTEM_PROMPT.includes('recommendation-shaped'), false)
+    assert.match(BRANDED_SYSTEM_PROMPT, /every question must include the brand name/)
+    assert.equal(BRANDED_SYSTEM_PROMPT.includes('recommendation-shaped'), false)
+    assert.equal(SHARPER_Q_RULES.includes('recommendation-shaped'), false)
+    assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
   })
 
   it('stores mention and whoInstead, and drops both on a failed answer', () => {
@@ -384,6 +426,9 @@ describe('POST /api/full-report', () => {
         assert.match(call.body, /not a multi-engine scrape/)
         assert.match(call.body, /visibility percentage/)
         assert.match(call.body, /alternatives/)
+        assert.match(call.body, /recommendation-shaped questions only/)
+        assert.match(call.body, /do not force a company roster/)
+        assert.match(call.body, /unbranded only: who else shows up in the category/)
         return new Response(completionFor(call.body), {
           status: 200,
           headers: { 'content-type': 'application/json' },
