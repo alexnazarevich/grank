@@ -93,7 +93,6 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   font-size: 0.78rem; line-height: 1.5; margin: 0.85rem 0 0; max-width: 38rem;
 }
 .hero .proof strong { color: #d5dee8; font-weight: 650; }
-.proof.in-result { margin: 0.75rem 0 0; font-size: 0.8rem; }
 .segments { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .segments button {
   background: transparent; color: var(--muted); border: 1px solid var(--line);

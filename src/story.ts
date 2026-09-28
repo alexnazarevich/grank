@@ -1,9 +1,9 @@
-/** Story copy. Homepage lines are the bet 7 pass. Land/dig lines stay as shipped. */
+/** Story copy. Homepage lines are the bet 7 pass. Dig lines stay as shipped. */
 
 export const STORY = {
   landEyebrow: 'Unbranded',
   landTitle: 'Do you show up for what you solve?',
-  landHelper: 'Category questions — no brand name required. This is the usual first ask.',
+  landHelper: "Questions are generated based on your brand's website",
   landBadge: 'Unbranded',
   ask: 'Ask about your brand',
   digLoading: 'Checking what they say when people name you…',
@@ -16,8 +16,6 @@ export const STORY = {
   answerHelper:
     'Answers below are from our model for these questions — not a live multi-engine scrape.',
   answerMiss: 'Couldn’t get an answer.',
-  /** Result-screen honesty. Homepage uses homeProof. */
-  proof: 'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
   documentTitle: 'Grank — See if you show up in AI answers',
   headerBadge: 'SIMPLE AEO · LABELED MODEL CHECKS',
   homeH1: 'What does AI say about your brand?',
