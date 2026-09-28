@@ -171,6 +171,7 @@ export function shapeStoredCheck(
     const beat = shapeBeat(rec.branded, 'branded', config, secret, domain)
     if (beat) result.branded = beat
   }
+  if (rec.questionSetOwned === true) result.questionSetOwned = true
   if (config.storeQuestions) {
     const active = mode === 'branded' ? result.branded : result.unbranded
     const nested = active?.facts

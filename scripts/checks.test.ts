@@ -456,6 +456,119 @@ describe('onRequest /api/checks', () => {
       globalThis.fetch = prev
     }
   })
+
+  it('patches the question list on a saved full report and keeps mention on the remaining question', async () => {
+    const calls: { url: string; method: string; body: string }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method || 'GET'
+      const body = typeof init?.body === 'string' ? init.body : ''
+      calls.push({ url, method, body })
+      if (url.endsWith('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (method === 'GET' && url.includes('/rest/v1/checks')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: NEW_ID,
+              domain: 'linear.app',
+              mode: 'unbranded',
+              created_at: '2026-09-25T12:00:00.000Z',
+              result: {
+                report: 'full',
+                labels: {
+                  questions: 'Generated · OpenAI',
+                  answered: 'Generated · OpenAI',
+                  whoInstead: 'Generated · OpenAI',
+                  mode: 'Full report',
+                },
+                model: 'gpt-4o-mini',
+                questionsGenerated: true,
+                fullReport: {
+                  domain: 'linear.app',
+                  model: 'gpt-4o-mini',
+                  includesBranded: true,
+                  themes: [
+                    {
+                      id: 'problems',
+                      title: 'Problems you solve',
+                      questions: [
+                        {
+                          question: 'What should a team use for issue tracking?',
+                          answer: 'Jira shows up for that job.',
+                          framing: 'unbranded',
+                          mention: 'not_mentioned',
+                          whoInstead: ['Jira'],
+                        },
+                        {
+                          question: 'What do product teams use to plan work?',
+                          answer: 'Several tools get named.',
+                          framing: 'unbranded',
+                          mention: 'not_mentioned',
+                          whoInstead: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (method === 'PATCH' && url.includes('/rest/v1/checks')) {
+        return new Response(null, { status: 204 })
+      }
+      return new Response('unexpected ' + method + ' ' + url, { status: 500 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/checks', {
+          method: 'PATCH',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: NEW_ID,
+            questions: [
+              { question: 'What should a team use for issue tracking?', themeId: 'problems' },
+              { question: 'What tools do support teams use for tickets?', themeId: 'problems' },
+            ],
+          }),
+        }),
+        env: env(),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.equal(text.includes(SECRET), false)
+      const body = JSON.parse(text) as {
+        check?: {
+          result?: {
+            questionSetOwned?: boolean
+            fullReport?: { themes?: { id?: string; questions?: { question?: string; mention?: string; answer?: string }[] }[] }
+          }
+        }
+      }
+      const questions = body.check?.result?.fullReport?.themes?.[0]?.questions
+      assert.equal(body.check?.result?.questionSetOwned, true)
+      assert.deepEqual(
+        questions?.map((item) => item.question),
+        ['What should a team use for issue tracking?', 'What tools do support teams use for tickets?'],
+      )
+      assert.equal(questions?.[0]?.mention, 'not_mentioned')
+      assert.equal(questions?.[1]?.answer, '')
+      assert.equal(questions?.[1]?.mention, undefined)
+      assert.equal(body.check?.result?.fullReport?.themes?.[0]?.id, 'problems')
+      const patched = calls.find((call) => call.method === 'PATCH')
+      assert.ok(patched)
+      assert.match(patched.body, /What tools do support teams use for tickets/)
+      assert.equal(patched.body.includes('What do product teams use to plan work?'), false)
+      assert.equal(calls.some((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks')), false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
 })
 
 describe('saveCheck quota signal', () => {

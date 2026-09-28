@@ -34,12 +34,14 @@ function normalizeAnswer(value: unknown): string {
 export function parseClientAnswers(
   questionsField: unknown,
   answersField: unknown,
+  max = 5,
 ): { questions: string[]; answers: string[] } {
   if (!Array.isArray(questionsField)) return { questions: [], answers: [] }
+  const cap = Math.min(8, Math.max(1, Math.floor(max)))
   const parallel = Array.isArray(answersField) ? answersField : []
   const questions: string[] = []
   const answers: string[] = []
-  for (let i = 0; i < questionsField.length && questions.length < 5; i++) {
+  for (let i = 0; i < questionsField.length && questions.length < cap; i++) {
     const item = questionsField[i]
     let question = ''
     let answer: unknown = parallel[i]
@@ -86,6 +88,7 @@ export function interpretVisibilityResponse(
   unusableBody: boolean,
   domain?: string,
   expectedMode?: VisibilityMode,
+  ownedQuestions?: string[],
 ): VisibilityOk | VisibilityFail {
   if (status === 404 || unusableBody) {
     return {
@@ -117,7 +120,8 @@ export function interpretVisibilityResponse(
     }
   }
 
-  const parsedQa = parseClientAnswers(rec.questions, rec.answers)
+  const owned = ownedQuestions && ownedQuestions.length > 0 ? ownedQuestions : null
+  const parsedQa = parseClientAnswers(rec.questions, rec.answers, owned ? 8 : 5)
   const questions = parsedQa.questions
   const answered = rec.answered
   const why = typeof rec.why === 'string' ? rec.why.trim() : ''
@@ -130,7 +134,21 @@ export function interpretVisibilityResponse(
       : modeRaw === 'unbranded' || modeRaw === 'branded'
         ? modeRaw
         : 'invalid'
-  if (questions.length < 3 || questions.length > 5 || !answeredOk || !why || !model || mode === 'invalid') {
+  const ownedMatches =
+    !!owned &&
+    questions.length === owned.length &&
+    questions.every((question, index) => question.toLowerCase() === owned[index].toLowerCase())
+  if (owned && !ownedMatches) {
+    return { ok: false, error: 'The check didn’t answer this question set.' }
+  }
+  if (
+    (!owned && (questions.length < 3 || questions.length > 5)) ||
+    (owned && (questions.length < 1 || questions.length > 8)) ||
+    !answeredOk ||
+    !why ||
+    !model ||
+    mode === 'invalid'
+  ) {
     return { ok: false, error: 'Question generation returned an unusable result.' }
   }
   if (expectedMode && mode !== expectedMode) {
@@ -172,17 +190,21 @@ export async function fetchVisibility(
   domain: string,
   mode: VisibilityMode = 'unbranded',
   accessToken?: string | null,
+  questions?: string[],
 ): Promise<VisibilityOk | VisibilityFail> {
+  const owned = questions && questions.length > 0 ? questions : undefined
   const headers = new Headers({ Accept: 'application/json' })
   const anon = readAnonKey()
   if (anon) headers.set('x-grank-anon', anon)
   if (accessToken) headers.set('authorization', `Bearer ${accessToken}`)
+  if (owned) headers.set('content-type', 'application/json')
   let res: Response
   try {
-    res = await fetch(
-      `/api/visibility?domain=${encodeURIComponent(domain)}&mode=${mode}`,
-      { headers },
-    )
+    res = await fetch(owned ? '/api/visibility' : `/api/visibility?domain=${encodeURIComponent(domain)}&mode=${mode}`, {
+      method: owned ? 'POST' : 'GET',
+      headers,
+      body: owned ? JSON.stringify({ domain, mode, questions: owned }) : undefined,
+    })
   } catch {
     return { ok: false, error: 'Could not reach question generation. Try again.' }
   }
@@ -190,7 +212,7 @@ export async function fetchVisibility(
   const raw = await res.text()
   const type = res.headers.get('content-type') || ''
   if (type.includes('text/html') || raw.trimStart().startsWith('<')) {
-    return interpretVisibilityResponse(res.status, null, true, domain, mode)
+    return interpretVisibilityResponse(res.status, null, true, domain, mode, owned)
   }
 
   let data: unknown
@@ -200,5 +222,5 @@ export async function fetchVisibility(
     return { ok: false, error: `Question generation failed (HTTP ${res.status}).` }
   }
 
-  return interpretVisibilityResponse(res.status, data, false, domain, mode)
+  return interpretVisibilityResponse(res.status, data, false, domain, mode, owned)
 }

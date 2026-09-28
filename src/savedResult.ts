@@ -71,6 +71,8 @@ export type StoredResult = {
   fullReport?: FullReport
   /** Active-beat mention facts. Also stored on unbranded/branded when present. */
   facts?: AnswerFact[]
+  /** The question list is owned. Run again answers it instead of generating a new roster. */
+  questionSetOwned?: boolean
 }
 
 export type BeatDraft = {
@@ -102,6 +104,8 @@ export type CheckDraft = {
   homepageSnippet: string | null
   unbranded: BeatDraft
   branded: BeatDraft | null
+  /** Set when this draft is an owned question set, so the next run answers it. */
+  questionSetOwned?: boolean
 }
 
 export type SavedCheck = {
@@ -158,6 +162,7 @@ export function draftFromScreen(
   branded: ModeBeat | null,
   homepageSupport: string | null,
   homepageSnippet: string | null,
+  questionSetOwned = false,
 ): CheckDraft {
   const active = mode === 'branded' && branded ? branded : unbranded
   const flat = beatDraft(active)
@@ -169,6 +174,7 @@ export function draftFromScreen(
     homepageSnippet,
     unbranded: beatDraft(unbranded),
     branded: branded ? beatDraft(branded) : null,
+    ...(questionSetOwned ? { questionSetOwned: true } : {}),
   }
 }
 

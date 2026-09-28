@@ -884,4 +884,103 @@ describe('full-report question accordion', () => {
     assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-q-toggle\s*\{[^}]*width:\s*100%/)
     assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.report-mention\s*\{[^}]*flex:\s*none/)
   })
+
+  it('answers an owned question set instead of writing a new roster', async () => {
+    const kept = 'What should a team use for issue tracking?'
+    const added = 'How do teams describe Linear?'
+    const mock = install((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (call.url.includes('api.openai.com')) {
+        assert.match(call.body, /Do not add questions/)
+        assert.match(call.body, /Do not rewrite question text/)
+        assert.equal(/write \d+ questions/.test(call.body), false)
+        assert.match(call.body, new RegExp(kept.replace(/[?]/g, '\\?')))
+        assert.match(call.body, /How do teams describe Linear/)
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    themes: [
+                      {
+                        id: 'problems',
+                        questions: [
+                          {
+                            question: 'What tool should I buy instead?',
+                            answer: 'Jira shows up for that job.',
+                            mention: 'mentioned',
+                            whoInstead: ['Jira', 'Asana'],
+                          },
+                        ],
+                      },
+                      {
+                        id: 'described',
+                        questions: [
+                          {
+                            question: added,
+                            answer: 'Linear is a fast issue tracker for software teams.',
+                            mention: 'mentioned',
+                            whoInstead: ['Jira'],
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (call.url.includes('/rest/v1/usage_events')) {
+        throw new Error('owned re-run must not spend a full-report allotment')
+      }
+      if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+        assert.match(call.body, /questionSetOwned/)
+        assert.match(call.body, /What should a team use for issue tracking/)
+        assert.match(call.body, /How do teams describe Linear/)
+        assert.equal(call.body.includes('What tool should I buy'), false)
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+      }
+      return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: [
+            { question: kept, themeId: 'problems' },
+            { question: added, themeId: 'described' },
+          ],
+        }),
+        env: env(),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.equal(text.includes(KEY), false)
+      const body = JSON.parse(text) as {
+        themes: { id: string; questions: { question: string; mention?: string; answer: string; whoInstead: string[] }[] }[]
+      }
+      const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
+      const described = body.themes.find((theme) => theme.id === 'described')?.questions[0]
+      assert.equal(problems?.question, kept)
+      assert.equal(problems?.mention, 'unclear')
+      assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
+      assert.equal(described?.question, added)
+      assert.equal(described?.mention, 'mentioned')
+      assert.deepEqual(described?.whoInstead, [])
+      assert.equal(body.themes.some((theme) => theme.questions.some((item) => item.question === 'What tool should I buy instead?')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('kind=eq.full_report')), false)
+    } finally {
+      mock.restore()
+    }
+  })
 })

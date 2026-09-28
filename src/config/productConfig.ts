@@ -34,6 +34,10 @@ export type ProductCopy = {
   pinnedQuestionsTitle: string
   editQuestionsHint: string
   regenerateWithPinsCta: string
+  addQuestionCta: string
+  deleteQuestionCta: string
+  saveQuestionsCta: string
+  ownedQuestionsHint: string
 }
 
 export type ProductConfig = {
@@ -118,6 +122,11 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     editQuestionsHint:
       'Pin or tweak a few questions before you generate. We’ll use these for this run only — not a saved prompt library.',
     regenerateWithPinsCta: 'Run with these questions',
+    addQuestionCta: 'Add question',
+    deleteQuestionCta: 'Delete',
+    saveQuestionsCta: 'Save questions',
+    ownedQuestionsHint:
+      'Add or delete questions on this check. Save them, then run again to answer this set.',
   },
 }
 
@@ -173,6 +182,10 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'pinnedQuestionsTitle',
   'editQuestionsHint',
   'regenerateWithPinsCta',
+  'addQuestionCta',
+  'deleteQuestionCta',
+  'saveQuestionsCta',
+  'ownedQuestionsHint',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

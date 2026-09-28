@@ -741,6 +741,49 @@ describe('onRequest mode', () => {
       globalThis.fetch = prev
     }
   })
+
+  it('answers owned questions instead of returning a generated roster', async () => {
+    const owned = [
+      'What should a team use for issue tracking?',
+      'Who else should a team use for issue tracking?',
+      'What do support teams use for tickets?',
+    ]
+    let sent = ''
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (!url.includes('api.openai.com')) return new Response('nope', { status: 404 })
+      sent = String(init?.body || '')
+      return new Response(modelPayload({
+        ...GOOD,
+        questions: ['Generated one?', 'Generated two?', 'Generated three?'],
+        mentions: ['not_mentioned', 'not_mentioned', 'not_mentioned'],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ domain: 'linear.app', mode: 'unbranded', questions: owned }),
+        }),
+        env: { OPENAI_API_KEY: KEY },
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.match(sent, /Do not add, drop, or rewrite/)
+      assert.match(sent, /What should a team use for issue tracking\?/)
+      const body = JSON.parse(text) as { questions?: string[]; facts?: { question?: string; mention?: string; id?: string }[] }
+      assert.deepEqual(body.questions, owned)
+      assert.equal(body.questions?.includes('Generated one?'), false)
+      assert.equal(body.facts?.length, owned.length)
+      assert.equal(body.facts?.[0]?.question, owned[0])
+      assert.equal(body.facts?.[0]?.mention, 'not_mentioned')
+      assert.equal(body.facts?.[0]?.id, 'problems')
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
 })
 
 describe('fetchVisibility', () => {

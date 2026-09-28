@@ -20,6 +20,16 @@ import {
   type PlannedTheme,
   type RunPin,
 } from '../../src/fullReport.ts'
+import { mentionsBrand } from '../../src/mentionFacts.ts'
+import {
+  cleanOwnedQuestions,
+  countOwnedQuestions,
+  groupOwned,
+  mergeOwnedAnswers,
+  ownedAnswerPrompt,
+  OWNED_QUESTION_MAX,
+  type OwnedQuestion,
+} from '../../src/ownedQuestions.ts'
 import { LABEL_GENERATED } from '../../src/savedResult.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
 import { json, scrubSecret } from './http.ts'
@@ -68,18 +78,19 @@ function maxTokens(batch: PlannedTheme[]): number {
 async function domainFromRequest(request: Request): Promise<{
   domain: string | null | 'too-large'
   pins: unknown
+  owned: unknown
 }> {
   const url = new URL(request.url)
   const query = url.searchParams.get('domain')
-  if (query) return { domain: canonicalHostname(query), pins: [] }
+  if (query) return { domain: canonicalHostname(query), pins: [], owned: undefined }
   const raw = await request.text()
-  if (raw.length > 10_000) return { domain: 'too-large', pins: [] }
-  if (!raw.trim()) return { domain: null, pins: [] }
+  if (raw.length > 80_000) return { domain: 'too-large', pins: [], owned: undefined }
+  if (!raw.trim()) return { domain: null, pins: [], owned: undefined }
   try {
-    const body = JSON.parse(raw) as { domain?: unknown; pins?: unknown }
-    return { domain: canonicalHostname(body.domain), pins: body.pins }
+    const body = JSON.parse(raw) as { domain?: unknown; pins?: unknown; owned?: unknown }
+    return { domain: canonicalHostname(body.domain), pins: body.pins, owned: body.owned }
   } catch {
-    return { domain: null, pins: [] }
+    return { domain: null, pins: [], owned: undefined }
   }
 }
 
@@ -308,6 +319,7 @@ async function saveReport(
   includesBranded: boolean,
   config: ProductConfig,
   plan: string,
+  questionSetOwned = false,
 ): Promise<{ id: string; createdAt: string } | null> {
   const result = {
     report: 'full',
@@ -319,6 +331,7 @@ async function saveReport(
     },
     model: MODEL,
     questionsGenerated: true,
+    ...(questionSetOwned ? { questionSetOwned: true } : {}),
     fullReport: {
       domain,
       model: MODEL,
@@ -368,6 +381,148 @@ async function saveReport(
   return { id, createdAt }
 }
 
+function ownedBatches(owned: OwnedQuestion[], size = 20): OwnedQuestion[][] {
+  const batches: OwnedQuestion[][] = []
+  for (let i = 0; i < owned.length; i += size) batches.push(owned.slice(i, i + size))
+  return batches.filter((batch) => batch.length > 0)
+}
+
+async function completeOwnedBatch(
+  apiKey: string,
+  domain: string,
+  excerpt: string | null,
+  owned: OwnedQuestion[],
+): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
+  const prompt = ownedAnswerPrompt(domain, groupOwned(owned), excerpt)
+  let res: Response
+  try {
+    res = await fetch(OPENAI_URL, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.3,
+        max_tokens: Math.min(4500, 350 + owned.length * 130),
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: FULL_REPORT_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    })
+  } catch (err) {
+    return { ok: false, error: `OpenAI request failed: ${failureDetail(err)}` }
+  }
+
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const errBody = (await res.json()) as { error?: { message?: string } }
+      const message = errBody?.error?.message
+      if (typeof message === 'string' && message.trim()) detail = message
+    } catch {
+      // Keep the status.
+    }
+    return { ok: false, error: `OpenAI request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
+  }
+
+  try {
+    const payload = (await res.json()) as { choices?: { message?: { content?: string | null } }[] }
+    const raw = payload.choices?.[0]?.message?.content
+    const content = typeof raw === 'string' ? raw : ''
+    const parsed = parseModelJson(scrubSecret(content, apiKey))
+    if (!parsed) return { ok: false, error: 'OpenAI request failed: model output was not usable JSON' }
+    return { ok: true, json: parsed }
+  } catch {
+    return { ok: false, error: 'OpenAI request failed: unreadable response' }
+  }
+}
+
+/** Answer a saved question set. Does not generate a new theme roster. */
+async function answerOwnedReport(opts: {
+  sb: ServiceDb
+  userId: string
+  domain: string
+  owned: OwnedQuestion[]
+  apiKey: string
+  config: ProductConfig
+  request: Request
+}): Promise<Response> {
+  await ensureProfile(opts.sb, opts.userId).catch(() => {})
+  const planName = await readPlan(opts.sb, opts.userId, opts.config)
+  const anon = anonKeyFromRequest(opts.request)
+  if (opts.config.paywallEnabled && anon) {
+    const linked = await linkAnonUsage(opts.sb, anon, opts.userId)
+    if (!linked) return json(503, { error: 'Could not check the check limit.' })
+  }
+  const admitted = await admitUsage({
+    sb: opts.sb,
+    userId: opts.userId,
+    anonKey: anon,
+    plan: planName,
+    config: opts.config,
+    kind: 'check',
+  })
+  if (!admitted.ok) return admitted.response
+
+  const excerpt = await homepageExcerpt(opts.domain)
+  const safeExcerpt = excerpt ? scrubSecret(excerpt, opts.apiKey) : null
+  const parts = await Promise.all(
+    ownedBatches(opts.owned).map((batch) => completeOwnedBatch(opts.apiKey, opts.domain, safeExcerpt, batch)),
+  )
+  const failed = parts.find((part) => !part.ok)
+  if (failed && !failed.ok) {
+    await admitted.release()
+    return json(502, { error: failed.error })
+  }
+  const themes = mergeOwnedAnswers(
+    opts.owned,
+    mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))),
+    { domain: opts.domain },
+  )
+  if (!themes) {
+    await admitted.release()
+    return json(502, { error: 'Couldn’t answer this question set — try again.' })
+  }
+  const includesBranded =
+    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
+  const saved = await saveReport(
+    opts.sb,
+    opts.userId,
+    opts.domain,
+    themes,
+    includesBranded,
+    opts.config,
+    planName,
+    true,
+  )
+  if (!saved) {
+    await admitted.release()
+    return json(502, { error: 'Could not save this full report.' })
+  }
+  const body = {
+    ok: true,
+    report: 'full',
+    domain: opts.domain,
+    model: MODEL,
+    includesBranded,
+    themes,
+    check: { id: saved.id, domain: opts.domain, createdAt: saved.createdAt },
+  }
+  const text = JSON.stringify(body)
+  if (text.includes(opts.apiKey) || text.includes(opts.sb.serviceRole)) {
+    return json(500, { error: 'Could not build the full report.' })
+  }
+  return new Response(text, {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  })
+}
+
 export async function onRequest(context: { request: Request; env?: ReportEnv }): Promise<Response> {
   const { request } = context
   if (request.method !== 'POST') return json(405, { error: 'Use POST' })
@@ -389,6 +544,26 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
 
   const apiKey = typeof context.env?.OPENAI_API_KEY === 'string' ? context.env.OPENAI_API_KEY.trim() : ''
   if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
+
+  if (incoming.owned !== undefined) {
+    if (countOwnedQuestions(incoming.owned) > OWNED_QUESTION_MAX) {
+      return json(400, { error: `This check can hold ${OWNED_QUESTION_MAX} questions.` })
+    }
+    const owned = cleanOwnedQuestions(incoming.owned, domain, OWNED_QUESTION_MAX).map((item) => ({
+      ...item,
+      question: scrubSecret(item.question, apiKey),
+    }))
+    if (owned.length < 1) return json(400, { error: 'Keep at least one question.' })
+    return answerOwnedReport({
+      sb,
+      userId: authed.user.id,
+      domain,
+      owned,
+      apiKey,
+      config,
+      request,
+    })
+  }
 
   await ensureProfile(sb, authed.user.id).catch(() => {})
   const planName = await readPlan(sb, authed.user.id, config)

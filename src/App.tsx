@@ -27,13 +27,22 @@ import {
   type AuthSession,
 } from './authClient'
 import { FullReportSection } from './FullReportSection'
-import { fetchFullReport, type FullReportFail, type FullReportOk } from './fullReportClient'
-import { fullReportFromStored, type FullReport, type RunPin } from './fullReport'
+import { fetchFullReport, fetchOwnedReport, type FullReportFail, type FullReportOk } from './fullReportClient'
+import { THEME_CATALOG, fullReportFromStored, type FullReport, type RunPin } from './fullReport'
+import {
+  OWNED_QUESTION_MAX,
+  SHORT_OWNED_MAX,
+  applyOwnedToBeat,
+  applyOwnedToReport,
+  cleanOwnedQuestions,
+  ownedFromReport,
+  type OwnedQuestion,
+} from './ownedQuestions'
 import { MentionMark } from './MentionMark'
-import type { AnswerFact } from './mentionFacts'
+import { landThemeId, type AnswerFact, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
 import { startCheckout } from './billingClient'
-import { listChecks, saveCheck } from './checksClient'
+import { listChecks, saveCheck, updateCheckQuestions } from './checksClient'
 import {
   draftFromScreen,
   screenFromSaved,
@@ -301,6 +310,13 @@ export default function App() {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [ranPins, setRanPins] = useState<string | null>(null)
+  const [owning, setOwning] = useState(false)
+  const [ownedSet, setOwnedSet] = useState(false)
+  const [questionsDirty, setQuestionsDirty] = useState(false)
+  const [questionsSaving, setQuestionsSaving] = useState(false)
+  const [questionsNote, setQuestionsNote] = useState('')
+  const [addText, setAddText] = useState('')
+  const [addThemeId, setAddThemeId] = useState<ThemeId>('problems')
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -520,6 +536,11 @@ export default function App() {
     setEditingKey(null)
     setEditText('')
     setRanPins(null)
+    setOwning(false)
+    setOwnedSet(false)
+    setQuestionsDirty(false)
+    setQuestionsNote('')
+    setAddText('')
     setActiveMode('unbranded')
     digState.current = 'idle'
     setDigStatus('idle')
@@ -568,6 +589,9 @@ export default function App() {
     setActiveMode('branded')
     if (!force && digState.current === 'ready' && screen.branded?.questionsGenerated) return
     if (!force && digState.current === 'loading') return
+    setOwning(false)
+    setOwnedSet(false)
+    setQuestionsDirty(false)
     const domain = screen.domain
     const req = ++digReq.current
     digState.current = 'loading'
@@ -648,6 +672,11 @@ export default function App() {
     setEditingKey(null)
     setEditText('')
     setRanPins(null)
+    setOwning(false)
+    setOwnedSet(false)
+    setQuestionsDirty(false)
+    setQuestionsNote('')
+    setAddText('')
     setEmailPurpose('save')
   }
 
@@ -830,6 +859,12 @@ export default function App() {
       setPins([])
       setEditingKey(null)
       setRanPins(null)
+      setOwning(true)
+      setOwnedSet(true)
+      setQuestionsDirty(false)
+      setQuestionsNote('')
+      setAddText('')
+      setAddThemeId(report.themes[0]?.id ?? 'problems')
       setSaveState('saved')
       setSaveMessage('Saved.')
       setPhase('result')
@@ -842,6 +877,12 @@ export default function App() {
     setEditingKey(null)
     setRanPins(null)
     applySaved(check)
+    setOwning(true)
+    setOwnedSet(check.result.questionSetOwned === true)
+    setQuestionsDirty(false)
+    setQuestionsNote('')
+    setAddText('')
+    setAddThemeId('problems')
     setSaveState('saved')
     setSaveMessage('Saved.')
     setPhase('result')
@@ -885,8 +926,309 @@ export default function App() {
     setHistory(null)
   }
 
-  function onRunAgain() {
+  function activeBeat() {
+    if (!screen) return null
+    return activeMode === 'branded' && screen.branded ? screen.branded : screen.unbranded
+  }
+
+  function ownedPayload(): OwnedQuestion[] {
+    if (fullReport) return ownedFromReport(fullReport)
+    const beat = activeBeat()
+    if (!beat) return []
+    return beat.questions.map((question, index) => ({
+      question,
+      themeId: beat.facts?.[index]?.id || landThemeId(question, beat.mode),
+    }))
+  }
+
+  function applyQuestionSave(check: SavedCheck) {
+    const report = fullReportFromStored(check.result)
+    setSavedId(check.id)
+    setOwnedSet(true)
+    setQuestionsDirty(false)
+    if (report) {
+      setFullReport(report)
+      return
+    }
+    const reopened = screenFromSaved(check)
+    setScreen({
+      domain: reopened.domain,
+      homepageSupport: reopened.homepageSupport,
+      unbranded: reopened.unbranded,
+      branded: reopened.branded,
+      omittedQuestions: reopened.omittedQuestions,
+      omittedAnswers: reopened.omittedAnswers,
+      omittedWhoInstead: reopened.omittedWhoInstead,
+    })
+    setActiveMode(reopened.activeMode)
+  }
+
+  async function saveQuestions(): Promise<boolean> {
+    if (!session || !savedId) {
+      setQuestionsNote('Sign in to save these questions.')
+      return false
+    }
+    const questions = ownedPayload()
+    if (questions.length < 1) {
+      setQuestionsNote('Keep at least one question.')
+      return false
+    }
+    setQuestionsSaving(true)
+    setQuestionsNote('')
+    const saved = await updateCheckQuestions(
+      session.accessToken,
+      savedId,
+      questions,
+      fullReport ? undefined : activeBeat()?.mode,
+    )
+    setQuestionsSaving(false)
+    if (!saved.ok) {
+      setQuestionsNote(saved.error)
+      return false
+    }
+    applyQuestionSave(saved.check)
+    setQuestionsNote('Questions saved.')
+    return true
+  }
+
+  function markQuestions(next: () => void) {
+    next()
+    setQuestionsDirty(true)
+    setOwnedSet(true)
+    setQuestionsNote('')
+    setEditingKey(null)
+    setEditText('')
+  }
+
+  function onDeleteOwned(themeId: ThemeId, index: number) {
+    if (!fullReport) return
+    const owned = ownedFromReport(fullReport).filter((_item, itemIndex) => {
+      const themeIndex = fullReport.themes.findIndex((entry) => entry.id === themeId)
+      const offset = fullReport.themes
+        .slice(0, Math.max(themeIndex, 0))
+        .reduce((sum, entry) => sum + entry.questions.length, 0)
+      return itemIndex !== offset + index
+    })
+    if (owned.length < 1) return
+    markQuestions(() => setFullReport(applyOwnedToReport(fullReport, owned)))
+  }
+
+  function onRenameOwned(themeId: ThemeId, index: number) {
+    if (!fullReport) return
+    const text = editText.replace(/\s+/g, ' ').trim()
+    if (!text || text.length > 240) return
+    const flat = ownedFromReport(fullReport)
+    const themeIndex = fullReport.themes.findIndex((entry) => entry.id === themeId)
+    const offset = fullReport.themes
+      .slice(0, Math.max(themeIndex, 0))
+      .reduce((sum, entry) => sum + entry.questions.length, 0)
+    const next = flat.map((item, itemIndex) =>
+      itemIndex === offset + index ? { question: text, themeId: item.themeId } : item,
+    )
+    const cleaned = cleanOwnedQuestions(next, fullReport.domain, OWNED_QUESTION_MAX)
+    if (cleaned.length < next.length) {
+      setQuestionsNote('That question is already in this set.')
+      return
+    }
+    markQuestions(() => setFullReport(applyOwnedToReport(fullReport, cleaned)))
+  }
+
+  function onAddOwned() {
+    if (!fullReport) return
+    const text = addText.replace(/\s+/g, ' ').trim()
+    if (!text || text.length > 240) return
+    const current = ownedFromReport(fullReport)
+    if (current.length >= OWNED_QUESTION_MAX) return
+    if (current.some((item) => item.question.toLowerCase() === text.toLowerCase())) {
+      setQuestionsNote('That question is already in this set.')
+      return
+    }
+    const cleaned = cleanOwnedQuestions(
+      [...current, { question: text, themeId: addThemeId }],
+      fullReport.domain,
+      OWNED_QUESTION_MAX,
+    )
+    markQuestions(() => {
+      setFullReport(applyOwnedToReport(fullReport, cleaned))
+      setAddText('')
+    })
+  }
+
+  function onDeleteShort(index: number) {
+    if (!screen) return
+    const beat = activeBeat()
+    if (!beat || beat.questions.length < 2) return
+    const owned = beat.questions
+      .map((question, itemIndex) => ({
+        question,
+        themeId: beat.facts?.[itemIndex]?.id || landThemeId(question, beat.mode),
+      }))
+      .filter((_, itemIndex) => itemIndex !== index)
+    const nextBeat = applyOwnedToBeat(beat, cleanOwnedQuestions(owned, screen.domain, SHORT_OWNED_MAX))
+    markQuestions(() => {
+      setScreen((prev) => {
+        if (!prev) return prev
+        return beat.mode === 'branded' ? { ...prev, branded: nextBeat } : { ...prev, unbranded: nextBeat }
+      })
+    })
+  }
+
+  function onRenameShort() {
+    if (!screen || editingKey === null) return
+    const beat = activeBeat()
+    if (!beat) return
+    const index = Number(editingKey.split(':')[1])
+    if (!Number.isInteger(index) || index < 0) return
+    const text = editText.replace(/\s+/g, ' ').trim()
+    if (!text || text.length > 240) return
+    const owned = beat.questions.map((question, itemIndex) => ({
+      question: itemIndex === index ? text : question,
+      themeId: beat.facts?.[itemIndex]?.id || landThemeId(question, beat.mode),
+    }))
+    const cleaned = cleanOwnedQuestions(owned, screen.domain, SHORT_OWNED_MAX)
+    if (cleaned.length < owned.length) {
+      setQuestionsNote('That question is already in this set.')
+      return
+    }
+    const nextBeat = applyOwnedToBeat(beat, cleaned)
+    markQuestions(() => {
+      setScreen((prev) => {
+        if (!prev) return prev
+        return beat.mode === 'branded' ? { ...prev, branded: nextBeat } : { ...prev, unbranded: nextBeat }
+      })
+    })
+  }
+
+  function onAddShort(event: FormEvent) {
+    event.preventDefault()
+    if (!screen) return
+    const beat = activeBeat()
+    if (!beat || beat.questions.length >= SHORT_OWNED_MAX) return
+    const text = addText.replace(/\s+/g, ' ').trim()
+    if (!text || text.length > 240) return
+    if (beat.questions.some((question) => question.toLowerCase() === text.toLowerCase())) {
+      setQuestionsNote('That question is already in this set.')
+      return
+    }
+    const owned = [
+      ...beat.questions.map((question, index) => ({
+        question,
+        themeId: beat.facts?.[index]?.id || landThemeId(question, beat.mode),
+      })),
+      { question: text, themeId: addThemeId },
+    ]
+    const nextBeat = applyOwnedToBeat(beat, cleanOwnedQuestions(owned, screen.domain, SHORT_OWNED_MAX))
+    markQuestions(() => {
+      setScreen((prev) => {
+        if (!prev) return prev
+        return beat.mode === 'branded' ? { ...prev, branded: nextBeat } : { ...prev, unbranded: nextBeat }
+      })
+      setAddText('')
+    })
+  }
+
+  async function runOwnedReport() {
+    if (!session) {
+      setQuestionsNote('Sign in to run this question set.')
+      return
+    }
+    if (!fullReport || busy) return
+    const questions = ownedFromReport(fullReport)
+    if (questions.length < 1) return
+    setBusy(true)
+    setQuestionsNote('')
+    if (savedId) {
+      const saved = await updateCheckQuestions(session.accessToken, savedId, questions)
+      if (!saved.ok) {
+        setBusy(false)
+        setQuestionsNote(saved.error)
+        return
+      }
+      setQuestionsDirty(false)
+      setOwnedSet(true)
+    }
+    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions)
+    setBusy(false)
+    if (result.ok) {
+      setOwnedSet(true)
+      setQuestionsDirty(false)
+      if (result.checkId) setSavedId(result.checkId)
+    }
+    applyReportResult(result)
+  }
+
+  async function runOwnedShort() {
+    if (!session) {
+      setQuestionsNote('Sign in to run this question set.')
+      return
+    }
     if (!screen || busy) return
+    const beat = activeBeat()
+    if (!beat || beat.questions.length < 1) return
+    const questions = beat.questions
+    setBusy(true)
+    setQuestionsNote('')
+    if (savedId) {
+      const saved = await updateCheckQuestions(session.accessToken, savedId, ownedPayload(), beat.mode)
+      if (!saved.ok) {
+        setBusy(false)
+        setQuestionsNote(saved.error)
+        return
+      }
+      setQuestionsDirty(false)
+      setOwnedSet(true)
+    }
+    const visibility = await fetchVisibility(screen.domain, beat.mode, session.accessToken, questions)
+    if (!visibility.ok) {
+      if (visibility.code === 'quota_exceeded') {
+        setQuotaWall(true)
+        setQuotaPlan(visibility.plan === 'paid' ? 'paid' : 'free')
+      }
+      setBusy(false)
+      setQuestionsNote(visibility.ok ? '' : visibility.error)
+      return
+    }
+    setQuotaWall(false)
+    const homepage = await liveAnsweredByYou(screen.domain)
+    const homepageSupport = homepage.ok
+      ? `Supporting homepage fetch: ${verdictWord(homepage.answered)}. Page content only — not the model read.`
+      : screen.homepageSupport
+    const next = liveScreen(
+      screen.domain,
+      homepageSupport,
+      beat.mode === 'unbranded' ? unbrandedBeat(screen.domain, visibility) : screen.unbranded,
+      beat.mode === 'branded' ? brandedBeat(visibility) : screen.branded,
+    )
+    setScreen(next)
+    setPhase('result')
+    setBusy(false)
+    setOwnedSet(true)
+    setQuestionsDirty(false)
+    const draft = draftFromScreen(
+      screen.domain,
+      beat.mode,
+      next.unbranded,
+      next.branded,
+      homepageSupport,
+      config.storeHomepageSnippet ? pageText : null,
+      true,
+    )
+    void persist(session, draft)
+  }
+
+  function onRunAgain() {
+    if (busy) return
+    const savedReport =
+      owning && fullReport && screen && screen.unbranded.questions.length === 0 && !screen.branded?.questions.length
+    if (savedReport) {
+      void runOwnedReport()
+      return
+    }
+    if (!screen) return
+    if (owning && !fullReport && (ownedSet || questionsDirty)) {
+      void runOwnedShort()
+      return
+    }
     if (activeMode === 'branded') {
       void showBranded(true, { autosave: true })
       return
@@ -907,6 +1249,30 @@ export default function App() {
     fullReport && screen && screen.unbranded.questions.length === 0 && !screen.branded?.questions.length,
   )
   const pinRunMatches = pinSignature() === (ranPins ?? '')
+  const ownedCount = fullReport ? ownedFromReport(fullReport).length : (activeBeat()?.questions.length ?? 0)
+  const questionToolsBusy = busy || questionsSaving
+  const reportEditor =
+    owning && fullReport
+      ? {
+          disabled: questionToolsBusy,
+          editingKey,
+          editText,
+          addText,
+          addThemeId,
+          atCap: ownedCount >= OWNED_QUESTION_MAX,
+          canDelete: ownedCount > 1,
+          onEdit: (key: string, question: string) => {
+            setEditingKey(key)
+            setEditText(question)
+          },
+          onEditText: setEditText,
+          onRename: onRenameOwned,
+          onDelete: onDeleteOwned,
+          onAddText: setAddText,
+          onAddTheme: setAddThemeId,
+          onAdd: onAddOwned,
+        }
+      : undefined
 
   function onPin(item: PinItem) {
     setPins((prev) => {
@@ -1111,7 +1477,24 @@ export default function App() {
               <span className="badge live">Generated · OpenAI</span>
             </div>
             <p className="why">{config.copy.fullReportSub}</p>
-            <FullReportSection report={fullReport} copy={config.copy} themesOnly />
+            {owning ? <p className="why">{config.copy.ownedQuestionsHint}</p> : null}
+            <FullReportSection report={fullReport} copy={config.copy} themesOnly editor={reportEditor} />
+            {owning ? (
+              <div className="save-row">
+                <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
+                  {busy ? 'Generating…' : config.copy.runAgainCta}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void saveQuestions()}
+                  disabled={questionToolsBusy || !questionsDirty}
+                >
+                  {questionsSaving ? 'Saving…' : config.copy.saveQuestionsCta}
+                </button>
+              </div>
+            ) : null}
+            {questionsNote ? <p className={questionsNote === 'Questions saved.' ? 'status' : 'err'}>{questionsNote}</p> : null}
           </article>
         </main>
       ) : screen ? (
@@ -1238,26 +1621,100 @@ export default function App() {
                             <p className="answer-body">{answer || STORY.answerMiss}</p>
                           </div>
                         )}
-                        <QuestionPinControls
-                          rowKey={rowKey}
-                          question={shown}
-                          framing={beat.mode}
-                          pins={pins}
-                          max={config.pinnedQuestionMax}
-                          editing={editingKey === rowKey}
-                          editText={editText}
-                          copy={config.copy}
-                          disabled={busy}
-                          onPin={onPin}
-                          onUnpin={onUnpin}
-                          onEdit={onEditPin}
-                          onEditText={setEditText}
-                          onSave={onSavePin}
-                        />
+                        {owning ? (
+                          editingKey === `short:${i}` ? (
+                            <div className="pin-edit">
+                              <input
+                                aria-label="Question"
+                                value={editText}
+                                maxLength={240}
+                                disabled={questionToolsBusy}
+                                onChange={(event) => setEditText(event.target.value)}
+                              />
+                              <button
+                                type="button"
+                                disabled={questionToolsBusy || !editText.replace(/\s+/g, ' ').trim()}
+                                onClick={onRenameShort}
+                              >
+                                {config.copy.saveEditedQuestionCta}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="q-tools">
+                              <button
+                                type="button"
+                                disabled={questionToolsBusy}
+                                onClick={() => {
+                                  setEditingKey(`short:${i}`)
+                                  setEditText(q)
+                                }}
+                              >
+                                {config.copy.editQuestionCta}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={questionToolsBusy || beat.questions.length < 2}
+                                onClick={() => onDeleteShort(i)}
+                              >
+                                {config.copy.deleteQuestionCta}
+                              </button>
+                            </div>
+                          )
+                        ) : (
+                          <QuestionPinControls
+                            rowKey={rowKey}
+                            question={shown}
+                            framing={beat.mode}
+                            pins={pins}
+                            max={config.pinnedQuestionMax}
+                            editing={editingKey === rowKey}
+                            editText={editText}
+                            copy={config.copy}
+                            disabled={busy}
+                            onPin={onPin}
+                            onUnpin={onUnpin}
+                            onEdit={onEditPin}
+                            onEditText={setEditText}
+                            onSave={onSavePin}
+                          />
+                        )}
                       </li>
                     )
                   })}
                 </ul>
+              ) : null}
+
+              {owning && !brandedLoading && beat && !screen.omittedQuestions ? (
+                <form className="owned-add" onSubmit={onAddShort}>
+                  <label>
+                    Theme
+                    <select
+                      aria-label="Theme"
+                      value={addThemeId}
+                      disabled={questionToolsBusy || beat.questions.length >= SHORT_OWNED_MAX}
+                      onChange={(event) => setAddThemeId(event.target.value as ThemeId)}
+                    >
+                      {THEME_CATALOG.map((theme) => (
+                        <option key={theme.id} value={theme.id}>
+                          {theme.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <input
+                    aria-label="New question"
+                    value={addText}
+                    maxLength={240}
+                    disabled={questionToolsBusy || beat.questions.length >= SHORT_OWNED_MAX}
+                    onChange={(event) => setAddText(event.target.value)}
+                  />
+                  <button
+                    type="submit"
+                    disabled={questionToolsBusy || beat.questions.length >= SHORT_OWNED_MAX || !addText.trim()}
+                  >
+                    {config.copy.addQuestionCta}
+                  </button>
+                </form>
               ) : null}
 
               {land ? (
@@ -1331,14 +1788,24 @@ export default function App() {
             ) : null}
 
             <div className={`save-row${emphasizeSave && !savedId ? ' nudge' : ''}`}>
-              <button type="button" onClick={onRunAgain} disabled={busy}>
+              <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                 {busy ? 'Generating…' : config.copy.runAgainCta}
               </button>
+              {owning ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void saveQuestions()}
+                  disabled={questionToolsBusy || !questionsDirty}
+                >
+                  {questionsSaving ? 'Saving…' : config.copy.saveQuestionsCta}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="secondary"
                 onClick={() => void onSave()}
-                disabled={busy || saveState === 'saving'}
+                disabled={questionToolsBusy || saveState === 'saving'}
               >
                 {saveState === 'saving' ? 'Saving…' : config.copy.saveCta}
               </button>
@@ -1363,9 +1830,18 @@ export default function App() {
                 hint=""
               />
             ) : null}
+            {owning && questionsNote ? (
+              <p className={questionsNote === 'Questions saved.' ? 'status' : 'err'}>{questionsNote}</p>
+            ) : null}
             <div className="full-report-door">
-              <p className="why">{config.copy.editQuestionsHint}</p>
-              <PinnedRun pins={pins} copy={config.copy} disabled={busy} onUnpin={onUnpin} />
+              {owning ? (
+                <p className="why">{config.copy.ownedQuestionsHint}</p>
+              ) : (
+                <>
+                  <p className="why">{config.copy.editQuestionsHint}</p>
+                  <PinnedRun pins={pins} copy={config.copy} disabled={busy} onUnpin={onUnpin} />
+                </>
+              )}
               <button
                 type="button"
                 className="ask"

@@ -20,7 +20,9 @@ There is no blended visibility percentage. Every question is labeled Unbranded o
 
 Guest land/dig is unchanged: unbranded category questions first, branded when you ask. No account.
 
-**Save this check** (after the result) sends a Supabase magic link. When you open the link, Grank stores the check and opens **Your checks**. Open one to see the prior land/dig result, including **Generated · OpenAI** and **Unbranded** / **Branded**. The saved blob keeps the unbranded beat and the branded dig when it was loaded. **Run again** calls `/api/visibility` for the active mode and `/api/homepage`, then inserts a new check and trims history to `maxSavedChecksPerUser`.
+**Save this check** (after the result) sends a Supabase magic link. When you open the link, Grank stores the check and opens **Your checks**. Open one to see the prior land/dig result, including **Generated · OpenAI** and **Unbranded** / **Branded**. The saved blob keeps the unbranded beat and the branded dig when it was loaded. **Run again** on a fresh result calls `/api/visibility` for the active mode and `/api/homepage`, then inserts a new check and trims history to `maxSavedChecksPerUser`.
+
+On a saved check, **Add question**, **Delete**, and **Save questions** edit that check’s question list (a full report keeps the theme id). Refresh still shows the set. **Run again** then answers those questions instead of generating a new roster. Mention chips and **Generated · OpenAI** stay on the new run. Guest land/dig is unchanged.
 
 Button labels and the history title come from `productConfig.copy` (`saveCta`, `runAgainCta`, `historyTitle`). Limits and what gets stored come from the same knobs (`storeQuestions`, `storeAnswers`, `storeWhoInstead`, `storeHomepageSnippet`, `maxSavedChecksPerUser`, `checkRetentionDays`, `freeChecksBeforeSave`, `saveRequiresAuth`). While `paywallEnabled` is false, checks are not quota-blocked and `/api/billing` does not call Stripe. See **Free quota and one paid plan** below.
 

@@ -99,6 +99,70 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('<strong>Height</strong>'), false)
       assert.equal(html.includes('Couldn’t get an answer.'), false)
       assert.equal((html.match(/report-q-toggle/g) || []).length, 5)
+      assert.equal(html.includes('Add question'), false)
+      assert.equal(html.includes('>Delete<'), false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('shows add and delete only when the saved check is being edited', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule('/src/FullReportSection.tsx')) as typeof import('../src/FullReportSection.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule('/src/config/productConfig.ts')) as typeof import('../src/config/productConfig.ts')
+      const html = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          themesOnly: true,
+          editor: {
+            editingKey: null,
+            editText: '',
+            addText: '',
+            addThemeId: 'problems',
+            atCap: false,
+            canDelete: true,
+            onEdit: () => {},
+            onEditText: () => {},
+            onRename: () => {},
+            onDelete: () => {},
+            onAddText: () => {},
+            onAddTheme: () => {},
+            onAdd: () => {},
+          },
+          report: {
+            domain: 'linear.app',
+            model: 'gpt-4o-mini',
+            includesBranded: true,
+            themes: [
+              {
+                id: 'problems',
+                title: 'Problems you solve',
+                questions: [
+                  {
+                    question: 'What should a team use to track issues?',
+                    answer: 'Jira shows up.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Jira'],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      )
+      assert.match(html, />Delete</)
+      assert.match(html, />Add question</)
+      assert.match(html, />Edit</)
+      assert.match(html, /Generated · OpenAI/)
+      assert.match(html, />Not mentioned</)
+      assert.equal(html.includes('Jira shows up.'), false)
     } finally {
       await server.close()
     }

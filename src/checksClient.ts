@@ -89,6 +89,33 @@ export async function saveCheck(accessToken: string, draft: CheckDraft): Promise
   return parsed
 }
 
+export async function updateCheckQuestions(
+  accessToken: string,
+  id: string,
+  questions: { question: string; themeId: string }[],
+  mode?: 'unbranded' | 'branded',
+): Promise<SaveOk | Fail> {
+  let res: Response
+  try {
+    res = await fetch('/api/checks', {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mode ? { id, questions, mode } : { id, questions }),
+    })
+  } catch {
+    return { ok: false, error: 'Could not save these questions. Try again.' }
+  }
+  const parsed = await interpret(res)
+  if (parsed === 'html') return { ok: false, error: SAVE_UNAVAILABLE }
+  if (!parsed.ok) return parsed
+  if (!('check' in parsed)) return { ok: false, error: 'Save returned an unusable result.' }
+  return parsed
+}
+
 export async function listChecks(accessToken: string): Promise<ListOk | Fail> {
   let res: Response
   try {

@@ -107,12 +107,14 @@ export function normalizeAnswer(value: unknown): string {
 export function readQuestionAnswers(
   questionsField: unknown,
   answersField: unknown,
+  max = 5,
 ): { questions: string[]; answers: string[] } {
   if (!Array.isArray(questionsField)) return { questions: [], answers: [] }
+  const cap = Math.min(8, Math.max(1, Math.floor(max)))
   const parallel = Array.isArray(answersField) ? answersField : []
   const questions: string[] = []
   const answers: string[] = []
-  for (let i = 0; i < questionsField.length && questions.length < 5; i++) {
+  for (let i = 0; i < questionsField.length && questions.length < cap; i++) {
     const item = questionsField[i]
     let question = ''
     let answer: unknown = parallel[i]
@@ -151,7 +153,7 @@ export function scrubSecret(value: string, secret: string): string {
   return out.replace(/\s+/g, ' ').trim()
 }
 
-export function parseVisibilityContent(raw: string, domain?: string): ParsedVisibility | null {
+export function parseVisibilityContent(raw: string, domain?: string, minQuestions = 3): ParsedVisibility | null {
   let text = raw.trim()
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text)
   if (fence) text = fence[1].trim()
@@ -166,8 +168,9 @@ export function parseVisibilityContent(raw: string, domain?: string): ParsedVisi
   }
   if (!data || typeof data !== 'object') return null
   const rec = data as Record<string, unknown>
-  const { questions, answers } = readQuestionAnswers(rec.questions, rec.answers)
-  if (questions.length < 3) return null
+  const cap = minQuestions < 3 ? 8 : 5
+  const { questions, answers } = readQuestionAnswers(rec.questions, rec.answers, cap)
+  if (questions.length < minQuestions) return null
   const answered = rec.answered
   if (answered !== 'yes' && answered !== 'partial' && answered !== 'no') return null
   if (typeof rec.why !== 'string') return null
@@ -183,9 +186,32 @@ export function parseVisibilityContent(raw: string, domain?: string): ParsedVisi
   }
 }
 
+function cleanOwnedStrings(value: unknown): { questions: string[]; overflow: boolean } | null {
+  if (!Array.isArray(value)) return null
+  const seen = new Set<string>()
+  const questions: string[] = []
+  let overflow = false
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const question = item.replace(/\s+/g, ' ').trim()
+    if (!question || question.length > 240) continue
+    const key = question.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (questions.length >= 8) {
+      overflow = true
+      break
+    }
+    questions.push(question)
+  }
+  return { questions, overflow }
+}
+
 async function fieldsFromRequest(request: Request): Promise<{
   domain: string | null
   mode: VisibilityMode | 'invalid'
+  questions: string[] | null
+  questionsOverflow: boolean
 }> {
   const url = new URL(request.url)
   const queryDomain = url.searchParams.get('domain')
@@ -195,17 +221,21 @@ async function fieldsFromRequest(request: Request): Promise<{
 
   let bodyDomain: unknown
   let bodyMode: VisibilityMode | 'invalid' | 'absent' = 'absent'
+  let bodyQuestions: string[] | null = null
+  let questionsOverflow = false
   const domainMissing = queryDomain === null || queryDomain === ''
-  const modeMissing = queryMode === 'absent'
-  if (request.method === 'POST' && (domainMissing || modeMissing)) {
+  if (request.method === 'POST') {
     const type = request.headers.get('content-type') || ''
     if (type.includes('application/json')) {
       try {
-        const body = (await request.json()) as { domain?: unknown; mode?: unknown }
+        const body = (await request.json()) as { domain?: unknown; mode?: unknown; questions?: unknown }
         bodyDomain = body?.domain
         bodyMode = parseVisibilityMode(body?.mode)
+        const cleaned = cleanOwnedStrings(body?.questions)
+        bodyQuestions = cleaned ? cleaned.questions : null
+        questionsOverflow = cleaned?.overflow === true
       } catch {
-        if (domainMissing) return { domain: null, mode: 'unbranded' }
+        if (domainMissing) return { domain: null, mode: 'unbranded', questions: null, questionsOverflow: false }
       }
     }
   }
@@ -214,6 +244,8 @@ async function fieldsFromRequest(request: Request): Promise<{
   return {
     domain: canonicalHostname(domainMissing ? bodyDomain : queryDomain),
     mode: modeSource === 'absent' ? 'unbranded' : modeSource,
+    questions: bodyQuestions,
+    questionsOverflow,
   }
 }
 
@@ -250,15 +282,61 @@ function systemPromptFor(mode: VisibilityMode): string {
   return mode === 'branded' ? BRANDED_SYSTEM_PROMPT : UNBRANDED_SYSTEM_PROMPT
 }
 
+function alignOwned(
+  owned: string[],
+  parsed: ParsedVisibility,
+): { answers: string[]; mentions: unknown[] } {
+  const byText = new Map<string, number>()
+  parsed.questions.forEach((question, index) => byText.set(question.toLowerCase(), index))
+  const sameCount = parsed.questions.length === owned.length
+  const indexFor = (question: string, index: number) => {
+    const at = byText.get(question.toLowerCase())
+    if (at !== undefined) return at
+    return sameCount ? index : -1
+  }
+  return {
+    answers: owned.map((question, index) => {
+      const at = indexFor(question, index)
+      return at >= 0 ? parsed.answers[at] || '' : ''
+    }),
+    mentions: owned.map((question, index) => {
+      const at = indexFor(question, index)
+      return at >= 0 ? parsed.mentions[at] : undefined
+    }),
+  }
+}
+
+function ownedVisibilityPrompt(
+  domain: string,
+  mode: VisibilityMode,
+  questions: string[],
+  excerpt: string | null,
+): string {
+  const lines = [
+    `Mode: ${mode}`,
+    `Brand domain: ${domain}`,
+    'Answer these questions exactly. Do not add, drop, or rewrite them. Return the same question strings in the same order.',
+  ]
+  if (excerpt) lines.push(`Homepage excerpt (may be incomplete):\n${excerpt}`)
+  questions.forEach((question, index) => lines.push(`${index + 1}. ${question}`))
+  if (mode === 'branded') {
+    lines.push('Return answers aligned 1:1 with these questions. Do not return whoInstead.')
+  } else {
+    lines.push('Return whoInstead and mentions aligned to these questions. Do not invent a new question list.')
+  }
+  return lines.join('\n')
+}
+
 async function completeVisibility(
   apiKey: string,
   domain: string,
   excerpt: string | null,
   mode: VisibilityMode,
+  owned: string[] | null = null,
 ): Promise<Response> {
   const lines = [`Mode: ${mode}`, `Brand domain: ${domain}`]
   if (excerpt) lines.push(`Homepage excerpt (may be incomplete):\n${excerpt}`)
-  const user = lines.join('\n')
+  const user = owned && owned.length > 0 ? ownedVisibilityPrompt(domain, mode, owned, excerpt) : lines.join('\n')
 
   let res: Response
   try {
@@ -272,7 +350,7 @@ async function completeVisibility(
       body: JSON.stringify({
         model: MODEL,
         temperature: 0.2,
-        max_tokens: mode === 'branded' ? 1400 : 600,
+        max_tokens: owned && owned.length > 0 ? Math.min(2200, 400 + owned.length * 180) : mode === 'branded' ? 1400 : 600,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: systemPromptFor(mode) },
@@ -308,19 +386,24 @@ async function completeVisibility(
     return json(502, { error: 'OpenAI request failed: unreadable response' })
   }
 
-  const parsed = parseVisibilityContent(scrubSecret(content, apiKey), domain)
+  const parsed = parseVisibilityContent(scrubSecret(content, apiKey), domain, owned && owned.length > 0 ? 1 : 3)
   if (!parsed) {
     return json(502, { error: 'OpenAI request failed: model output was not usable JSON' })
   }
 
+  const useOwned = Boolean(owned && owned.length > 0)
+  const aligned = useOwned && owned ? alignOwned(owned, parsed) : null
+  const questions = useOwned && owned ? owned : parsed.questions
+  const answers = aligned ? aligned.answers : parsed.answers
+  const mentions = aligned ? aligned.mentions : parsed.mentions
   const facts = factsFromVisibility({
     domain,
     mode,
-    questions: parsed.questions,
-    answers: parsed.answers,
+    questions,
+    answers,
     answered: parsed.answered,
     whoInstead: parsed.whoInstead,
-    mentions: parsed.mentions,
+    mentions,
   }).map((fact) => ({
     ...fact,
     question: scrubSecret(fact.question, apiKey),
@@ -331,14 +414,14 @@ async function completeVisibility(
     domain,
     model: MODEL,
     mode,
-    questions: parsed.questions,
+    questions,
     answered: parsed.answered,
     why: parsed.why,
     facts,
   }
   // Who-instead stays on the unbranded beat. Answers stay on the branded beat.
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
-  if (mode === 'branded') body.answers = parsed.answers
+  if (mode === 'branded') body.answers = answers
   return json(200, body)
 }
 
@@ -351,9 +434,11 @@ export async function onRequest(context: {
     return json(405, { error: 'Use GET or POST' })
   }
 
-  const { domain, mode } = await fieldsFromRequest(request)
+  const { domain, mode, questions, questionsOverflow } = await fieldsFromRequest(request)
   if (!domain) return json(400, { error: 'domain must be a simple public hostname' })
   if (mode === 'invalid') return json(400, { error: 'mode must be unbranded or branded' })
+  if (questionsOverflow) return json(400, { error: 'This check can hold 8 questions.' })
+  if (questions && questions.length === 0) return json(400, { error: 'Keep at least one question.' })
 
   const secret = context.env?.OPENAI_API_KEY
   const apiKey = typeof secret === 'string' ? secret.trim() : ''
@@ -368,7 +453,7 @@ export async function onRequest(context: {
 
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
-  const result = await completeVisibility(apiKey, domain, safeExcerpt, mode)
+  const result = await completeVisibility(apiKey, domain, safeExcerpt, mode, questions)
   if (result.status !== 200) {
     try {
       await gate.release()

@@ -68,6 +68,10 @@ describe('productConfigFromEnv', () => {
       'Pin or tweak a few questions before you generate. We’ll use these for this run only — not a saved prompt library.',
     )
     assert.equal(config.copy.regenerateWithPinsCta, 'Run with these questions')
+    assert.equal(config.copy.addQuestionCta, 'Add question')
+    assert.equal(config.copy.deleteQuestionCta, 'Delete')
+    assert.equal(config.copy.saveQuestionsCta, 'Save questions')
+    assert.match(config.copy.ownedQuestionsHint, /Save them, then run again/)
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }
