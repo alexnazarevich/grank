@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT, onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
 import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
@@ -834,7 +835,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
     assert.equal(
       STORY.landHelper,
-      'Category questions — no brand name required. This is the usual first ask.',
+      "Questions are generated based on your brand's website",
     )
     assert.equal(STORY.landBadge, 'Unbranded')
     assert.equal(STORY.ask, 'Ask about your brand')
@@ -862,10 +863,14 @@ describe('unbranded samples and story copy', () => {
       STORY.homeSub,
       'See what LLMs say when your audience asks about the problems you solve.',
     )
-    assert.equal(
-      STORY.proof,
-      'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
-    )
+    const removed =
+      'Every question is labeled Unbranded or Branded. We don’t mix them into one score.'
+    assert.equal('proof' in STORY, false)
+    assert.equal(JSON.stringify(STORY).includes(removed), false)
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    assert.equal(app.includes('STORY.proof'), false)
+    assert.equal(app.includes(removed), false)
+    assert.match(app, /land \? STORY\.landHelper : STORY\.digHelper/)
   })
 
   it('locks the homepage story lines', () => {

@@ -1543,7 +1543,6 @@ export default function App() {
                 Branded
               </button>
             </div>
-            <p className="proof in-result">{STORY.proof}</p>
 
             <section className="block beat" aria-busy={brandedLoading}>
               <p className="eyebrow">{land ? STORY.landEyebrow : STORY.digEyebrow}</p>
