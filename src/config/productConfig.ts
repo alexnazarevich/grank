@@ -98,9 +98,9 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
     historyTitle: 'Your checks',
-    upgradeHeadline: 'Continue with a paid plan?',
+    upgradeHeadline: 'Free limit reached',
     upgradeBody:
-      'A paid plan covers more checks, another full report, and saving results. Limits come from settings, not this sentence.',
+      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled OpenAI checks.',
     upgradeCta: 'Upgrade',
     showFullReportCta: 'Show full report',
     fullReportMagicLinkHint: 'Sign in with a magic link to unlock your full report. No password.',

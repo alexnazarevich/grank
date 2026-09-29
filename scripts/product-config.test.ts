@@ -28,11 +28,13 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.saveCta, 'Save this check')
     assert.equal(config.copy.runAgainCta, 'Run again')
     assert.equal(config.copy.historyTitle, 'Your checks')
-    assert.equal(config.copy.upgradeHeadline, 'Continue with a paid plan?')
+    assert.equal(config.copy.upgradeHeadline, 'Free limit reached')
     assert.equal(
       config.copy.upgradeBody,
-      'A paid plan covers more checks, another full report, and saving results. Limits come from settings, not this sentence.',
+      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled OpenAI checks.',
     )
+    assert.equal(config.copy.upgradeHeadline.includes('Need more checks'), false)
+    assert.equal(/\d|\$/.test(config.copy.upgradeHeadline + config.copy.upgradeBody), false)
     assert.equal(config.copy.upgradeCta, 'Upgrade')
     assert.equal(config.fullReportQuestionTarget, 55)
     assert.equal(config.fullReportThemeMin, 3)
