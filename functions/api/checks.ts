@@ -36,6 +36,8 @@ export { SERVER_AUTH_NOT_CONFIGURED }
 
 export const SAVE_REQUIRES_PLAN = 'Saving needs a paid plan.'
 
+const FULL_REPORT_KIND = 'full_report'
+
 type ChecksEnv = Record<string, string | undefined>
 
 async function listIds(sb: ServiceDb, userId: string): Promise<CheckRow[]> {
@@ -67,6 +69,66 @@ async function deleteExpired(sb: ServiceDb, userId: string, cutoffIso: string): 
     method: 'DELETE',
     headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
   })
+}
+
+function quotePostgrest(value: string): string {
+  return `"${value.replace(/"/g, '')}"`
+}
+
+/** Oldest usage times for one kind. Null when the read fails. Missing timestamps fail closed. */
+async function listUsageTimes(
+  sb: ServiceDb,
+  userId: string,
+  kind: string,
+  limit: number,
+  since?: string,
+): Promise<{ created_at: string }[] | null> {
+  const parts = [
+    'select=created_at',
+    'order=created_at.asc,id.asc',
+    `limit=${limit}`,
+    `user_id=eq.${userId}`,
+    `kind=eq.${kind}`,
+  ]
+  if (since) parts.push(`created_at=gte.${encodeURIComponent(quotePostgrest(since))}`)
+  try {
+    const res = await sbFetch(sb, `/rest/v1/usage_events?${parts.join('&')}`, {
+      headers: serviceHeaders(sb.serviceRole),
+    })
+    if (!res.ok) return null
+    const rows = (await res.json()) as { created_at?: unknown }[]
+    if (!Array.isArray(rows)) return null
+    const times: { created_at: string }[] = []
+    for (const row of rows) {
+      if (!row || typeof row.created_at !== 'string') return null
+      times.push({ created_at: row.created_at })
+    }
+    return times
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A free account may save the complimentary full report.
+ * Once that allotment is used, one save of it is allowed; a later save opens the pay gate.
+ * Saves before the complimentary full is used are not this gate.
+ */
+async function furtherFreeSave(
+  sb: ServiceDb,
+  userId: string,
+  config: ProductConfig,
+): Promise<'allow' | 'wall' | 'error'> {
+  const free = config.freeFullReports
+  if (free <= 0) return 'wall'
+  const fulls = await listUsageTimes(sb, userId, FULL_REPORT_KIND, free)
+  if (!fulls) return 'error'
+  if (fulls.length < free) return 'allow'
+  const since = fulls[free - 1].created_at
+  const saves = await listUsageTimes(sb, userId, 'save', free, since)
+  if (!saves) return 'error'
+  if (saves.length >= free) return 'wall'
+  return 'allow'
 }
 
 async function recordSave(sb: ServiceDb, userId: string): Promise<void> {
@@ -158,12 +220,16 @@ async function insertCheck(
   await ensureProfile(sb, userId).catch(() => {})
   const plan = await readPlan(sb, userId, config)
   if (config.paywallEnabled && plan !== 'paid') {
-    return json(402, {
-      ok: false,
-      code: QUOTA_EXCEEDED_CODE,
-      error: SAVE_REQUIRES_PLAN,
-      plan: 'free',
-    })
+    const further = await furtherFreeSave(sb, userId, config)
+    if (further === 'error') return json(503, { error: 'Could not check the save limit.' })
+    if (further === 'wall') {
+      return json(402, {
+        ok: false,
+        code: QUOTA_EXCEEDED_CODE,
+        error: SAVE_REQUIRES_PLAN,
+        plan: 'free',
+      })
+    }
   }
   const anon = anonKeyFromRequest(request)
   if (config.paywallEnabled && anon) {

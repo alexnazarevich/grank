@@ -400,7 +400,51 @@ describe('onRequest /api/checks', () => {
     }
   })
 
-  it('rejects a free save with the upgrade wall and does not insert the check', async () => {
+  it('does not wall a free save before the complimentary full report is used', async () => {
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method || 'GET'
+      const body = typeof init?.body === 'string' ? init.body : ''
+      if (url.endsWith('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles') && method === 'GET') {
+        return new Response(JSON.stringify([{ plan: 'free' }]), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles')) return new Response('', { status: 201 })
+      if (method === 'GET' && url.includes('kind=eq.full_report')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (method === 'POST' && url.endsWith('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: NEW_ID, created_at: '2026-09-26T01:00:00.000Z' }]), { status: 201 })
+      }
+      if (method === 'GET' && url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: NEW_ID, created_at: '2026-09-26T01:00:00.000Z' }]), { status: 200 })
+      }
+      if (method === 'POST' && url.includes('/rest/v1/usage_events')) {
+        assert.match(body, /"kind":"save"/)
+        return new Response('', { status: 201 })
+      }
+      return new Response('unexpected ' + method + ' ' + url, { status: 500 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/checks', {
+          method: 'POST',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify(DRAFT),
+        }),
+        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_UNIT: 'checks' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('saves the complimentary full report for a free account', async () => {
     const calls: { url: string; method: string; body: string }[] = []
     const prev = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -412,14 +456,71 @@ describe('onRequest /api/checks', () => {
         return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
       }
       if (url.includes('/rest/v1/profiles') && method === 'GET') {
-        return new Response(JSON.stringify([{ plan: 'free' }]), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
+        return new Response(JSON.stringify([{ plan: 'free' }]), { status: 200 })
       }
       if (url.includes('/rest/v1/profiles')) return new Response('', { status: 201 })
-      if (url.includes('/rest/v1/usage_events') || url.includes('/rest/v1/checks')) {
-        return new Response('free save must not be recorded', { status: 500 })
+      if (method === 'GET' && url.includes('kind=eq.full_report')) {
+        return new Response(JSON.stringify([{ created_at: '2026-09-26T00:00:00.000Z' }]), { status: 200 })
+      }
+      if (method === 'GET' && url.includes('kind=eq.save')) {
+        assert.match(url, /created_at=gte\./)
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (method === 'POST' && url.endsWith('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: NEW_ID, created_at: '2026-09-26T01:00:00.000Z' }]), { status: 201 })
+      }
+      if (method === 'GET' && url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: NEW_ID, created_at: '2026-09-26T01:00:00.000Z' }]), { status: 200 })
+      }
+      if (method === 'POST' && url.includes('/rest/v1/usage_events')) {
+        assert.match(body, /"kind":"save"/)
+        return new Response('', { status: 201 })
+      }
+      return new Response('unexpected ' + method + ' ' + url, { status: 500 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/checks', {
+          method: 'POST',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify(DRAFT),
+        }),
+        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_AMOUNT: '0', FREE_QUOTA_UNIT: 'checks' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      const body = JSON.parse(text) as { ok?: boolean; check?: { id?: string } }
+      assert.equal(body.ok, true)
+      assert.equal(body.check?.id, NEW_ID)
+      assert.equal(calls.some((call) => call.body.includes('"kind":"check"')), false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('walls a further free save after the complimentary full report is saved', async () => {
+    const calls: { url: string; method: string; body: string }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method || 'GET'
+      const body = typeof init?.body === 'string' ? init.body : ''
+      calls.push({ url, method, body })
+      if (url.endsWith('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles') && method === 'GET') {
+        return new Response(JSON.stringify([{ plan: 'free' }]), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles')) return new Response('', { status: 201 })
+      if (method === 'GET' && url.includes('kind=eq.full_report')) {
+        return new Response(JSON.stringify([{ created_at: '2026-09-26T00:00:00.000Z' }]), { status: 200 })
+      }
+      if (method === 'GET' && url.includes('kind=eq.save')) {
+        return new Response(JSON.stringify([{ created_at: '2026-09-26T01:00:00.000Z' }]), { status: 200 })
+      }
+      if (url.includes('/rest/v1/checks') || (method === 'POST' && url.includes('/rest/v1/usage_events'))) {
+        return new Response('further free save must not be recorded', { status: 500 })
       }
       return new Response('unexpected ' + method + ' ' + url, { status: 500 })
     }) as typeof fetch
@@ -440,7 +541,8 @@ describe('onRequest /api/checks', () => {
       assert.equal(body.plan, 'free')
       assert.equal(body.error, SAVE_REQUIRES_PLAN)
       assert.equal(calls.some((call) => call.url.includes('/rest/v1/checks')), false)
-      assert.equal(calls.some((call) => call.url.includes('/rest/v1/usage_events')), false)
+      assert.equal(calls.some((call) => call.method === 'POST' && call.url.includes('/rest/v1/usage_events')), false)
+      assert.equal(calls.some((call) => call.body.includes('"kind":"check"')), false)
     } finally {
       globalThis.fetch = prev
     }
