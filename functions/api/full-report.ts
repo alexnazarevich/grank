@@ -1,8 +1,9 @@
 /**
  * POST /api/full-report { domain }
  * One signed-in full report: themed questions, each labeled Generated · OpenAI.
- * The first freeFullReports runs are complimentary. Later runs use the (9)
- * check quota while the paywall is on. No second report SKU.
+ * The first freeFullReports runs are complimentary. A further run needs a paid
+ * plan, then uses that plan's check quota. Free check quota cannot buy another
+ * full report. No second report SKU.
  * OPENAI_API_KEY and SUPABASE_SERVICE_ROLE_KEY stay on the server.
  */
 
@@ -163,6 +164,15 @@ async function deleteUsage(sb: ServiceDb, id: string): Promise<boolean> {
   }
 }
 
+function complimentaryLimit(config: ProductConfig, upgrade: boolean): Response {
+  return json(upgrade ? 402 : 403, {
+    ok: false,
+    code: FULL_REPORT_LIMIT_CODE,
+    error: config.copy.fullReportLimitHit,
+    ...(upgrade ? { upgrade: true, plan: 'free' } : {}),
+  })
+}
+
 async function meterExtra(opts: {
   sb: ServiceDb
   userId: string
@@ -170,15 +180,9 @@ async function meterExtra(opts: {
   plan: string
   config: ProductConfig
 }): Promise<Reserved> {
-  if (!opts.config.paywallEnabled) {
-    return {
-      ok: false,
-      response: json(403, {
-        ok: false,
-        code: FULL_REPORT_LIMIT_CODE,
-        error: opts.config.copy.fullReportLimitHit,
-      }),
-    }
+  // Free accounts stop here. Leftover freeQuotaAmount must not buy another full report.
+  if (!opts.config.paywallEnabled || opts.plan !== 'paid') {
+    return { ok: false, response: complimentaryLimit(opts.config, opts.config.paywallEnabled) }
   }
   if (opts.anonKey) {
     const linked = await linkAnonUsage(opts.sb, opts.anonKey, opts.userId)
@@ -196,7 +200,7 @@ async function meterExtra(opts: {
   return { ok: true, release: admitted.release }
 }
 
-/** Reserve a free full report, or fall through to the existing check quota. */
+/** Reserve a complimentary full report. Further free runs open the pay gate. */
 async function reserveReport(opts: {
   sb: ServiceDb
   userId: string

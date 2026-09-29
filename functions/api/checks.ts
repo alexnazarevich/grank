@@ -17,7 +17,7 @@ import {
 } from '../../src/ownedQuestions.ts'
 import type { StoredResult } from '../../src/savedResult.ts'
 import { json, scrubSecret } from './http.ts'
-import { admitUsage, anonKeyFromRequest, linkAnonUsage } from './quota.ts'
+import { QUOTA_EXCEEDED_CODE, admitUsage, anonKeyFromRequest, linkAnonUsage } from './quota.ts'
 import { idsBeyondCap, retentionCutoffIso, shapeStoredCheck, type CheckRow } from './shapeCheck.ts'
 import {
   bearer,
@@ -33,6 +33,8 @@ import {
 } from './supabaseAuth.ts'
 
 export { SERVER_AUTH_NOT_CONFIGURED }
+
+export const SAVE_REQUIRES_PLAN = 'Saving needs a paid plan.'
 
 type ChecksEnv = Record<string, string | undefined>
 
@@ -155,6 +157,14 @@ async function insertCheck(
 
   await ensureProfile(sb, userId).catch(() => {})
   const plan = await readPlan(sb, userId, config)
+  if (config.paywallEnabled && plan !== 'paid') {
+    return json(402, {
+      ok: false,
+      code: QUOTA_EXCEEDED_CODE,
+      error: SAVE_REQUIRES_PLAN,
+      plan: 'free',
+    })
+  }
   const anon = anonKeyFromRequest(request)
   if (config.paywallEnabled && anon) {
     const linked = await linkAnonUsage(sb, anon, userId)

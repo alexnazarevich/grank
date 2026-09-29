@@ -27,7 +27,13 @@ import {
   type AuthSession,
 } from './authClient'
 import { FullReportSection } from './FullReportSection'
-import { fetchFullReport, fetchOwnedReport, type FullReportFail, type FullReportOk } from './fullReportClient'
+import {
+  fetchFullReport,
+  fetchOwnedReport,
+  fullReportOpensPayGate,
+  type FullReportFail,
+  type FullReportOk,
+} from './fullReportClient'
 import { THEME_CATALOG, fullReportFromStored, type FullReport, type RunPin } from './fullReport'
 import {
   OWNED_QUESTION_MAX,
@@ -224,7 +230,9 @@ function liveScreen(
   }
 }
 
-let flushPromise: Promise<{ ok: true; check: SavedCheck } | { ok: false; error: string }> | null = null
+let flushPromise: Promise<
+  { ok: true; check: SavedCheck } | { ok: false; error: string; code?: string; plan?: 'free' | 'paid' }
+> | null = null
 
 function flushPending(session: AuthSession, draft: CheckDraft) {
   if (!flushPromise) flushPromise = saveCheck(session.accessToken, draft)
@@ -339,16 +347,13 @@ export default function App() {
 
   function applyReportResult(result: FullReportOk | FullReportFail) {
     if (!result.ok) {
-      if (result.code === 'quota_exceeded') {
-        setQuotaWall(true)
-        setQuotaPlan(result.plan === 'paid' ? 'paid' : 'free')
+      if (result.code === 'quota_exceeded' || result.code === 'full_report_limit') {
         setReportPhase('limit')
         setReportMessage('')
-        return
-      }
-      if (result.code === 'full_report_limit') {
-        setReportPhase('limit')
-        setReportMessage('')
+        if (fullReportOpensPayGate(result)) {
+          setQuotaWall(true)
+          setQuotaPlan(result.plan === 'paid' ? 'paid' : 'free')
+        }
         return
       }
       setReportPhase('error')
@@ -393,10 +398,18 @@ export default function App() {
           setSavedId(null)
           setSaveState('error')
           setSaveMessage(saved.error)
+          if (saved.code === 'quota_exceeded') {
+            setQuotaWall(true)
+            setQuotaPlan(saved.plan === 'paid' ? 'paid' : 'free')
+          }
           setPhase('result')
         } else {
           setSaveState('error')
           setSaveMessage(saved.error)
+          if (saved.code === 'quota_exceeded') {
+            setQuotaWall(true)
+            setQuotaPlan(saved.plan === 'paid' ? 'paid' : 'free')
+          }
         }
       } else if (booted.session && afterLogin === 'history' && !reportIntent) {
         try {
@@ -1969,7 +1982,7 @@ function UpgradeWall({
       <h2>{config.copy.upgradeHeadline}</h2>
       <p>{config.copy.upgradeBody}</p>
       {plan === 'paid' ? (
-        <p className="why">This paid plan has no checks left in the current window.</p>
+        <p className="why">This paid plan has nothing left in the current window.</p>
       ) : (
         <button type="button" onClick={onUpgrade} disabled={busy}>
           {busy ? 'Opening checkout…' : config.copy.upgradeCta}

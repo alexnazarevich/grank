@@ -28,10 +28,10 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.saveCta, 'Save this check')
     assert.equal(config.copy.runAgainCta, 'Run again')
     assert.equal(config.copy.historyTitle, 'Your checks')
-    assert.equal(config.copy.upgradeHeadline, 'Need more checks?')
+    assert.equal(config.copy.upgradeHeadline, 'Continue with a paid plan?')
     assert.equal(
       config.copy.upgradeBody,
-      'A paid plan raises your check limit. Limits come from settings, not this sentence.',
+      'A paid plan covers more checks, another full report, and saving results. Limits come from settings, not this sentence.',
     )
     assert.equal(config.copy.upgradeCta, 'Upgrade')
     assert.equal(config.fullReportQuestionTarget, 55)

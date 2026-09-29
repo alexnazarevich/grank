@@ -7,6 +7,13 @@ export type FullReportFail = {
   error: string
   code?: 'full_report_limit' | 'quota_exceeded'
   plan?: 'free' | 'paid'
+  /** Paywall is on: the upgrade wall should open, not only the limit sentence. */
+  upgrade?: boolean
+}
+
+/** Second full report (upgrade flag) and check-quota 402 both open the existing pay gate. */
+export function fullReportOpensPayGate(fail: { code?: string; upgrade?: boolean }): boolean {
+  return fail.code === 'quota_exceeded' || (fail.code === 'full_report_limit' && fail.upgrade === true)
 }
 
 export type FullReportOk = {
@@ -55,7 +62,13 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
   const serverError = rec && typeof rec.error === 'string' ? scrubPublic(rec.error) : ''
   if (status === 401) return { ok: false, error: serverError || 'Sign in to unlock your full report.' }
   if (status === 403 || rec?.code === 'full_report_limit') {
-    return { ok: false, error: serverError || 'You’ve used your free full report.', code: 'full_report_limit' }
+    return {
+      ok: false,
+      error: serverError || 'You’ve used your free full report.',
+      code: 'full_report_limit',
+      upgrade: rec?.upgrade === true,
+      plan: planOf(rec?.plan),
+    }
   }
   if (status === 402 || rec?.code === 'quota_exceeded') {
     return {

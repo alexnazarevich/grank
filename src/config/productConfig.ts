@@ -62,7 +62,7 @@ export type ProductConfig = {
   /** Inclusive theme count bounds. Empty themes are omitted after generation. */
   fullReportThemeMin: number
   fullReportThemeMax: number
-  /** Complimentary full reports per account. Further runs use the (9) check quota when the paywall is on. */
+  /** Complimentary full reports per account. Further free runs do not spend check quota. */
   freeFullReports: number
   /** When false, branded dig questions are left out of the full set. */
   fullReportIncludesBranded: boolean
@@ -98,8 +98,9 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
     historyTitle: 'Your checks',
-    upgradeHeadline: 'Need more checks?',
-    upgradeBody: 'A paid plan raises your check limit. Limits come from settings, not this sentence.',
+    upgradeHeadline: 'Continue with a paid plan?',
+    upgradeBody:
+      'A paid plan covers more checks, another full report, and saving results. Limits come from settings, not this sentence.',
     upgradeCta: 'Upgrade',
     showFullReportCta: 'Show full report',
     fullReportMagicLinkHint: 'Sign in with a magic link to unlock your full report. No password.',
