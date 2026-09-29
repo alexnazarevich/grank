@@ -860,7 +860,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(JSON.stringify(STORY).includes('what ChatGPT said'), false)
     assert.equal(
       STORY.homeSub,
-      'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand. Save the check if you want to run it again later.',
+      'See what LLMs say when your audience asks about the problems you solve.',
     )
     assert.equal(
       STORY.proof,
@@ -871,7 +871,7 @@ describe('unbranded samples and story copy', () => {
   it('locks the homepage story lines', () => {
     assert.equal(STORY.documentTitle, 'Grank — See if you show up in AI answers')
     assert.equal(STORY.headerBadge, 'SIMPLE AEO · LABELED MODEL CHECKS')
-    assert.equal(STORY.homeH1, 'See if you show up in AI answers')
+    assert.equal(STORY.homeH1, 'What does AI say about your brand?')
     assert.equal(STORY.urlPlaceholder, 'https://yourbrand.com')
     assert.equal(STORY.cta, 'Check visibility')
     assert.equal(STORY.homeLoading, 'Checking how AI might talk about you…')

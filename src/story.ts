@@ -20,9 +20,8 @@ export const STORY = {
   proof: 'Every question is labeled Unbranded or Branded. We don’t mix them into one score.',
   documentTitle: 'Grank — See if you show up in AI answers',
   headerBadge: 'SIMPLE AEO · LABELED MODEL CHECKS',
-  homeH1: 'See if you show up in AI answers',
-  homeSub:
-    'Paste a URL. First we check whether you show up for the problems you solve — then you can ask what they say about your brand. Save the check if you want to run it again later.',
+  homeH1: 'What does AI say about your brand?',
+  homeSub: 'See what LLMs say when your audience asks about the problems you solve.',
   urlPlaceholder: 'https://yourbrand.com',
   cta: 'Check visibility',
   homeLoading: 'Checking how AI might talk about you…',
