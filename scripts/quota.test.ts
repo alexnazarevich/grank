@@ -176,6 +176,39 @@ describe('visibility quota', () => {
     }
   })
 
+  it('keeps the short guest land free of the full-report pay gate', async () => {
+    const mock = install((call) => {
+      if (call.body.includes('full_report')) throw new Error('guest land must not spend a full report')
+      if (call.method === 'POST' && call.url.includes('/rest/v1/usage_events')) {
+        assert.match(call.body, /"kind":"check"/)
+        return new Response(JSON.stringify([{ id: USAGE }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/usage_events')) {
+        return new Response(JSON.stringify([{ id: USAGE }]), { status: 200 })
+      }
+      if (call.method === 'DELETE') throw new Error('successful guest land must keep the usage row')
+      if (!call.url.includes('api.openai.com')) return new Response('nope', { status: 404 })
+      return new Response(completion(), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    try {
+      const res = await onVisibility({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=unbranded', {
+          headers: { 'x-grank-anon': ANON },
+        }),
+        env: visibilityEnv({ PAYWALL_ENABLED: 'true', FREE_QUOTA_AMOUNT: '3' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      const body = JSON.parse(text) as { ok?: boolean; code?: string; mode?: string }
+      assert.equal(body.ok, true)
+      assert.equal(body.mode, 'unbranded')
+      assert.equal(body.code, undefined)
+      assert.equal(mock.calls.some((call) => call.body.includes('full_report')), false)
+    } finally {
+      mock.restore()
+    }
+  })
+
   it('reserves the check before OpenAI and keeps it when the call succeeds', async () => {
     const mock = install((call) => {
       if (call.method === 'POST' && call.url.includes('/rest/v1/usage_events')) {

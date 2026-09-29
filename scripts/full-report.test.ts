@@ -14,7 +14,7 @@ import {
   type PlannedTheme,
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
-import { interpretFullReportResponse } from '../src/fullReportClient.ts'
+import { fullReportOpensPayGate, interpretFullReportResponse } from '../src/fullReportClient.ts'
 import { mentionStatusLabel, whoInsteadNames } from '../src/mentionLabel.ts'
 import { STORY } from '../src/story.ts'
 
@@ -459,7 +459,10 @@ describe('POST /api/full-report', () => {
       return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
     })
     try {
-      const res = await onRequest({ request: authedRequest(), env: env() })
+      const res = await onRequest({
+        request: authedRequest(),
+        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_AMOUNT: '3' }),
+      })
       const text = await res.text()
       assert.equal(res.status, 200, text)
       assert.equal(text.includes(KEY), false)
@@ -651,10 +654,13 @@ describe('POST /api/full-report', () => {
     }
   })
 
-  it('counts a further report as a check when the paywall is on, and stops at the check quota', async () => {
+  it('opens the pay gate on a second full report and does not spend free check quota', async () => {
     const blocked = install((call) => {
       if (call.url.includes('api.openai.com') || call.url.startsWith('https://linear.app')) {
-        throw new Error('model call leaked past the check quota')
+        throw new Error('model call leaked past the free full report')
+      }
+      if (call.body.includes('"kind":"check"')) {
+        throw new Error('free check quota must not buy another full report')
       }
       if (call.url.includes('/auth/v1/user')) {
         return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
@@ -664,14 +670,11 @@ describe('POST /api/full-report', () => {
         return new Response(JSON.stringify([{ plan: 'free' }]), { status: 200 })
       }
       if (call.method === 'POST' && call.url.includes('/rest/v1/usage_events')) {
-        const kind = call.body.includes('full_report') ? USAGE : CHECK_USAGE
-        return new Response(JSON.stringify([{ id: kind }]), { status: 201 })
+        assert.match(call.body, /"kind":"full_report"/)
+        return new Response(JSON.stringify([{ id: USAGE }]), { status: 201 })
       }
       if (call.method === 'GET' && call.url.includes('kind=eq.full_report')) {
         return new Response(JSON.stringify([{ id: OLDER }, { id: USAGE }]), { status: 200 })
-      }
-      if (call.method === 'GET' && call.url.includes('kind=eq.check')) {
-        return new Response(JSON.stringify([{ id: OLDER }, { id: CHECK_USAGE }]), { status: 200 })
       }
       if (call.method === 'DELETE' && call.url.includes('/rest/v1/usage_events')) {
         return new Response(null, { status: 204 })
@@ -681,18 +684,24 @@ describe('POST /api/full-report', () => {
     try {
       const res = await onRequest({
         request: authedRequest(),
-        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_AMOUNT: '1' }),
+        env: env({ PAYWALL_ENABLED: 'true', FREE_QUOTA_AMOUNT: '3' }),
       })
       const text = await res.text()
       assert.equal(res.status, 402, text)
-      const body = JSON.parse(text) as { code?: string }
-      assert.equal(body.code, 'quota_exceeded')
-      assert.equal(blocked.calls.some((call) => call.body.includes('"kind":"check"')), true)
+      const body = JSON.parse(text) as { code?: string; upgrade?: boolean; plan?: string; error?: string }
+      assert.equal(body.code, 'full_report_limit')
+      assert.equal(body.upgrade, true)
+      assert.equal(body.plan, 'free')
+      assert.equal(body.error, PRODUCT_DEFAULTS.copy.fullReportLimitHit)
+      assert.equal(blocked.calls.some((call) => call.body.includes('"kind":"check"')), false)
       assert.equal(blocked.calls.some((call) => call.url.includes('api.openai.com')), false)
+      assert.equal(blocked.calls.some((call) => call.url.includes('/rest/v1/checks')), false)
     } finally {
       blocked.restore()
     }
+  })
 
+  it('lets a paid plan spend check quota on a further full report', async () => {
     const allowed = install((call) => {
       if (call.url.includes('/auth/v1/user')) {
         return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
@@ -780,6 +789,19 @@ describe('full report client', () => {
     assert.equal(limit.ok, false)
     if (limit.ok) return
     assert.equal(limit.code, 'full_report_limit')
+    assert.equal(limit.upgrade, false)
+    assert.equal(fullReportOpensPayGate(limit), false)
+    const wall = interpretFullReportResponse(
+      402,
+      { ok: false, code: 'full_report_limit', error: 'You’ve used your free full report.', upgrade: true, plan: 'free' },
+      false,
+    )
+    assert.equal(wall.ok, false)
+    if (wall.ok) return
+    assert.equal(wall.code, 'full_report_limit')
+    assert.equal(wall.upgrade, true)
+    assert.equal(wall.plan, 'free')
+    assert.equal(fullReportOpensPayGate(wall), true)
     const quota = interpretFullReportResponse(402, { code: 'quota_exceeded', error: 'Check limit reached.', plan: 'free' }, false)
     assert.equal(quota.ok, false)
     if (quota.ok) return
@@ -797,6 +819,13 @@ describe('full report client', () => {
 })
 
 describe('guest aha copy stays put', () => {
+  it('does not route the short land through the full-report allotment', () => {
+    const visibility = readFileSync(new URL('../functions/api/visibility.ts', import.meta.url), 'utf8')
+    assert.equal(visibility.includes('freeFullReports'), false)
+    assert.equal(visibility.includes('full_report_limit'), false)
+    assert.equal(visibility.includes('FULL_REPORT'), false)
+  })
+
   it('keeps Check visibility on the homepage and wires the full-report CTA from config', () => {
     assert.equal(STORY.cta, 'Check visibility')
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -810,6 +839,12 @@ describe('guest aha copy stays put', () => {
     assert.match(ui, /fullReportLoading/)
     assert.match(ui, /fullReportEmptyThemes/)
     assert.match(ui, /fullReportLimitHit/)
+    assert.match(app, /fullReportOpensPayGate/)
+    assert.match(app, /<h2>\{config\.copy\.upgradeHeadline\}<\/h2>/)
+    assert.match(app, /<p>\{config\.copy\.upgradeBody\}<\/p>/)
+    assert.equal(app.includes('Need more checks?'), false)
+    assert.equal(PRODUCT_DEFAULTS.copy.upgradeHeadline, 'Free limit reached')
+    assert.match(PRODUCT_DEFAULTS.copy.upgradeBody, /more full reports, saved checks, and ongoing land and dig/)
     assert.match(ui, /themeSectionEyebrow/)
     assert.equal(app.includes('report SKU'), false)
     assert.equal(app.includes('showFullAnswer'), false)
