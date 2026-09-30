@@ -31,4 +31,7 @@ export const STORY = {
     '“Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops. You need a glance: do you show up for what you solve — and who shows up instead.',
   foilFoot:
     'Land on unbranded. Dig into branded when you’re ready. Free checks, then one simple upgrade if you need more — no credit packs.',
+  deltaTitle: 'Vs last run',
+  deltaEmpty: 'No mention changes vs last run.',
+  deltaAwaiting: 'No earlier run to compare yet.',
 } as const

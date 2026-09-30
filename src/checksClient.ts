@@ -116,6 +116,33 @@ export async function updateCheckQuestions(
   return parsed
 }
 
+/** Append a mention snapshot on an owned check. Does not insert a new row. */
+export async function recordCheckRun(
+  accessToken: string,
+  id: string,
+  draft: CheckDraft,
+): Promise<SaveOk | Fail> {
+  let res: Response
+  try {
+    res = await fetch('/api/checks', {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ ...draft, id, recordRun: true }),
+    })
+  } catch {
+    return { ok: false, error: 'Could not store this run. Try again.' }
+  }
+  const parsed = await interpret(res)
+  if (parsed === 'html') return { ok: false, error: SAVE_UNAVAILABLE }
+  if (!parsed.ok) return parsed
+  if (!('check' in parsed)) return { ok: false, error: 'Save returned an unusable result.' }
+  return parsed
+}
+
 export async function listChecks(accessToken: string): Promise<ListOk | Fail> {
   let res: Response
   try {

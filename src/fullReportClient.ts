@@ -1,6 +1,7 @@
 import { readAnonKey } from './authClient.ts'
 import { fullReportFromStored, type FullReport, type RunPin } from './fullReport.ts'
 import type { OwnedQuestion } from './ownedQuestions.ts'
+import { cleanRuns, type CheckRun } from './runHistory.ts'
 
 export type FullReportFail = {
   ok: false
@@ -20,6 +21,7 @@ export type FullReportOk = {
   ok: true
   report: FullReport
   checkId: string | null
+  runs: CheckRun[]
 }
 
 function scrubPublic(value: string): string {
@@ -84,7 +86,7 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
     return { ok: false, error: serverError || `Full report failed (HTTP ${status}).` }
   }
   const check = isRecord(rec.check) && typeof rec.check.id === 'string' ? rec.check.id : null
-  return { ok: true, report, checkId: check }
+  return { ok: true, report, checkId: check, runs: cleanRuns(rec.runs) }
 }
 
 export async function fetchFullReport(
@@ -128,6 +130,7 @@ export async function fetchOwnedReport(
   domain: string,
   accessToken: string,
   owned: OwnedQuestion[],
+  checkId?: string | null,
 ): Promise<FullReportOk | FullReportFail> {
   const headers = new Headers({
     Accept: 'application/json',
@@ -141,7 +144,7 @@ export async function fetchOwnedReport(
     res = await fetch('/api/full-report', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ domain, owned }),
+      body: JSON.stringify(checkId ? { domain, owned, checkId } : { domain, owned }),
     })
   } catch {
     return { ok: false, error: 'Could not reach the full report. Try again.' }

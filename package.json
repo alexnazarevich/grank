@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test scripts/homepage-signal.test.ts scripts/visibility.test.ts scripts/product-config.test.ts scripts/checks.test.ts scripts/auth-session.test.ts scripts/quota.test.ts scripts/full-report.test.ts scripts/full-report-row.test.ts scripts/owned-questions.test.ts"
+    "test": "node --experimental-strip-types --test scripts/homepage-signal.test.ts scripts/visibility.test.ts scripts/product-config.test.ts scripts/checks.test.ts scripts/auth-session.test.ts scripts/quota.test.ts scripts/full-report.test.ts scripts/full-report-row.test.ts scripts/owned-questions.test.ts scripts/run-history.test.ts"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -7,6 +7,8 @@
 export type FreeQuotaUnit = 'checks' | 'saves' | 'both'
 export type FreeQuotaWindow = 'lifetime' | 'day' | 'month'
 export type PaidInterval = 'month' | 'year'
+/** Stored for a later schedule. Unused while tracking cron is off. */
+export type TrackingCadence = 'daily' | 'weekly' | 'monthly'
 
 export type ProductCopy = {
   saveCta: string
@@ -68,6 +70,12 @@ export type ProductConfig = {
   fullReportIncludesBranded: boolean
   /** How many questions can be pinned or edited for one full-report run. */
   pinnedQuestionMax: number
+  /** Pages Cron re-runs. False in this cut — no live schedule. */
+  trackingCronEnabled: boolean
+  /** Cadence knob stored for later. The cron handler does not read it while disabled. */
+  trackingCadence: TrackingCadence
+  /** How many mention snapshots to keep on one saved check. At least prior + current. */
+  trackingHistoryLimit: number
   copy: ProductCopy
 }
 
@@ -94,6 +102,9 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
   freeFullReports: 1,
   fullReportIncludesBranded: true,
   pinnedQuestionMax: 5,
+  trackingCronEnabled: false,
+  trackingCadence: 'weekly',
+  trackingHistoryLimit: 8,
   copy: {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
@@ -155,6 +166,9 @@ export const PRODUCT_ENV_ALIASES = {
   freeFullReports: 'FREE_FULL_REPORTS',
   fullReportIncludesBranded: 'FULL_REPORT_INCLUDES_BRANDED',
   pinnedQuestionMax: 'PINNED_QUESTION_MAX',
+  trackingCronEnabled: 'TRACKING_CRON_ENABLED',
+  trackingCadence: 'TRACKING_CADENCE',
+  trackingHistoryLimit: 'TRACKING_HISTORY_LIMIT',
 } as const
 
 const COPY_KEYS: (keyof ProductCopy)[] = [
@@ -346,6 +360,21 @@ export function mergeProductConfig(base: ProductConfig, patch: unknown): Product
       base.pinnedQuestionMax,
       1,
       8,
+    ),
+    trackingCronEnabled: parseBool(
+      field(patch, 'trackingCronEnabled', 'TRACKING_CRON_ENABLED'),
+      base.trackingCronEnabled,
+    ),
+    trackingCadence: parseEnum(
+      field(patch, 'trackingCadence', 'TRACKING_CADENCE'),
+      ['daily', 'weekly', 'monthly'] as const,
+      base.trackingCadence,
+    ),
+    trackingHistoryLimit: parseIntRange(
+      field(patch, 'trackingHistoryLimit', 'TRACKING_HISTORY_LIMIT'),
+      base.trackingHistoryLimit,
+      2,
+      30,
     ),
     copy: parseCopy(patch.copy, base.copy),
   }

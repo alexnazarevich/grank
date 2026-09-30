@@ -62,6 +62,22 @@ Server enforcement reads `PRODUCT_CONFIG_JSON` and the env aliases. The UI displ
 
 Without those keys locally, step 1 still works and step 2 shows **Auth not configured**.
 
+## Tracked set (manual re-run)
+
+An owned saved check keeps a thin run history on the same row: `checks.result.runs`. Each entry is the question, its mention (`mentioned` / `not_mentioned` / `unclear`), and unbranded who-instead names. It is not a second copy of the report.
+
+**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. The screen shows **Vs last run**: questions that flipped Mentioned ↔ Not mentioned / Unclear, and who-instead names that appeared or dropped. If there is no earlier run, the line is “No earlier run to compare yet.” If nothing changed, it is “No mention changes vs last run.”
+
+History stays in the existing `result` jsonb column. **No new Supabase migration.** Nothing to apply for this cut.
+
+Schedules are off. `TRACKING_CRON_ENABLED` defaults to false. `TRACKING_CADENCE` (default `weekly`) is stored on the check as `result.tracking.cadence` for a later bet and is unused while cron is off. `functions/scheduled.ts` exports `onScheduled` and does not call the model. There is no Pages Cron trigger in this repo. Do not add one until that flag is turned on.
+
+| Pages secret | Default | Purpose |
+| --- | --- | --- |
+| `TRACKING_CRON_ENABLED` | `false` | Must stay false. The scheduled function returns before any re-run. |
+| `TRACKING_CADENCE` | `weekly` | `daily`, `weekly`, or `monthly`. Stored, not read by a job. |
+| `TRACKING_HISTORY_LIMIT` | `8` | Newest mention snapshots kept on one check (minimum 2). |
+
 ## Free quota and one paid plan
 
 `paywallEnabled` defaults to **false** (kill switch). Guest land/dig keeps working, and `/api/billing` does not call Stripe.

@@ -1,6 +1,7 @@
 import type { Answered, ModeBeat, VisibilityMode } from './demoData.ts'
 import type { FullReport } from './fullReport.ts'
 import { cleanAnswerFacts, type AnswerFact, type Framing } from './mentionFacts.ts'
+import type { CheckRun } from './runHistory.ts'
 
 export const LABEL_GENERATED = 'Generated · OpenAI'
 export const LABEL_SAMPLE = 'Sample'
@@ -73,6 +74,10 @@ export type StoredResult = {
   facts?: AnswerFact[]
   /** The question list is owned. Run again answers it instead of generating a new roster. */
   questionSetOwned?: boolean
+  /** Mention snapshots, oldest first. Prior + current after the first manual re-run. */
+  runs?: CheckRun[]
+  /** Cadence stored for a later schedule. Unused while tracking cron is off. */
+  tracking?: { cadence: string }
 }
 
 export type BeatDraft = {
