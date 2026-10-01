@@ -1,7 +1,7 @@
 /**
  * Thin run history for an owned saved check.
  * Each entry is mention + whoInstead only — not a second copy of the report.
- * The newest runs are kept. Delta compares the last two.
+ * The newest runs are kept. The summary compares the last two; the grid shows every kept run.
  */
 
 import { parseMention, parseWhoInstead, type Mention } from './mentionFacts.ts'
@@ -51,6 +51,21 @@ export function comparedToRunLabel(template: string, iso: string): string {
   return template.replaceAll('{date}', formatted)
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** Short UTC date and time for a run column. Empty when the stamp is unusable. */
+export function runColumnLabel(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const month = MONTHS[date.getUTCMonth()] ?? ''
+  const day = date.getUTCDate()
+  const minute = date.getUTCMinutes().toString().padStart(2, '0')
+  const suffix = date.getUTCHours() >= 12 ? 'PM' : 'AM'
+  let hour = date.getUTCHours() % 12
+  if (hour === 0) hour = 12
+  return `${month} ${day}, ${hour}:${minute} ${suffix}`
+}
+
 export type RunDelta = {
   /** False until a prior run and a current run both exist. */
   comparable: boolean
@@ -67,7 +82,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function questionKey(question: string): string {
+export function runQuestionKey(question: string): string {
   return question.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
@@ -189,10 +204,10 @@ export function deltaVsLastRun(runs: CheckRun[]): RunDelta {
   const prior = runs[runs.length - 2]
   const current = runs[runs.length - 1]
   const priorByQuestion = new Map<string, RunMention>()
-  for (const item of prior.mentions) priorByQuestion.set(questionKey(item.question), item)
+  for (const item of prior.mentions) priorByQuestion.set(runQuestionKey(item.question), item)
   const flips: MentionFlip[] = []
   for (const item of current.mentions) {
-    const prev = priorByQuestion.get(questionKey(item.question))
+    const prev = priorByQuestion.get(runQuestionKey(item.question))
     if (!prev?.mention || !item.mention || prev.mention === item.mention) continue
     flips.push({ question: item.question, from: prev.mention, to: item.mention })
   }
@@ -215,4 +230,87 @@ export function deltaVsLastRun(runs: CheckRun[]): RunDelta {
     appeared,
     dropped,
   }
+}
+
+export type ChangeChipId = 'newlyMentioned' | 'lostMention' | 'nowMentioned' | 'whoAppeared' | 'whoDropped'
+
+export type ChangeChip = {
+  id: ChangeChipId
+  count: number
+}
+
+/** Counts for the What’s changed chips. Flip lines stay out of the primary view. */
+export type ChangeSummary = {
+  comparable: boolean
+  /** True when a prior run exists and nothing in the chip set changed. */
+  quiet: boolean
+  chips: ChangeChip[]
+}
+
+export function changeSummary(runs: CheckRun[]): ChangeSummary {
+  const delta = deltaVsLastRun(runs)
+  if (!delta.comparable) return { comparable: false, quiet: true, chips: [] }
+  let newlyMentioned = 0
+  let lostMention = 0
+  let nowMentioned = 0
+  for (const flip of delta.flips) {
+    const kind = deltaFlipKind(flip.from, flip.to)
+    if (kind === 'newlyMentioned') newlyMentioned += 1
+    else if (kind === 'nowMentioned') nowMentioned += 1
+    else if (kind === 'noLongerMentioned' || kind === 'lostMention') lostMention += 1
+  }
+  const chips: ChangeChip[] = []
+  if (newlyMentioned > 0) chips.push({ id: 'newlyMentioned', count: newlyMentioned })
+  if (lostMention > 0) chips.push({ id: 'lostMention', count: lostMention })
+  if (nowMentioned > 0) chips.push({ id: 'nowMentioned', count: nowMentioned })
+  if (delta.appeared.length > 0) chips.push({ id: 'whoAppeared', count: delta.appeared.length })
+  if (delta.dropped.length > 0) chips.push({ id: 'whoDropped', count: delta.dropped.length })
+  return { comparable: true, quiet: delta.empty, chips }
+}
+
+export type MentionGridCell = {
+  mention?: Mention
+  whoInstead: string[]
+}
+
+export type MentionGridRow = {
+  question: string
+  cells: Array<MentionGridCell | null>
+}
+
+/**
+ * Question rows in the latest run’s order, then earlier questions that dropped off.
+ * A missing cell means that question was not in that run.
+ */
+export function mentionGrid(runs: CheckRun[]): MentionGridRow[] {
+  const label = new Map<string, string>()
+  const order: string[] = []
+  const push = (question: string) => {
+    const key = runQuestionKey(question)
+    if (!key || label.has(key)) return
+    label.set(key, question)
+    order.push(key)
+  }
+  const latest = runs[runs.length - 1]
+  if (latest) {
+    for (const item of latest.mentions) push(item.question)
+  }
+  for (const run of runs) {
+    for (const item of run.mentions) push(item.question)
+  }
+  return order.map((key) => ({
+    question: label.get(key) || key,
+    cells: runs.map((run) => {
+      const item = run.mentions.find((mention) => runQuestionKey(mention.question) === key)
+      if (!item) return null
+      return { mention: item.mention, whoInstead: item.whoInstead }
+    }),
+  }))
+}
+
+/** Stored runs win. A preview column is only for the first run, before history exists. */
+export function gridRuns(stored: CheckRun[], preview?: CheckRun | null): CheckRun[] {
+  if (stored.length > 0) return stored
+  if (preview && preview.mentions.length > 0) return [preview]
+  return []
 }

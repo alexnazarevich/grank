@@ -66,7 +66,7 @@ Without those keys locally, step 1 still works and step 2 shows **Auth not confi
 
 An owned saved check keeps a thin run history on the same row: `checks.result.runs`. Each entry is the question, its mention (`mentioned` / `not_mentioned` / `unclear`), and unbranded who-instead names. It is not a second copy of the report.
 
-**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. The screen shows **Vs last run** with the helper “What changed on this check since the previous run — same questions, labeled OpenAI answers.” Flip lines use Newly mentioned, No longer mentioned, Now mentioned, and Lost mention. Who-instead lines use Newly showing up instead and No longer showing up instead. The first comparison says “No previous run to compare yet. Run again later to see what changed.” If nothing changed, it is “No mention changes vs last run.”
+**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. **What’s changed** is a short rollup (counts and chips) against the previous run. **Over time** is a mention grid: question rows by run columns, with Mentioned / Not mentioned / Unclear in each cell. The first run shows one column and “Run again to start comparing over time.” If nothing changed, the rollup says “No mention changes since the previous run.”
 
 History stays in the existing `result` jsonb column. **No new Supabase migration.** Nothing to apply for this cut. No new host.
 
