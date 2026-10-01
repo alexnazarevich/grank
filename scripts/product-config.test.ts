@@ -63,6 +63,13 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.mentionNo, 'Not mentioned')
     assert.equal(config.copy.mentionUnclear, 'Unclear')
     assert.equal(config.copy.mentionWhoInstead, 'Who instead')
+    assert.equal(config.copy.whoInsteadBoardTitle, 'Who showed up instead')
+    assert.equal(
+      config.copy.whoInsteadBoardHelper,
+      'Names that showed up in place of you on unbranded questions this run — not market share.',
+    )
+    assert.equal(config.copy.whoInsteadBoardEmpty, 'No one else showed up yet.')
+    assert.equal(config.copy.whoInsteadBoardCount, 'Appeared on {n} questions')
     assert.equal(config.copy.pinQuestionCta, 'Pin')
     assert.equal(config.copy.unpinQuestionCta, 'Unpin')
     assert.equal(config.copy.editQuestionCta, 'Edit')

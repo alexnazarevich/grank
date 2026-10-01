@@ -298,6 +298,14 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .signal.unavailable { background: #1f2937; color: var(--muted); }
 .why { margin: 0 0 0.65rem; color: var(--muted); line-height: 1.45; }
 .support { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+.block ul.who-instead-list { list-style: none; padding: 0; margin: 0; }
+.who-instead-list li {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.15rem 0.75rem;
+  align-items: baseline; padding: 0.55rem 0; border-bottom: 1px solid var(--line);
+}
+.who-instead-list li:last-child { border-bottom: none; }
+.who-instead-name { font-weight: 750; }
+.who-instead-count { color: var(--muted); font-size: 0.82rem; }
 .who { list-style: none; padding: 0; margin: 0; }
 .who li {
   display: flex; flex-direction: column; gap: 0.15rem; padding: 0.55rem 0;

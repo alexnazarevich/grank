@@ -31,6 +31,11 @@ export type ProductCopy = {
   mentionNo: string
   mentionUnclear: string
   mentionWhoInstead: string
+  whoInsteadBoardTitle: string
+  whoInsteadBoardHelper: string
+  whoInsteadBoardEmpty: string
+  /** `{n}` is how many unbranded questions named this substitute. */
+  whoInsteadBoardCount: string
   pinQuestionCta: string
   unpinQuestionCta: string
   editQuestionCta: string
@@ -152,6 +157,10 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     mentionNo: 'Not mentioned',
     mentionUnclear: 'Unclear',
     mentionWhoInstead: 'Who instead',
+    whoInsteadBoardTitle: STORY.whoInsteadBoardTitle,
+    whoInsteadBoardHelper: STORY.whoInsteadBoardHelper,
+    whoInsteadBoardEmpty: STORY.whoInsteadBoardEmpty,
+    whoInsteadBoardCount: STORY.whoInsteadBoardCount,
     pinQuestionCta: 'Pin',
     unpinQuestionCta: 'Unpin',
     editQuestionCta: 'Edit',
@@ -236,6 +245,10 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'mentionNo',
   'mentionUnclear',
   'mentionWhoInstead',
+  'whoInsteadBoardTitle',
+  'whoInsteadBoardHelper',
+  'whoInsteadBoardEmpty',
+  'whoInsteadBoardCount',
   'pinQuestionCta',
   'unpinQuestionCta',
   'editQuestionCta',
