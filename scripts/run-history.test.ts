@@ -190,11 +190,15 @@ describe('delta vs last run', () => {
     const trust = rates[1]
     assert.equal(problems?.latest, 100)
     assert.deepEqual(problems?.across, { oldest: 0, newest: 100 })
+    assert.deepEqual(problems?.byRun, [0, 100, 100])
     assert.equal(trust?.latest, 0)
     assert.deepEqual(trust?.across, { oldest: 100, newest: 0 })
+    assert.deepEqual(trust?.byRun, [100, 0, 0])
     assert.equal(rates[2]?.latest, null)
     assert.equal(rates[2]?.across, null)
+    assert.deepEqual(rates[2]?.byRun, [null, null, null])
     assert.equal(themeRateLabel('{pct}% mentioned', 100), '100% mentioned')
+    assert.equal(themeRateLabel('{pct}%', 42), '42%')
     assert.equal(themeAcrossLabel('Across runs: {a}% → {b}%', 0, 100), 'Across runs: 0% → 100%')
     const firstOnly = themeMentionRates(
       [{ id: 'problems', questions: [{ question: 'Track issues', mention: 'not_mentioned' }] }],
@@ -202,6 +206,7 @@ describe('delta vs last run', () => {
     )
     assert.equal(firstOnly[0]?.latest, 0)
     assert.equal(firstOnly[0]?.across, null)
+    assert.deepEqual(firstOnly[0]?.byRun, [0])
     const fromReport = themeMentionRates(
       [
         {
@@ -216,6 +221,13 @@ describe('delta vs last run', () => {
     )
     assert.equal(fromReport[0]?.latest, 50)
     assert.equal(fromReport[0]?.across, null)
+    assert.deepEqual(fromReport[0]?.byRun, [])
+    const absent = themeMentionRates(
+      [{ id: 'problems', questions: [{ question: 'Not in the run', mention: 'mentioned' }] }],
+      [oldest],
+    )
+    assert.equal(absent[0]?.latest, null)
+    assert.deepEqual(absent[0]?.byRun, [null])
     const split = themeMentionRates(
       [
         {
@@ -710,6 +722,8 @@ describe('what’s changed and over time story', () => {
     assert.equal(STORY.overTimeQuestion, 'Question')
     assert.equal(STORY.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
     assert.equal(STORY.themeMentionRate, '{pct}% mentioned')
+    assert.equal(STORY.themeMentionRow, '% mentioned')
+    assert.equal(STORY.themeMentionCell, '{pct}%')
     assert.equal(STORY.themeAcrossRuns, 'Across runs: {a}% → {b}%')
     assert.equal(STORY.manageQuestionsCta, 'Manage questions')
     assert.equal(STORY.manageQuestionsTitle, 'Manage questions')
@@ -719,7 +733,7 @@ describe('what’s changed and over time story', () => {
     )
     assert.equal(
       /SOV|visibility score|monitoring|weekly tracking/i.test(
-        `${STORY.themeMentionRate} ${STORY.themeAcrossRuns} ${STORY.manageQuestionsHint}`,
+        `${STORY.themeMentionRate} ${STORY.themeMentionRow} ${STORY.themeMentionCell} ${STORY.themeAcrossRuns} ${STORY.manageQuestionsHint}`,
       ),
       false,
     )
@@ -749,7 +763,10 @@ describe('what’s changed and over time story', () => {
     assert.equal(reportBranch.includes('ownedQuestionsHint'), false)
     const section = readFileSync(new URL('../src/FullReportSection.tsx', import.meta.url), 'utf8')
     assert.match(section, /themeMentionRate/)
-    assert.match(section, /themeAcrossRuns/)
+    assert.match(section, /themeMentionRow/)
+    assert.match(section, /themeMentionCell/)
+    assert.equal(section.includes('themeAcrossRuns'), false)
+    assert.equal(section.includes('themeSectionEyebrow'), false)
     assert.match(section, /manageQuestionsCta/)
     assert.equal(section.includes('overTimeTitle'), false)
     const gridRow = section.slice(section.indexOf('function ThemeGridRow'), section.indexOf('function ManageQuestions'))

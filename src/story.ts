@@ -45,6 +45,8 @@ export const STORY = {
   overTimeQuestion: 'Question',
   overTimeLegend: 'Mentioned · Not mentioned · Unclear',
   themeMentionRate: '{pct}% mentioned',
+  themeMentionRow: '% mentioned',
+  themeMentionCell: '{pct}%',
   themeAcrossRuns: 'Across runs: {a}% → {b}%',
   manageQuestionsCta: 'Manage questions',
   manageQuestionsTitle: 'Manage questions',

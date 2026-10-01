@@ -180,7 +180,6 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 }
 .theme-framing { margin: 0; flex: none; }
 .theme-rate { margin: 0; color: var(--accent); font-weight: 750; font-size: 0.95rem; }
-.theme-across { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
 .theme-answer-row td { padding-top: 0.15rem; }
 .run-over-time-label {
   margin: 0 0 0.35rem; font-size: 0.95rem; font-weight: 700; color: var(--ink);
@@ -214,6 +213,11 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   min-width: 9rem; max-width: 16rem; font-weight: 650;
 }
 .run-grid thead th:first-child { z-index: 2; }
+.run-grid tr.theme-pct-row th,
+.run-grid tr.theme-pct-row td {
+  color: var(--accent); font-weight: 750; white-space: nowrap;
+}
+.run-grid tr.theme-pct-row .muted { color: var(--muted); font-weight: 650; }
 .run-grid .mention { margin-left: 0; white-space: nowrap; }
 .run-grid .mention.mentioned {
   background: #064e3b; color: var(--yes); border-color: #065f46;

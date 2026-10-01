@@ -332,6 +332,8 @@ export type ThemeMentionRate = {
   latest: number | null
   /** Oldest run → newest run. Null until both ends include this theme id. */
   across: { oldest: number; newest: number } | null
+  /** One share per run column, oldest → newest. Empty when there is no run history. */
+  byRun: Array<number | null>
 }
 
 /** Mentioned ÷ questions. Unclear, Not mentioned, and a missing label are not mentioned. */
@@ -380,7 +382,7 @@ function rateSlices(theme: ThemeRateInput): ThemeRateInput[] {
  * One rate per stable theme id, and per framing when one id has both.
  * Branded and unbranded questions are never one unlabeled %.
  * With no stored runs, the questions’ own mention labels are the latest run.
- * Across runs reads oldest → newest, not the middle columns.
+ * `byRun` is one share per column. Across runs still reads oldest → newest, not the middle.
  */
 export function themeMentionRates(themes: ThemeRateInput[], runs: CheckRun[]): ThemeMentionRate[] {
   const order: string[] = []
@@ -401,16 +403,18 @@ export function themeMentionRates(themes: ThemeRateInput[], runs: CheckRun[]): T
     const id = theme?.id || key
     const questions = theme?.questions ?? []
     const framing = theme?.framing
-    if (questions.length === 0) return { id, framing, latest: null, across: null }
+    const byRun = runs.map((run) => mentionPercent(flagsForTheme(questions, run)))
+    if (questions.length === 0) return { id, framing, latest: null, across: null, byRun }
     const latest = mentionPercent(flagsForTheme(questions, runs.length > 0 ? runs[runs.length - 1] : null))
-    if (runs.length < 2) return { id, framing, latest, across: null }
-    const oldest = mentionPercent(flagsForTheme(questions, runs[0]))
-    const newest = mentionPercent(flagsForTheme(questions, runs[runs.length - 1]))
+    if (runs.length < 2) return { id, framing, latest, across: null, byRun }
+    const oldest = byRun[0] ?? null
+    const newest = byRun[byRun.length - 1] ?? null
     return {
       id,
       framing,
       latest,
       across: oldest !== null && newest !== null ? { oldest, newest } : null,
+      byRun,
     }
   })
 }
