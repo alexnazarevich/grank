@@ -7,6 +7,7 @@ import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
   applyRunPins,
+  fullReportFromStored,
   fullReportPrompt,
   mentionsBrand,
   selectThemePlan,
@@ -382,6 +383,96 @@ describe('theme plan', () => {
     const described = themes.find((theme) => theme.id === 'described')
     assert.equal(described?.questions.some((item) => item.question.includes('Linear')), false)
     assert.equal(JSON.stringify(themes).includes('Linear'), false)
+  })
+
+  it('keeps buying as two homogeneous themes and does not mix framings', () => {
+    const plan = selectThemePlan({
+      questionTarget: 10,
+      themeMin: 3,
+      themeMax: 5,
+      includesBranded: true,
+    })
+    assert.equal(plan.find((theme) => theme.id === 'buying')?.ask, 'split')
+    assert.equal(plan.find((theme) => theme.id === 'problems')?.ask, 'unbranded')
+    assert.equal(plan.find((theme) => theme.id === 'trust')?.ask, 'branded')
+    const prompt = fullReportPrompt('linear.app', plan, null)
+    assert.equal(prompt.includes('About half'), false)
+    assert.match(prompt, /Never mix both framings in one theme/)
+    assert.match(prompt, /Theme id "buying" \(Buying & next step\): write \d+ questions that do not name Linear/)
+    assert.match(prompt, /Theme id "buying" \(Buying & next step\): write \d+ questions that name Linear/)
+    const themes = shapeFullReport(
+      {
+        themes: [
+          {
+            id: 'problems',
+            questions: [
+              { question: 'What should a team use to track issues?', answer: 'A tracker.' },
+              { question: 'How does Linear compare on planning?', answer: 'Linear is often named.' },
+            ],
+          },
+          {
+            id: 'described',
+            questions: [
+              { question: 'How do people describe Linear?', answer: 'Linear is fast.' },
+              { question: 'What should a team use to plan a week?', answer: 'A board.' },
+            ],
+          },
+          { id: 'trust', questions: [{ question: 'Is Linear trustworthy for a team?', answer: 'Teams cite Linear.' }] },
+          {
+            id: 'buying',
+            questions: [
+              { question: 'What should a team buy for issue tracking?', answer: 'A tracker.' },
+              { question: 'Should a team buy Linear next?', answer: 'Linear is one option.' },
+            ],
+          },
+        ],
+      },
+      { domain: 'linear.app', plan, includesBranded: true, themeMin: 3, questionTarget: 8 },
+    )
+    assert.ok(themes)
+    if (!themes) return
+    assert.equal(
+      themes.every((theme) => theme.questions.every((item) => item.framing === theme.framing)),
+      true,
+    )
+    const buying = themes.filter((theme) => theme.id === 'buying')
+    assert.deepEqual(
+      buying.map((theme) => theme.framing),
+      ['unbranded', 'branded'],
+    )
+    assert.equal(buying[0]?.questions.every((item) => !/linear/i.test(item.question)), true)
+    assert.equal(buying[1]?.questions.every((item) => /linear/i.test(item.question)), true)
+    const problems = themes.find((theme) => theme.id === 'problems')
+    assert.equal(problems?.framing, 'unbranded')
+    assert.equal(problems?.questions.some((item) => item.question.includes('plan a week')), true)
+    assert.equal(problems?.questions.some((item) => /linear/i.test(item.question)), false)
+    const described = themes.filter((theme) => theme.id === 'described')
+    assert.equal(described.length, 1)
+    assert.equal(described[0]?.framing, 'branded')
+    const stored = fullReportFromStored({
+      report: 'full',
+      fullReport: {
+        domain: 'linear.app',
+        model: 'gpt-4o-mini',
+        includesBranded: true,
+        themes: [
+          {
+            id: 'buying',
+            questions: [
+              { question: 'What should a team buy for issue tracking?', answer: 'A tracker.', mention: 'not_mentioned' },
+              { question: 'Should a team buy Linear next?', answer: 'Linear is one option.', mention: 'mentioned' },
+            ],
+          },
+        ],
+      },
+    })
+    assert.deepEqual(
+      stored?.themes.map((theme) => [theme.id, theme.framing]),
+      [
+        ['buying', 'unbranded'],
+        ['buying', 'branded'],
+      ],
+    )
   })
 })
 
@@ -845,7 +936,10 @@ describe('guest aha copy stays put', () => {
     assert.equal(app.includes('Need more checks?'), false)
     assert.equal(PRODUCT_DEFAULTS.copy.upgradeHeadline, 'Free limit reached')
     assert.match(PRODUCT_DEFAULTS.copy.upgradeBody, /more full reports, saved checks, and ongoing land and dig/)
-    assert.match(ui, /themeSectionEyebrow/)
+    assert.match(section, /STORY\.landEyebrow/)
+    assert.match(section, /STORY\.digEyebrow/)
+    assert.equal(section.includes('themeSectionEyebrow'), false)
+    assert.equal(section.includes('q-badge'), false)
     assert.equal(app.includes('report SKU'), false)
     assert.equal(app.includes('showFullAnswer'), false)
     assert.equal(app.includes('hideAnswer'), false)

@@ -28,6 +28,7 @@ describe('full-report row markup', () => {
               {
                 id: 'problems',
                 title: 'Problems you solve',
+                framing: 'unbranded',
                 questions: [
                   {
                     question: 'What should a team use to track issues?',
@@ -35,13 +36,6 @@ describe('full-report row markup', () => {
                     framing: 'unbranded',
                     mention: 'not_mentioned',
                     whoInstead: ['Jira', 'Asana'],
-                  },
-                  {
-                    question: 'How do people describe Linear?',
-                    answer: branded,
-                    framing: 'branded',
-                    mention: 'mentioned',
-                    whoInstead: ['Jira'],
                   },
                   {
                     question: 'How do teams plan a week?',
@@ -56,6 +50,20 @@ describe('full-report row markup', () => {
                     framing: 'unbranded',
                     mention: 'unclear',
                     whoInstead: ['Height'],
+                  },
+                ],
+              },
+              {
+                id: 'described',
+                title: 'How you’re described',
+                framing: 'branded',
+                questions: [
+                  {
+                    question: 'How do people describe Linear?',
+                    answer: branded,
+                    framing: 'branded',
+                    mention: 'mentioned',
+                    whoInstead: ['Jira'],
                   },
                   {
                     question: 'What is missing from this category?',
@@ -83,11 +91,15 @@ describe('full-report row markup', () => {
         chips.map((match) => [match[2].trim(), match[1]]),
         [
           ['Not mentioned', 'tag plain mention report-mention'],
-          ['Mentioned', 'tag plain mention report-mention mentioned'],
           ['Unclear', 'tag plain mention report-mention'],
+          ['Mentioned', 'tag plain mention report-mention mentioned'],
           ['Not mentioned', 'tag plain mention report-mention'],
         ],
       )
+      assert.match(html, />Unbranded</)
+      assert.match(html, />Branded</)
+      assert.equal(html.includes('q-badge'), false)
+      assert.equal(html.includes('tag plain live'), false)
       assert.equal(html.includes(answer), false)
       assert.equal(html.includes(branded), false)
       assert.equal(html.includes('It might be Linear, but that is only implied.'), false)
@@ -140,6 +152,7 @@ describe('full-report row markup', () => {
           {
             id: 'problems' as const,
             title: 'Problems you solve',
+            framing: 'unbranded' as const,
             questions: [
               {
                 question: 'What should a team use to track issues?',
@@ -166,7 +179,10 @@ describe('full-report row markup', () => {
       assert.equal(closed.includes('>Add question<'), false)
       assert.match(closed, /0% mentioned/)
       assert.equal(closed.includes('Across runs:'), false)
-      assert.match(closed, /Generated · OpenAI/)
+      assert.match(closed, />Unbranded</)
+      assert.equal(/>Branded</.test(closed), false)
+      assert.equal(closed.includes('q-badge'), false)
+      assert.equal(closed.includes('Generated · OpenAI'), false)
       assert.match(closed, />Not mentioned</)
       assert.equal(closed.includes('Jira shows up.'), false)
       const html = renderToStaticMarkup(
@@ -241,6 +257,7 @@ describe('full-report row markup', () => {
               {
                 id: 'problems',
                 title: 'Shared label',
+                framing: 'unbranded',
                 questions: [
                   {
                     question: 'What should a team use to track issues?',
@@ -261,6 +278,7 @@ describe('full-report row markup', () => {
               {
                 id: 'trust',
                 title: 'Shared label',
+                framing: 'branded',
                 questions: [
                   {
                     question: 'How do people describe Linear?',
@@ -276,6 +294,10 @@ describe('full-report row markup', () => {
         }),
       )
       assert.equal(html.includes('Over time'), false)
+      assert.match(html, />Unbranded</)
+      assert.match(html, />Branded</)
+      assert.equal(html.includes('q-badge'), false)
+      assert.equal(html.includes('Generated · OpenAI'), false)
       assert.equal(html.includes('>Edit<'), false)
       assert.equal(html.includes('>Delete<'), false)
       assert.match(html, /100% mentioned/)

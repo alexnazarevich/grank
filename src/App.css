@@ -175,7 +175,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .theme-heading {
   display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.35rem 0.85rem;
 }
-.theme-heading h2.theme-title { margin-bottom: 0; }
+.theme-heading h2.theme-title {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.45rem 0.7rem; margin-bottom: 0;
+}
+.theme-framing { margin: 0; flex: none; }
 .theme-rate { margin: 0; color: var(--accent); font-weight: 750; font-size: 0.95rem; }
 .theme-across { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
 .theme-answer-row td { padding-top: 0.15rem; }

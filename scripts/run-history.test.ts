@@ -216,6 +216,47 @@ describe('delta vs last run', () => {
     )
     assert.equal(fromReport[0]?.latest, 50)
     assert.equal(fromReport[0]?.across, null)
+    const split = themeMentionRates(
+      [
+        {
+          id: 'buying',
+          framing: 'unbranded',
+          questions: [
+            { question: 'What should a team buy?', mention: 'mentioned', framing: 'unbranded' },
+            { question: 'What do teams buy next?', mention: 'mentioned', framing: 'unbranded' },
+          ],
+        },
+        {
+          id: 'buying',
+          framing: 'branded',
+          questions: [{ question: 'Should we buy Linear?', mention: 'not_mentioned', framing: 'branded' }],
+        },
+      ],
+      [],
+    )
+    assert.deepEqual(
+      split.map((rate) => [rate.id, rate.framing, rate.latest]),
+      [
+        ['buying', 'unbranded', 100],
+        ['buying', 'branded', 0],
+      ],
+    )
+    const mixed = themeMentionRates(
+      [
+        {
+          id: 'buying',
+          questions: [
+            { question: 'What should a team buy?', mention: 'mentioned', framing: 'unbranded' },
+            { question: 'Should we buy Linear?', mention: 'not_mentioned', framing: 'branded' },
+          ],
+        },
+      ],
+      [],
+    )
+    assert.deepEqual(
+      mixed.map((rate) => rate.latest),
+      [100, 0],
+    )
   })
 
   it('treats an unchanged run as an empty delta and a single run as not comparable', () => {
@@ -714,6 +755,10 @@ describe('what’s changed and over time story', () => {
     const gridRow = section.slice(section.indexOf('function ThemeGridRow'), section.indexOf('function ManageQuestions'))
     assert.equal(gridRow.includes('editQuestionCta'), false)
     assert.equal(gridRow.includes('deleteQuestionCta'), false)
+    assert.equal(gridRow.includes('q-badge'), false)
+    assert.equal(gridRow.includes('landBadge'), false)
+    assert.equal(gridRow.includes('digBadge'), false)
+    assert.match(gridRow, /\{GENERATED\}/)
     assert.match(panel, /deltaNewlyMentioned/)
     assert.match(panel, /deltaWhoAppeared/)
     assert.match(panel, /changeSummary/)

@@ -1,6 +1,8 @@
 /**
  * Full-report theme plan and model-output shaping.
  * Theme titles are fixed. Empty themes drop. Alternatives stay unbranded.
+ * Each theme is branded-only or unbranded-only. Buying and edge may appear
+ * twice — same stable id, one framing each — so the mention % is not blended.
  * No search-engine theme names and no blended score.
  */
 
@@ -32,6 +34,8 @@ export type FullReportQuestion = {
 export type FullReportTheme = {
   id: ThemeId
   title: string
+  /** Every question in this theme uses this framing. */
+  framing: Framing
   questions: FullReportQuestion[]
 }
 
@@ -79,7 +83,8 @@ const THEME_KEYS: Record<string, ThemeId> = {
   'edge cases': 'edge',
 }
 
-export type ThemeAsk = 'unbranded' | 'branded' | 'mixed'
+/** `split` keeps one catalog id and emits two homogeneous themes, one framing each. */
+export type ThemeAsk = 'unbranded' | 'branded' | 'split'
 
 export type PlannedTheme = {
   id: ThemeId
@@ -117,7 +122,63 @@ export function distributeCounts(total: number, buckets: number): number[] {
 function askFor(leaning: Leaning, includesBranded: boolean): ThemeAsk {
   if (!includesBranded || leaning === 'unbranded') return 'unbranded'
   if (leaning === 'branded') return 'branded'
-  return 'mixed'
+  return 'split'
+}
+
+/** Catalog lock for one stable theme id. */
+export function themeAsk(id: ThemeId, includesBranded: boolean): ThemeAsk {
+  const leaning = THEME_CATALOG.find((theme) => theme.id === id)?.leaning ?? 'unbranded'
+  return askFor(leaning, includesBranded)
+}
+
+const BRANDED_HOME: readonly ThemeId[] = ['described', 'trust', 'buying', 'edge']
+const UNBRANDED_HOME: readonly ThemeId[] = ['problems', 'alternatives', 'buying', 'edge']
+
+/** Locked themes do not keep the other framing. Split ids keep both, apart. */
+export function homeTheme(id: ThemeId, framing: Framing, includesBranded: boolean): ThemeId {
+  const ask = themeAsk(id, includesBranded)
+  if (ask === 'split' || ask === framing) return id
+  const order = framing === 'branded' ? BRANDED_HOME : UNBRANDED_HOME
+  const home = order.find((candidate) => {
+    const next = themeAsk(candidate, includesBranded)
+    return next === framing || next === 'split'
+  })
+  return home ?? (framing === 'branded' ? 'described' : 'problems')
+}
+
+/**
+ * One framing per theme object. Buying and edge may appear twice under the same id.
+ * A branded question never stays on an unbranded-only theme, and the reverse.
+ */
+export function assembleThemes(
+  groups: { id: ThemeId; questions: FullReportQuestion[] }[],
+  includesBranded: boolean,
+): FullReportTheme[] {
+  const seen = new Set<string>()
+  const buckets = new Map<string, FullReportQuestion[]>()
+  const put = (id: ThemeId, question: FullReportQuestion) => {
+    if (question.framing === 'branded' && !includesBranded) return
+    const key = question.question.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    const home = homeTheme(id, question.framing, includesBranded)
+    const bucketKey = `${home}:${question.framing}`
+    const list = buckets.get(bucketKey) ?? []
+    list.push(question)
+    buckets.set(bucketKey, list)
+  }
+  for (const group of groups) {
+    for (const question of group.questions) put(group.id, question)
+  }
+  const themes: FullReportTheme[] = []
+  for (const catalog of THEME_CATALOG) {
+    for (const framing of ['unbranded', 'branded'] as const) {
+      const questions = buckets.get(`${catalog.id}:${framing}`)
+      if (!questions || questions.length === 0) continue
+      themes.push({ id: catalog.id, title: catalog.title, framing, questions })
+    }
+  }
+  return themes
 }
 
 /**
@@ -225,7 +286,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Map model JSON onto the locked themes.
- * Branded questions never stay in Alternatives. Problems stays unbranded-first.
+ * Each theme is one framing. Branded questions never stay in Alternatives or Problems.
+ * Buying and edge keep both framings as separate themes with the same id.
  * Returns null when the set is too thin to be a report — callers show an honest failure.
  */
 export function shapeFullReport(
@@ -242,7 +304,6 @@ export function shapeFullReport(
   const allowed = new Set(opts.plan.map((theme) => theme.id))
   const buckets = new Map<ThemeId, DraftQuestion[]>()
   for (const theme of opts.plan) buckets.set(theme.id, [])
-  const rehome: DraftQuestion[] = []
 
   for (const entry of raw.themes) {
     if (!isRecord(entry)) continue
@@ -271,36 +332,23 @@ export function shapeFullReport(
         whoInstead: framing === 'unbranded' && mention ? parseWhoInstead(isRecord(item) ? item.whoInstead : [], opts.domain) : [],
       }
       if (mention) draft.mention = mention
-      if (framing === 'branded' && (id === 'alternatives' || id === 'problems')) {
-        rehome.push(draft)
-        continue
-      }
       buckets.get(id)?.push(draft)
     }
   }
 
-  if (opts.includesBranded && rehome.length > 0) {
-    const home = (['described', 'trust', 'buying', 'edge'] as const).find((id) => buckets.has(id))
-    if (home) buckets.get(home)?.push(...rehome)
-  }
-
-  const seen = new Set<string>()
-  const ordered: FullReportTheme[] = []
+  const groups: { id: ThemeId; questions: DraftQuestion[] }[] = []
   for (const theme of opts.plan) {
-    const questions = dedupe(buckets.get(theme.id) ?? []).filter((item) => {
-      const key = item.question.toLowerCase()
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
+    const questions = dedupe(buckets.get(theme.id) ?? [])
     if (questions.length === 0) continue
-    ordered.push({ id: theme.id, title: theme.title, questions })
+    groups.push({ id: theme.id, questions })
   }
+  const ordered = assembleThemes(groups, opts.includesBranded)
   const trimmed = trimToTarget(ordered, Math.max(1, opts.questionTarget))
   const count = trimmed.reduce((sum, theme) => sum + theme.questions.length, 0)
   if (trimmed.length < Math.max(1, opts.themeMin)) return null
   if (count < questionFloor(opts.questionTarget, opts.themeMin)) return null
   for (const theme of trimmed) {
+    if (theme.questions.some((item) => item.framing !== theme.framing)) return null
     if (theme.id !== 'alternatives') continue
     if (theme.questions.some((item) => item.framing === 'branded' || mentionsBrand(item.question, opts.domain))) {
       return null
@@ -345,21 +393,31 @@ export function fullReportPrompt(
     'Write only the themes listed below. Use these ids exactly.',
     'Do not add a theme about Google, Bing, Perplexity, Gemini, or any search-results page.',
     'Do not return a score, rank, or visibility percentage.',
+    'Every theme is unbranded-only or branded-only. Never mix both framings in one theme.',
     'The alternatives theme is unbranded-framed only. Never put a branded question there.',
   ]
   if (excerpt) lines.push(`Homepage excerpt (may be incomplete):\n${excerpt}`)
   for (const theme of plan) {
-    if (theme.ask === 'unbranded') {
-      lines.push(
-        `Theme id "${theme.id}" (${theme.title}): write ${theme.count} questions that do not name ${brand} or ${domain}. framing must be "unbranded".`,
-      )
+    if (theme.ask === 'split') {
+      const brandedCount = Math.floor(theme.count / 2)
+      const unbrandedCount = theme.count - brandedCount
+      if (unbrandedCount > 0) {
+        lines.push(
+          `Theme id "${theme.id}" (${theme.title}): write ${unbrandedCount} questions that do not name ${brand} or ${domain}. framing must be "unbranded". Return this framing alone.`,
+        )
+      }
+      if (brandedCount > 0) {
+        lines.push(
+          `Theme id "${theme.id}" (${theme.title}): write ${brandedCount} questions that name ${brand}. framing must be "branded". Return this framing alone.`,
+        )
+      }
     } else if (theme.ask === 'branded') {
       lines.push(
         `Theme id "${theme.id}" (${theme.title}): write ${theme.count} questions that name ${brand}. framing must be "branded".`,
       )
     } else {
       lines.push(
-        `Theme id "${theme.id}" (${theme.title}): write ${theme.count} questions. About half name ${brand} (framing "branded") and half do not (framing "unbranded").`,
+        `Theme id "${theme.id}" (${theme.title}): write ${theme.count} questions that do not name ${brand} or ${domain}. framing must be "unbranded".`,
       )
     }
     if (theme.id === 'alternatives') {
@@ -396,7 +454,8 @@ Return JSON only:
 Each answer is 1 or 2 conservative sentences from public knowledge. If unsure, say so. Do not invent praise. If you cannot answer, use an empty string.
 framing "branded" means the question names the brand. framing "unbranded" means it does not.
 The theme id "alternatives" is unbranded only: who else shows up in the category. Never put a branded question in alternatives. Never use the brand name, product name, or domain in that theme.
-The theme id "problems" is unbranded-first: recommendation-shaped questions that do not name the brand, product, or domain. Ask what tools, platforms, or software for the job, or what teams use for the job, using the homepage excerpt for the job. Do not ask abstract how-do-I-solve questions.
+Each theme is unbranded-only or branded-only. Never mix both framings in one questions list. The ids "buying" and "edge" may be two theme objects with the same id, one framing each.
+The theme id "problems" is unbranded only: recommendation-shaped questions that do not name the brand, product, or domain. Ask what tools, platforms, or software for the job, or what teams use for the job, using the homepage excerpt for the job. Do not ask abstract how-do-I-solve questions.
 On problems answers, you may name real products you already know; if unsure, say so plainly and leave whoInstead empty — never invent names, and do not force a company roster.
 ${SHARPER_Q_RULES}
 ${MENTION_FACT_RULES}`
@@ -413,19 +472,17 @@ export function fullReportFromStored(result: unknown): FullReport | null {
   const model = typeof blob.model === 'string' ? blob.model : ''
   if (!domain || !model || !Array.isArray(blob.themes)) return null
   const includesBranded = blob.includesBranded === true
-  const themes: FullReportTheme[] = []
+  const groups: { id: ThemeId; questions: FullReportQuestion[] }[] = []
   for (const entry of blob.themes) {
     if (!isRecord(entry)) continue
     const id = resolveThemeId(entry.id)
-    const catalog = id ? THEME_CATALOG.find((theme) => theme.id === id) : undefined
-    if (!id || !catalog || !Array.isArray(entry.questions)) continue
+    if (!id || !Array.isArray(entry.questions)) continue
     const questions: FullReportQuestion[] = []
     for (const item of entry.questions) {
       if (!isRecord(item)) continue
       const question = cleanQuestion(item.question)
       if (!question) continue
       const framing = inferFraming(question, domain)
-      if (id === 'alternatives' && (framing === 'branded' || mentionsBrand(question, domain))) continue
       if (!includesBranded && framing === 'branded') continue
       const answerText = cleanAnswer(item.answer)
       const mention = mentionFromAnswer(answerText, domain, item.mention)
@@ -439,8 +496,9 @@ export function fullReportFromStored(result: unknown): FullReport | null {
       questions.push(stored)
     }
     if (questions.length === 0) continue
-    themes.push({ id, title: catalog.title, questions })
+    groups.push({ id, questions })
   }
+  const themes = assembleThemes(groups, includesBranded)
   if (themes.length === 0) return null
   return { domain, model, includesBranded, themes }
 }
@@ -464,26 +522,17 @@ export function cleanRunPins(value: unknown, domain: string, max: number): RunPi
   return out
 }
 
-function themeById(themes: FullReportTheme[], id: ThemeId): FullReportTheme | undefined {
-  return themes.find((theme) => theme.id === id)
-}
-
-function ensureTheme(themes: FullReportTheme[], id: ThemeId): FullReportTheme {
-  const found = themeById(themes, id)
-  if (found) return found
-  const catalog = THEME_CATALOG.find((theme) => theme.id === id)
-  const created: FullReportTheme = { id, title: catalog?.title || id, questions: [] }
-  themes.push(created)
-  themes.sort(
-    (a, b) =>
-      THEME_CATALOG.findIndex((theme) => theme.id === a.id) - THEME_CATALOG.findIndex((theme) => theme.id === b.id),
-  )
-  return created
+function themeSort(a: FullReportTheme, b: FullReportTheme): number {
+  const ai = THEME_CATALOG.findIndex((theme) => theme.id === a.id)
+  const bi = THEME_CATALOG.findIndex((theme) => theme.id === b.id)
+  if (ai !== bi) return ai - bi
+  if (a.framing === b.framing) return 0
+  return a.framing === 'unbranded' ? -1 : 1
 }
 
 /**
  * Keep pinned wording in the report when the model drops it.
- * Branded pins never land in Alternatives. A pin with an empty answer has no mention label.
+ * A pin joins the homogeneous theme for its framing. An empty answer has no mention label.
  */
 export function applyRunPins(
   themes: FullReportTheme[],
@@ -496,21 +545,21 @@ export function applyRunPins(
     copy.some((theme) => theme.questions.some((item) => item.question.toLowerCase() === question.toLowerCase()))
   for (const pin of pins) {
     if (have(pin.question)) continue
-    const branded = pin.framing === 'branded' || mentionsBrand(pin.question, opts.domain)
-    if (branded && !opts.includesBranded) continue
-    const id: ThemeId = branded ? 'described' : landThemeId(pin.question, 'unbranded')
-    let theme = branded
-      ? themeById(copy, 'described') ||
-        themeById(copy, 'trust') ||
-        themeById(copy, 'buying') ||
-        themeById(copy, 'edge')
-      : themeById(copy, id)
-    if (!theme) theme = ensureTheme(copy, branded ? 'described' : id)
-    if (theme.id === 'alternatives' && branded) continue
+    const framing: Framing = mentionsBrand(pin.question, opts.domain) ? 'branded' : 'unbranded'
+    if (framing === 'branded' && !opts.includesBranded) continue
+    const preferred: ThemeId = framing === 'branded' ? 'described' : landThemeId(pin.question, 'unbranded')
+    const id = homeTheme(preferred, framing, opts.includesBranded)
+    let theme = copy.find((entry) => entry.id === id && entry.framing === framing)
+    if (!theme) {
+      const catalog = THEME_CATALOG.find((entry) => entry.id === id)
+      theme = { id, title: catalog?.title || id, framing, questions: [] }
+      copy.push(theme)
+      copy.sort(themeSort)
+    }
     theme.questions.push({
       question: pin.question,
       answer: '',
-      framing: branded ? 'branded' : 'unbranded',
+      framing,
       whoInstead: [],
     })
   }

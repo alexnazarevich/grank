@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import { THEME_CATALOG, type FullReport, type FullReportQuestion } from './fullReport.ts'
-import type { ThemeId } from './mentionFacts.ts'
+import type { Framing, ThemeId } from './mentionFacts.ts'
 import { mentionStatusLabel, whoInsteadNames } from './mentionLabel.ts'
 import {
   gridRuns,
@@ -18,6 +18,22 @@ import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
 
+function themeFramingOf(theme: { framing?: Framing; questions: { framing: Framing }[] }): Framing | null {
+  const first = theme.questions[0]?.framing
+  if (!first || theme.questions.some((item) => item.framing !== first)) return null
+  if (theme.framing === 'branded' || theme.framing === 'unbranded') {
+    return theme.framing === first ? theme.framing : null
+  }
+  return first
+}
+
+/** Land/dig words. Unbranded and Branded — nothing else. */
+function framingLabel(framing: Framing | null): string | null {
+  if (framing === 'branded') return STORY.digEyebrow
+  if (framing === 'unbranded') return STORY.landEyebrow
+  return null
+}
+
 export type ReportEditor = {
   disabled?: boolean
   saving?: boolean
@@ -29,8 +45,8 @@ export type ReportEditor = {
   canDelete: boolean
   onEdit: (key: string, question: string) => void
   onEditText: (value: string) => void
-  onRename: (themeId: ThemeId, index: number) => void
-  onDelete: (themeId: ThemeId, index: number) => void
+  onRename: (themeId: ThemeId, index: number, framing: Framing) => void
+  onDelete: (themeId: ThemeId, index: number, framing: Framing) => void
   onAddText: (value: string) => void
   onAddTheme: (id: ThemeId) => void
   onAdd: () => void
@@ -53,13 +69,11 @@ function ReportQuestion({
   copy,
   panelId,
   chipId,
-  showFraming,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   panelId: string
   chipId: string
-  showFraming: boolean
 }) {
   const [open, setOpen] = useState(false)
   const text = item.answer.trim()
@@ -78,10 +92,6 @@ function ReportQuestion({
           aria-describedby={label ? chipId : undefined}
           onClick={() => setOpen((value) => !value)}
         >
-          <span className="tag plain live">{GENERATED}</span>
-          {showFraming ? (
-            <span className="tag plain q-badge">{item.framing === 'branded' ? STORY.digBadge : STORY.landBadge}</span>
-          ) : null}
           <span className="report-q-text">{item.question}</span>
         </button>
         {label ? (
@@ -122,13 +132,11 @@ function ThemeGridRow({
   copy,
   runs,
   panelId,
-  showFraming,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   runs: CheckRun[]
   panelId: string
-  showFraming: boolean
 }) {
   const [open, setOpen] = useState(false)
   const text = item.answer.trim()
@@ -147,9 +155,6 @@ function ThemeGridRow({
             aria-label={item.question}
             onClick={() => setOpen((value) => !value)}
           >
-            {showFraming ? (
-              <span className="tag plain q-badge">{item.framing === 'branded' ? STORY.digBadge : STORY.landBadge}</span>
-            ) : null}
             <span className="report-q-text">{item.question}</span>
           </button>
         </th>
@@ -219,12 +224,18 @@ function ManageQuestions({
         <div id="manage-questions-panel" className="manage-panel">
           <h3>{copy.manageQuestionsTitle}</h3>
           <p className="why">{copy.manageQuestionsHint}</p>
-          {report.themes.map((theme) => (
-            <div key={theme.id}>
-              <p className="manage-theme">{theme.title}</p>
+          {report.themes.map((theme) => {
+            const word = framingLabel(themeFramingOf(theme))
+            const framing = themeFramingOf(theme) ?? theme.framing
+            return (
+              <div key={`${theme.id}:${theme.framing}`}>
+                <p className="manage-theme">
+                {word ? <span className="eyebrow theme-framing">{word}</span> : null}
+                {theme.title}
+              </p>
               <ul className="manage-list">
                 {theme.questions.map((item, index) => {
-                  const rowKey = `${theme.id}:${index}`
+                  const rowKey = `${theme.id}:${theme.framing}:${index}`
                   return (
                     <li key={rowKey} className="manage-q">
                       {editor.editingKey === rowKey ? (
@@ -239,7 +250,7 @@ function ManageQuestions({
                           <button
                             type="button"
                             disabled={editor.disabled || !editor.editText.replace(/\s+/g, ' ').trim()}
-                            onClick={() => editor.onRename(theme.id, index)}
+                            onClick={() => editor.onRename(theme.id, index, framing)}
                           >
                             {copy.saveEditedQuestionCta}
                           </button>
@@ -258,7 +269,7 @@ function ManageQuestions({
                             <button
                               type="button"
                               disabled={editor.disabled || !editor.canDelete}
-                              onClick={() => editor.onDelete(theme.id, index)}
+                              onClick={() => editor.onDelete(theme.id, index, framing)}
                             >
                               {copy.deleteQuestionCta}
                             </button>
@@ -270,7 +281,8 @@ function ManageQuestions({
                 })}
               </ul>
             </div>
-          ))}
+            )
+          })}
           <form
             className="owned-add"
             onSubmit={(event: FormEvent) => {
@@ -341,8 +353,16 @@ export function FullReportSection({
   manageOpen?: boolean
 }) {
   const shown = gridRuns(runs, preview)
-  const rates = themeMentionRates(report.themes, shown)
-  const rateById = new Map(rates.map((rate) => [rate.id, rate]))
+  const rates = themeMentionRates(
+    report.themes.map((theme) => ({
+      id: theme.id,
+      title: theme.title,
+      framing: themeFramingOf(theme) ?? undefined,
+      questions: theme.questions,
+    })),
+    shown,
+  )
+  const rateByKey = new Map(rates.map((rate) => [rate.framing ? `${rate.id}:${rate.framing}` : rate.id, rate]))
   return (
     <section className="full-report" aria-label={copy.fullReportTitle}>
       {themesOnly ? null : (
@@ -353,14 +373,18 @@ export function FullReportSection({
       )}
       {report.themes.length === 0 ? <p className="why">{copy.fullReportEmptyThemes}</p> : null}
       {report.themes.map((theme) => {
-        const rate = rateById.get(theme.id)
+        const framing = themeFramingOf(theme)
+        const rate = rateByKey.get(framing ? `${theme.id}:${framing}` : theme.id)
         const latest = rate?.latest
         const across = rate?.across
+        const word = framingLabel(framing)
         return (
-          <section key={theme.id} className="block theme-block">
-            <p className="eyebrow">{copy.themeSectionEyebrow}</p>
+          <section key={`${theme.id}:${theme.framing}`} className="block theme-block">
             <div className="theme-heading">
-              <h2 className="theme-title">{theme.title}</h2>
+              <h2 className="theme-title">
+                {word ? <span className="eyebrow theme-framing">{word}</span> : null}
+                <span>{theme.title}</span>
+              </h2>
               {latest === null || latest === undefined ? (
                 <p className="theme-rate">—</p>
               ) : (
@@ -389,12 +413,11 @@ export function FullReportSection({
                   <tbody>
                     {theme.questions.map((item, index) => (
                       <ThemeGridRow
-                        key={`${theme.id}-${index}`}
+                        key={`${theme.id}-${theme.framing}-${index}`}
                         item={item}
                         copy={copy}
                         runs={shown}
-                        panelId={`report-a-${theme.id}-${index}`}
-                        showFraming={report.includesBranded}
+                        panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                       />
                     ))}
                   </tbody>
@@ -404,12 +427,11 @@ export function FullReportSection({
               <ul className="answers">
                 {theme.questions.map((item, index) => (
                   <ReportQuestion
-                    key={`${theme.id}-${index}`}
+                    key={`${theme.id}-${theme.framing}-${index}`}
                     item={item}
                     copy={copy}
-                    panelId={`report-a-${theme.id}-${index}`}
-                    chipId={`report-m-${theme.id}-${index}`}
-                    showFraming={report.includesBranded}
+                    panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
+                    chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
                   />
                 ))}
               </ul>

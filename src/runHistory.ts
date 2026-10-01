@@ -4,7 +4,7 @@
  * The newest runs are kept. The summary compares the last two; the grid shows every kept run.
  */
 
-import { parseMention, parseWhoInstead, type Mention } from './mentionFacts.ts'
+import { parseMention, parseWhoInstead, type Framing, type Mention } from './mentionFacts.ts'
 
 export type RunMode = 'unbranded' | 'branded' | 'full'
 
@@ -319,11 +319,15 @@ export type ThemeRateInput = {
   id: string
   /** Display only. Rates are never grouped by title. */
   title?: string
-  questions: { question: string; mention?: Mention }[]
+  /** Set when this slice is already one framing. Mixed questions are split before the %. */
+  framing?: Framing
+  questions: { question: string; mention?: Mention; framing?: Framing }[]
 }
 
 export type ThemeMentionRate = {
   id: string
+  /** Present when the rate is for one framing of a stable theme id. */
+  framing?: Framing
   /** Mentioned share for the latest run. Null when that run has no questions in this theme id. */
   latest: number | null
   /** Oldest run → newest run. Null until both ends include this theme id. */
@@ -352,33 +356,59 @@ function flagsForTheme(
   return flags
 }
 
+function rateKey(id: string, framing?: Framing): string {
+  return framing ? `${id}:${framing}` : id
+}
+
+/** Mixed branded + unbranded questions become two rates. A homogeneous theme stays one. */
+function rateSlices(theme: ThemeRateInput): ThemeRateInput[] {
+  const seen = new Set<Framing>()
+  for (const question of theme.questions) {
+    if (question.framing === 'branded' || question.framing === 'unbranded') seen.add(question.framing)
+  }
+  if (seen.size < 2) return [theme]
+  const slices: ThemeRateInput[] = []
+  for (const framing of ['unbranded', 'branded'] as const) {
+    const questions = theme.questions.filter((question) => question.framing === framing)
+    if (questions.length === 0) continue
+    slices.push({ ...theme, framing, questions })
+  }
+  return slices
+}
+
 /**
- * One rate per stable theme id.
+ * One rate per stable theme id, and per framing when one id has both.
+ * Branded and unbranded questions are never one unlabeled %.
  * With no stored runs, the questions’ own mention labels are the latest run.
  * Across runs reads oldest → newest, not the middle columns.
  */
 export function themeMentionRates(themes: ThemeRateInput[], runs: CheckRun[]): ThemeMentionRate[] {
   const order: string[] = []
-  const grouped = new Map<string, ThemeRateInput['questions']>()
-  for (const theme of themes) {
+  const grouped = new Map<string, ThemeRateInput>()
+  for (const theme of themes.flatMap(rateSlices)) {
     if (!theme.id) continue
-    const list = grouped.get(theme.id)
+    const key = rateKey(theme.id, theme.framing)
+    const list = grouped.get(key)
     if (list) {
-      list.push(...theme.questions)
+      list.questions.push(...theme.questions)
       continue
     }
-    grouped.set(theme.id, [...theme.questions])
-    order.push(theme.id)
+    grouped.set(key, { ...theme, questions: [...theme.questions] })
+    order.push(key)
   }
-  return order.map((id) => {
-    const questions = grouped.get(id) ?? []
-    if (questions.length === 0) return { id, latest: null, across: null }
+  return order.map((key) => {
+    const theme = grouped.get(key)
+    const id = theme?.id || key
+    const questions = theme?.questions ?? []
+    const framing = theme?.framing
+    if (questions.length === 0) return { id, framing, latest: null, across: null }
     const latest = mentionPercent(flagsForTheme(questions, runs.length > 0 ? runs[runs.length - 1] : null))
-    if (runs.length < 2) return { id, latest, across: null }
+    if (runs.length < 2) return { id, framing, latest, across: null }
     const oldest = mentionPercent(flagsForTheme(questions, runs[0]))
     const newest = mentionPercent(flagsForTheme(questions, runs[runs.length - 1]))
     return {
       id,
+      framing,
       latest,
       across: oldest !== null && newest !== null ? { oldest, newest } : null,
     }
