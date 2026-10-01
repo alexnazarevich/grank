@@ -64,11 +64,14 @@ export function RunHistoryPanel({
   preview = null,
   answers = [],
   copy,
+  summaryOnly = false,
 }: {
   runs: CheckRun[]
   preview?: CheckRun | null
   answers?: { question: string; answer: string }[]
   copy: ProductCopy
+  /** Full report keeps the rollup and draws run columns inside each theme. */
+  summaryOnly?: boolean
 }) {
   const shown = gridRuns(runs, preview)
   const summary = changeSummary(shown)
@@ -103,55 +106,58 @@ export function RunHistoryPanel({
           <p className="why">{copy.deltaEmpty}</p>
         ) : null}
       </section>
-      <section className="block run-over-time" aria-labelledby="over-time-title">
-        <h2 className="beat-title" id="over-time-title">
-          {copy.overTimeTitle}
-        </h2>
-        <p className="why">{copy.overTimeHelper}</p>
-        <p className="why run-legend">{copy.overTimeLegend}</p>
-        {shown.length > 0 && rows.length > 0 ? (
-          <div className="run-grid-wrap">
-            <table className="run-grid">
-              <thead>
-                <tr>
-                  <th scope="col">{copy.overTimeQuestion}</th>
-                  {shown.map((run, index) => (
-                    <th key={`${run.at}:${index}`} scope="col">
-                      {runColumnLabel(run.at)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={runQuestionKey(row.question)}>
-                    <th scope="row">{row.question}</th>
-                    {row.cells.map((cell, index) => {
-                      const column = runColumnLabel(shown[index]?.at || '')
-                      const answer = index === lastIndex ? answerByQuestion.get(runQuestionKey(row.question)) || '' : ''
-                      return (
-                        <td key={`${runQuestionKey(row.question)}:${index}`}>
-                          {cell ? (
-                            <MentionCell
-                              question={row.question}
-                              column={column}
-                              cell={cell}
-                              answer={answer}
-                              copy={copy}
-                            />
-                          ) : (
-                            <span className="muted">—</span>
-                          )}
-                        </td>
-                      )
-                    })}
+      {summaryOnly ? null : (
+        <section className="block run-over-time" aria-labelledby="over-time-title">
+          <p className="run-over-time-label" id="over-time-title">
+            {copy.overTimeTitle}
+          </p>
+          <p className="why">{copy.overTimeHelper}</p>
+          <p className="why run-legend">{copy.overTimeLegend}</p>
+          {shown.length > 0 && rows.length > 0 ? (
+            <div className="run-grid-wrap">
+              <table className="run-grid">
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.overTimeQuestion}</th>
+                    {shown.map((run, index) => (
+                      <th key={`${run.at}:${index}`} scope="col">
+                        {runColumnLabel(run.at)}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </section>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={runQuestionKey(row.question)}>
+                      <th scope="row">{row.question}</th>
+                      {row.cells.map((cell, index) => {
+                        const column = runColumnLabel(shown[index]?.at || '')
+                        const answer =
+                          index === lastIndex ? answerByQuestion.get(runQuestionKey(row.question)) || '' : ''
+                        return (
+                          <td key={`${runQuestionKey(row.question)}:${index}`}>
+                            {cell ? (
+                              <MentionCell
+                                question={row.question}
+                                column={column}
+                                cell={cell}
+                                answer={answer}
+                                copy={copy}
+                              />
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      )}
     </>
   )
 }

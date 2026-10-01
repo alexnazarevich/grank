@@ -44,4 +44,9 @@ export const STORY = {
   overTimeHelper: 'Each column is one run. Same questions — mention status as you re-run.',
   overTimeQuestion: 'Question',
   overTimeLegend: 'Mentioned · Not mentioned · Unclear',
+  themeMentionRate: '{pct}% mentioned',
+  themeAcrossRuns: 'Across runs: {a}% → {b}%',
+  manageQuestionsCta: 'Manage questions',
+  manageQuestionsTitle: 'Manage questions',
+  manageQuestionsHint: 'Add, remove, or rename questions for this check. Save, then Run again.',
 } as const

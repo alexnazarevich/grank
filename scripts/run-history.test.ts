@@ -19,7 +19,11 @@ import {
   deltaVsLastRun,
   gridRuns,
   mentionGrid,
+  mentionPercent,
   runColumnLabel,
+  themeAcrossLabel,
+  themeMentionRates,
+  themeRateLabel,
   type CheckRun,
   type RunMention,
 } from '../src/runHistory.ts'
@@ -125,6 +129,93 @@ describe('delta vs last run', () => {
     assert.equal(gridRuns([], prior).length, 1)
     assert.equal(gridRuns([prior, current], prior).length, 2)
     assert.equal(gridRuns([], null).length, 0)
+  })
+
+  it('counts theme mention share on the stable id, oldest run to newest', () => {
+    assert.equal(mentionPercent([]), null)
+    assert.equal(mentionPercent(['mentioned', 'unclear', 'not_mentioned']), 33)
+    assert.equal(mentionPercent(['mentioned', 'mentioned', undefined]), 67)
+    assert.equal(mentionPercent(['unclear', 'not_mentioned']), 0)
+    const oldest: CheckRun = {
+      at: '2026-09-01T00:00:00.000Z',
+      mode: 'full',
+      mentions: [
+        mention('Track issues', 'not_mentioned', []),
+        mention('How is the brand described?', 'mentioned', []),
+      ],
+    }
+    const middle: CheckRun = {
+      at: '2026-09-15T00:00:00.000Z',
+      mode: 'full',
+      mentions: [
+        mention('Track issues', 'mentioned', []),
+        mention('Plan a week', 'mentioned', []),
+        mention('How is the brand described?', 'not_mentioned', []),
+      ],
+    }
+    const newest: CheckRun = {
+      at: '2026-09-30T15:04:00.000Z',
+      mode: 'full',
+      mentions: [
+        mention('Track issues', 'mentioned', []),
+        mention('Plan a week', 'mentioned', []),
+        mention('How is the brand described?', 'unclear', []),
+      ],
+    }
+    const sharedTitle = 'Shared label'
+    const rates = themeMentionRates(
+      [
+        {
+          id: 'problems',
+          title: sharedTitle,
+          questions: [
+            { question: 'Track issues', mention: 'mentioned' },
+            { question: 'Plan a week', mention: 'mentioned' },
+          ],
+        },
+        {
+          id: 'trust',
+          title: sharedTitle,
+          questions: [{ question: 'How is the brand described?', mention: 'unclear' }],
+        },
+        { id: 'buying', title: 'Empty', questions: [] },
+      ],
+      [oldest, middle, newest],
+    )
+    assert.deepEqual(
+      rates.map((rate) => rate.id),
+      ['problems', 'trust', 'buying'],
+    )
+    const problems = rates[0]
+    const trust = rates[1]
+    assert.equal(problems?.latest, 100)
+    assert.deepEqual(problems?.across, { oldest: 0, newest: 100 })
+    assert.equal(trust?.latest, 0)
+    assert.deepEqual(trust?.across, { oldest: 100, newest: 0 })
+    assert.equal(rates[2]?.latest, null)
+    assert.equal(rates[2]?.across, null)
+    assert.equal(themeRateLabel('{pct}% mentioned', 100), '100% mentioned')
+    assert.equal(themeAcrossLabel('Across runs: {a}% → {b}%', 0, 100), 'Across runs: 0% → 100%')
+    const firstOnly = themeMentionRates(
+      [{ id: 'problems', questions: [{ question: 'Track issues', mention: 'not_mentioned' }] }],
+      [oldest],
+    )
+    assert.equal(firstOnly[0]?.latest, 0)
+    assert.equal(firstOnly[0]?.across, null)
+    const fromReport = themeMentionRates(
+      [
+        {
+          id: 'problems',
+          questions: [
+            { question: 'Track issues', mention: 'mentioned' },
+            { question: 'Plan a week', mention: 'unclear' },
+          ],
+        },
+      ],
+      [],
+    )
+    assert.equal(fromReport[0]?.latest, 50)
+    assert.equal(fromReport[0]?.across, null)
   })
 
   it('treats an unchanged run as an empty delta and a single run as not comparable', () => {
@@ -577,6 +668,20 @@ describe('what’s changed and over time story', () => {
     assert.equal(STORY.overTimeHelper, 'Each column is one run. Same questions — mention status as you re-run.')
     assert.equal(STORY.overTimeQuestion, 'Question')
     assert.equal(STORY.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
+    assert.equal(STORY.themeMentionRate, '{pct}% mentioned')
+    assert.equal(STORY.themeAcrossRuns, 'Across runs: {a}% → {b}%')
+    assert.equal(STORY.manageQuestionsCta, 'Manage questions')
+    assert.equal(STORY.manageQuestionsTitle, 'Manage questions')
+    assert.equal(
+      STORY.manageQuestionsHint,
+      'Add, remove, or rename questions for this check. Save, then Run again.',
+    )
+    assert.equal(
+      /SOV|visibility score|monitoring|weekly tracking/i.test(
+        `${STORY.themeMentionRate} ${STORY.themeAcrossRuns} ${STORY.manageQuestionsHint}`,
+      ),
+      false,
+    )
     assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
@@ -592,6 +697,23 @@ describe('what’s changed and over time story', () => {
     assert.match(panel, /copy\.deltaAwaiting/)
     assert.match(panel, /copy\.overTimeTitle/)
     assert.match(panel, /copy\.overTimeHelper/)
+    assert.match(panel, /run-over-time-label/)
+    assert.equal(/<h2[^>]*>\s*\{copy\.overTimeTitle\}/.test(panel), false)
+    assert.match(panel, /summaryOnly \? null/)
+    const reportStart = app.indexOf('screen && fullReport && reportOnly')
+    const reportBranch = app.slice(reportStart, app.indexOf(') : screen ?', reportStart))
+    assert.equal(reportBranch.indexOf('RunHistoryPanel') < reportBranch.indexOf('FullReportSection'), true)
+    assert.match(reportBranch, /summaryOnly/)
+    assert.equal(reportBranch.includes('overTimeTitle'), false)
+    assert.equal(reportBranch.includes('ownedQuestionsHint'), false)
+    const section = readFileSync(new URL('../src/FullReportSection.tsx', import.meta.url), 'utf8')
+    assert.match(section, /themeMentionRate/)
+    assert.match(section, /themeAcrossRuns/)
+    assert.match(section, /manageQuestionsCta/)
+    assert.equal(section.includes('overTimeTitle'), false)
+    const gridRow = section.slice(section.indexOf('function ThemeGridRow'), section.indexOf('function ManageQuestions'))
+    assert.equal(gridRow.includes('editQuestionCta'), false)
+    assert.equal(gridRow.includes('deleteQuestionCta'), false)
     assert.match(panel, /deltaNewlyMentioned/)
     assert.match(panel, /deltaWhoAppeared/)
     assert.match(panel, /changeSummary/)

@@ -314,3 +314,81 @@ export function gridRuns(stored: CheckRun[], preview?: CheckRun | null): CheckRu
   if (preview && preview.mentions.length > 0) return [preview]
   return []
 }
+
+export type ThemeRateInput = {
+  id: string
+  /** Display only. Rates are never grouped by title. */
+  title?: string
+  questions: { question: string; mention?: Mention }[]
+}
+
+export type ThemeMentionRate = {
+  id: string
+  /** Mentioned share for the latest run. Null when that run has no questions in this theme id. */
+  latest: number | null
+  /** Oldest run → newest run. Null until both ends include this theme id. */
+  across: { oldest: number; newest: number } | null
+}
+
+/** Mentioned ÷ questions. Unclear, Not mentioned, and a missing label are not mentioned. */
+export function mentionPercent(flags: Array<Mention | undefined>): number | null {
+  if (flags.length === 0) return null
+  const mentioned = flags.filter((flag) => flag === 'mentioned').length
+  return Math.min(100, Math.max(0, Math.round((mentioned / flags.length) * 100)))
+}
+
+function flagsForTheme(
+  questions: { question: string; mention?: Mention }[],
+  run: CheckRun | null,
+): Array<Mention | undefined> {
+  if (!run) return questions.map((item) => item.mention)
+  const flags: Array<Mention | undefined> = []
+  for (const item of questions) {
+    const key = runQuestionKey(item.question)
+    const hit = run.mentions.find((mention) => runQuestionKey(mention.question) === key)
+    if (!hit) continue
+    flags.push(hit.mention)
+  }
+  return flags
+}
+
+/**
+ * One rate per stable theme id.
+ * With no stored runs, the questions’ own mention labels are the latest run.
+ * Across runs reads oldest → newest, not the middle columns.
+ */
+export function themeMentionRates(themes: ThemeRateInput[], runs: CheckRun[]): ThemeMentionRate[] {
+  const order: string[] = []
+  const grouped = new Map<string, ThemeRateInput['questions']>()
+  for (const theme of themes) {
+    if (!theme.id) continue
+    const list = grouped.get(theme.id)
+    if (list) {
+      list.push(...theme.questions)
+      continue
+    }
+    grouped.set(theme.id, [...theme.questions])
+    order.push(theme.id)
+  }
+  return order.map((id) => {
+    const questions = grouped.get(id) ?? []
+    if (questions.length === 0) return { id, latest: null, across: null }
+    const latest = mentionPercent(flagsForTheme(questions, runs.length > 0 ? runs[runs.length - 1] : null))
+    if (runs.length < 2) return { id, latest, across: null }
+    const oldest = mentionPercent(flagsForTheme(questions, runs[0]))
+    const newest = mentionPercent(flagsForTheme(questions, runs[runs.length - 1]))
+    return {
+      id,
+      latest,
+      across: oldest !== null && newest !== null ? { oldest, newest } : null,
+    }
+  })
+}
+
+export function themeRateLabel(template: string, pct: number): string {
+  return template.replaceAll('{pct}', String(pct))
+}
+
+export function themeAcrossLabel(template: string, oldest: number, newest: number): string {
+  return template.replaceAll('{a}', String(oldest)).replaceAll('{b}', String(newest))
+}

@@ -1353,6 +1353,11 @@ export default function App() {
           onAddText: setAddText,
           onAddTheme: setAddThemeId,
           onAdd: onAddOwned,
+          onSave: () => {
+            void saveQuestions()
+          },
+          saving: questionsSaving,
+          saveDisabled: !questionsDirty,
         }
       : undefined
 
@@ -1559,23 +1564,27 @@ export default function App() {
               <span className="badge live">Generated · OpenAI</span>
             </div>
             <p className="why">{config.copy.fullReportSub}</p>
-            {owning ? <p className="why">{config.copy.ownedQuestionsHint}</p> : null}
-            <FullReportSection report={fullReport} copy={config.copy} themesOnly editor={reportEditor} />
             {showDelta ? (
-              <RunHistoryPanel runs={runs} preview={runPreview} answers={runAnswers} copy={config.copy} />
+              <RunHistoryPanel
+                runs={runs}
+                preview={runPreview}
+                answers={runAnswers}
+                copy={config.copy}
+                summaryOnly
+              />
             ) : null}
+            <FullReportSection
+              report={fullReport}
+              copy={config.copy}
+              themesOnly
+              editor={reportEditor}
+              runs={runs}
+              preview={runPreview}
+            />
             {owning ? (
               <div className="save-row">
                 <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                   {busy ? 'Generating…' : config.copy.runAgainCta}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => void saveQuestions()}
-                  disabled={questionToolsBusy || !questionsDirty}
-                >
-                  {questionsSaving ? 'Saving…' : config.copy.saveQuestionsCta}
                 </button>
               </div>
             ) : null}
