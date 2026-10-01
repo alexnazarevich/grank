@@ -46,7 +46,7 @@ import {
 } from './ownedQuestions'
 import { MentionMark } from './MentionMark'
 import { RunHistoryPanel } from './RunHistoryPanel'
-import { landThemeId, type AnswerFact, type ThemeId } from './mentionFacts'
+import { landThemeId, type AnswerFact, type Framing, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
 import { startCheckout } from './billingClient'
 import { listChecks, recordCheckRun, saveCheck, updateCheckQuestions } from './checksClient'
@@ -1043,30 +1043,36 @@ export default function App() {
     setEditText('')
   }
 
-  function onDeleteOwned(themeId: ThemeId, index: number) {
+  function ownedFlatIndex(themeId: ThemeId, index: number, framing?: Framing): number {
+    if (!fullReport) return -1
+    const themeIndex = fullReport.themes.findIndex(
+      (entry) => entry.id === themeId && (framing == null || entry.framing === framing),
+    )
+    if (themeIndex < 0) return -1
+    const offset = fullReport.themes
+      .slice(0, themeIndex)
+      .reduce((sum, entry) => sum + entry.questions.length, 0)
+    return offset + index
+  }
+
+  function onDeleteOwned(themeId: ThemeId, index: number, framing?: Framing) {
     if (!fullReport) return
-    const owned = ownedFromReport(fullReport).filter((_item, itemIndex) => {
-      const themeIndex = fullReport.themes.findIndex((entry) => entry.id === themeId)
-      const offset = fullReport.themes
-        .slice(0, Math.max(themeIndex, 0))
-        .reduce((sum, entry) => sum + entry.questions.length, 0)
-      return itemIndex !== offset + index
-    })
+    const target = ownedFlatIndex(themeId, index, framing)
+    if (target < 0) return
+    const owned = ownedFromReport(fullReport).filter((_item, itemIndex) => itemIndex !== target)
     if (owned.length < 1) return
     markQuestions(() => setFullReport(applyOwnedToReport(fullReport, owned)))
   }
 
-  function onRenameOwned(themeId: ThemeId, index: number) {
+  function onRenameOwned(themeId: ThemeId, index: number, framing?: Framing) {
     if (!fullReport) return
     const text = editText.replace(/\s+/g, ' ').trim()
     if (!text || text.length > 240) return
+    const target = ownedFlatIndex(themeId, index, framing)
+    if (target < 0) return
     const flat = ownedFromReport(fullReport)
-    const themeIndex = fullReport.themes.findIndex((entry) => entry.id === themeId)
-    const offset = fullReport.themes
-      .slice(0, Math.max(themeIndex, 0))
-      .reduce((sum, entry) => sum + entry.questions.length, 0)
     const next = flat.map((item, itemIndex) =>
-      itemIndex === offset + index ? { question: text, themeId: item.themeId } : item,
+      itemIndex === target ? { question: text, themeId: item.themeId } : item,
     )
     const cleaned = cleanOwnedQuestions(next, fullReport.domain, OWNED_QUESTION_MAX)
     if (cleaned.length < next.length) {

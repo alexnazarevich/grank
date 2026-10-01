@@ -91,7 +91,23 @@ describe('owned question set', () => {
     assert.equal(added?.framing, 'unbranded')
     const described = next.themes.find((theme) => theme.id === 'described')
     assert.equal(described?.id, 'described')
+    assert.equal(described?.framing, 'branded')
     assert.equal(described?.questions[0]?.mention, 'mentioned')
+    assert.equal(problems?.framing, 'unbranded')
+    const moved = applyOwnedToReport(report, [
+      ...edited,
+      { question: 'What tools should a team buy for planning?', themeId: 'described' },
+    ])
+    assert.equal(
+      moved.themes.find((theme) => theme.id === 'described')?.questions.every((item) => item.framing === 'branded'),
+      true,
+    )
+    assert.equal(
+      moved.themes
+        .find((theme) => theme.id === 'problems')
+        ?.questions.some((item) => item.question.includes('buy for planning')),
+      true,
+    )
   })
 
   it('clears the answer when the question text changes', () => {

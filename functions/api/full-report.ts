@@ -569,17 +569,17 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(502, { error: failed.error })
   }
+  const includesBranded =
+    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
   const themes = mergeOwnedAnswers(
     opts.owned,
     mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))),
-    { domain: opts.domain },
+    { domain: opts.domain, includesBranded },
   )
   if (!themes) {
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
-  const includesBranded =
-    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,

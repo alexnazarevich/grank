@@ -5,6 +5,7 @@
 
 import type { ModeBeat } from './demoData.ts'
 import {
+  assembleThemes,
   brandLabel,
   THEME_CATALOG,
   resolveThemeId,
@@ -129,13 +130,13 @@ export function applyOwnedToReport(report: FullReport, owned: OwnedQuestion[]): 
     list.push(next)
     buckets.set(item.themeId, list)
   }
-  const themes: FullReportTheme[] = []
+  const groups: { id: ThemeId; questions: FullReportQuestion[] }[] = []
   for (const theme of THEME_CATALOG) {
     const questions = buckets.get(theme.id)
     if (!questions || questions.length === 0) continue
-    themes.push({ id: theme.id, title: theme.title, questions })
+    groups.push({ id: theme.id, questions })
   }
-  return { ...report, themes }
+  return { ...report, themes: assembleThemes(groups, report.includesBranded) }
 }
 
 function replyAt(questions: string[], replies: string[], question: string): string {
@@ -318,7 +319,7 @@ function readModelAnswers(raw: unknown): Map<ThemeId, ModelAnswer[]> {
 export function mergeOwnedAnswers(
   owned: OwnedQuestion[],
   raw: unknown,
-  opts: { domain: string },
+  opts: { domain: string; includesBranded?: boolean },
 ): FullReportTheme[] | null {
   if (owned.length === 0) return null
   const byTheme = readModelAnswers(raw)
@@ -357,11 +358,12 @@ export function mergeOwnedAnswers(
       buckets.set(themeId, list)
     })
   }
-  const themes: FullReportTheme[] = []
+  const groups: { id: ThemeId; questions: FullReportQuestion[] }[] = []
   for (const theme of THEME_CATALOG) {
     const questions = buckets.get(theme.id)
     if (!questions || questions.length === 0) continue
-    themes.push({ id: theme.id, title: theme.title, questions })
+    groups.push({ id: theme.id, questions })
   }
+  const themes = assembleThemes(groups, opts.includesBranded !== false)
   return themes.length > 0 ? themes : null
 }
