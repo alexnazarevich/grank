@@ -106,7 +106,7 @@ describe('full-report row markup', () => {
     }
   })
 
-  it('shows add and delete only when the saved check is being edited', async () => {
+  it('keeps add and delete inside Manage questions, off the report rows', async () => {
     const server: ViteDevServer = await createServer({
       server: { middlewareMode: true },
       appType: 'custom',
@@ -116,25 +116,123 @@ describe('full-report row markup', () => {
     try {
       const { FullReportSection } = (await server.ssrLoadModule('/src/FullReportSection.tsx')) as typeof import('../src/FullReportSection.tsx')
       const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule('/src/config/productConfig.ts')) as typeof import('../src/config/productConfig.ts')
+      const editor = {
+        editingKey: null,
+        editText: '',
+        addText: '',
+        addThemeId: 'problems' as const,
+        atCap: false,
+        canDelete: true,
+        onEdit: () => {},
+        onEditText: () => {},
+        onRename: () => {},
+        onDelete: () => {},
+        onAddText: () => {},
+        onAddTheme: () => {},
+        onAdd: () => {},
+        onSave: () => {},
+      }
+      const report = {
+        domain: 'linear.app',
+        model: 'gpt-4o-mini',
+        includesBranded: true,
+        themes: [
+          {
+            id: 'problems' as const,
+            title: 'Problems you solve',
+            questions: [
+              {
+                question: 'What should a team use to track issues?',
+                answer: 'Jira shows up.',
+                framing: 'unbranded' as const,
+                mention: 'not_mentioned' as const,
+                whoInstead: ['Jira'],
+              },
+            ],
+          },
+        ],
+      }
+      const closed = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          themesOnly: true,
+          editor,
+          report,
+        }),
+      )
+      assert.match(closed, /Manage questions/)
+      assert.equal(closed.includes('>Edit<'), false)
+      assert.equal(closed.includes('>Delete<'), false)
+      assert.equal(closed.includes('>Add question<'), false)
+      assert.match(closed, /0% mentioned/)
+      assert.equal(closed.includes('Across runs:'), false)
+      assert.match(closed, /Generated · OpenAI/)
+      assert.match(closed, />Not mentioned</)
+      assert.equal(closed.includes('Jira shows up.'), false)
       const html = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
           themesOnly: true,
-          editor: {
-            editingKey: null,
-            editText: '',
-            addText: '',
-            addThemeId: 'problems',
-            atCap: false,
-            canDelete: true,
-            onEdit: () => {},
-            onEditText: () => {},
-            onRename: () => {},
-            onDelete: () => {},
-            onAddText: () => {},
-            onAddTheme: () => {},
-            onAdd: () => {},
-          },
+          manageOpen: true,
+          editor,
+          report,
+        }),
+      )
+      const panelAt = html.indexOf('manage-panel')
+      assert.equal(panelAt > 0, true)
+      const rows = html.slice(0, panelAt)
+      assert.equal(rows.includes('>Edit<'), false)
+      assert.equal(rows.includes('>Delete<'), false)
+      assert.match(html, /Add, remove, or rename questions for this check\. Save, then Run again\./)
+      assert.match(html, />Add question</)
+      assert.match(html, />Delete</)
+      assert.match(html, />Edit</)
+      assert.match(html, />Save questions</)
+      assert.equal(html.includes('Jira shows up.'), false)
+      assert.equal(html.includes('Over time'), false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('puts run columns and mention share inside each theme, not a second Over time stack', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule(
+        '/src/FullReportSection.tsx',
+      )) as typeof import('../src/FullReportSection.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const answer = 'This reply names the brand and must stay closed.'
+      const html = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          themesOnly: true,
+          runs: [
+            {
+              at: '2026-09-01T00:00:00.000Z',
+              mode: 'full',
+              mentions: [
+                { question: 'What should a team use to track issues?', mention: 'not_mentioned', whoInstead: [] },
+                { question: 'How do people describe Linear?', mention: 'mentioned', whoInstead: [] },
+              ],
+            },
+            {
+              at: '2026-09-30T15:04:00.000Z',
+              mode: 'full',
+              mentions: [
+                { question: 'What should a team use to track issues?', mention: 'mentioned', whoInstead: [] },
+                { question: 'How do teams plan a week?', mention: 'mentioned', whoInstead: [] },
+                { question: 'How do people describe Linear?', mention: 'unclear', whoInstead: [] },
+              ],
+            },
+          ],
           report: {
             domain: 'linear.app',
             model: 'gpt-4o-mini',
@@ -142,14 +240,34 @@ describe('full-report row markup', () => {
             themes: [
               {
                 id: 'problems',
-                title: 'Problems you solve',
+                title: 'Shared label',
                 questions: [
                   {
                     question: 'What should a team use to track issues?',
-                    answer: 'Jira shows up.',
+                    answer,
                     framing: 'unbranded',
-                    mention: 'not_mentioned',
-                    whoInstead: ['Jira'],
+                    mention: 'mentioned',
+                    whoInstead: [],
+                  },
+                  {
+                    question: 'How do teams plan a week?',
+                    answer: 'Teams plan in the tool they already use.',
+                    framing: 'unbranded',
+                    mention: 'mentioned',
+                    whoInstead: [],
+                  },
+                ],
+              },
+              {
+                id: 'trust',
+                title: 'Shared label',
+                questions: [
+                  {
+                    question: 'How do people describe Linear?',
+                    answer: 'Linear is described as a fast tracker.',
+                    framing: 'branded',
+                    mention: 'unclear',
+                    whoInstead: [],
                   },
                 ],
               },
@@ -157,12 +275,24 @@ describe('full-report row markup', () => {
           },
         }),
       )
-      assert.match(html, />Delete</)
-      assert.match(html, />Add question</)
-      assert.match(html, />Edit</)
-      assert.match(html, /Generated · OpenAI/)
+      assert.equal(html.includes('Over time'), false)
+      assert.equal(html.includes('>Edit<'), false)
+      assert.equal(html.includes('>Delete<'), false)
+      assert.match(html, /100% mentioned/)
+      assert.match(html, /Across runs: 0% → 100%/)
+      assert.match(html, /0% mentioned/)
+      assert.match(html, /Across runs: 100% → 0%/)
+      assert.equal((html.match(/Shared label/g) || []).length, 2)
+      assert.match(html, />Question</)
+      assert.match(html, /Sep 1, 12:00 AM/)
+      assert.match(html, /Sep 30, 3:04 PM/)
+      assert.match(html, />Mentioned</)
       assert.match(html, />Not mentioned</)
-      assert.equal(html.includes('Jira shows up.'), false)
+      assert.match(html, />Unclear</)
+      assert.equal(html.includes(answer), false)
+      assert.equal(html.includes('Teams plan in the tool they already use.'), false)
+      assert.equal(/SOV|visibility score|monitoring/i.test(html), false)
+      assert.equal((html.match(/<table class="run-grid">/g) || []).length, 2)
     } finally {
       await server.close()
     }

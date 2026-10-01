@@ -55,6 +55,13 @@ export type ProductCopy = {
   overTimeHelper: string
   overTimeQuestion: string
   overTimeLegend: string
+  /** `{pct}` is Mentioned ÷ questions in the theme for the latest run. */
+  themeMentionRate: string
+  /** `{a}` is the oldest run and `{b}` is the newest. Shown only when both exist. */
+  themeAcrossRuns: string
+  manageQuestionsCta: string
+  manageQuestionsTitle: string
+  manageQuestionsHint: string
 }
 
 export type ProductConfig = {
@@ -167,6 +174,11 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     overTimeHelper: STORY.overTimeHelper,
     overTimeQuestion: STORY.overTimeQuestion,
     overTimeLegend: STORY.overTimeLegend,
+    themeMentionRate: STORY.themeMentionRate,
+    themeAcrossRuns: STORY.themeAcrossRuns,
+    manageQuestionsCta: STORY.manageQuestionsCta,
+    manageQuestionsTitle: STORY.manageQuestionsTitle,
+    manageQuestionsHint: STORY.manageQuestionsHint,
   },
 }
 
@@ -242,6 +254,11 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'overTimeHelper',
   'overTimeQuestion',
   'overTimeLegend',
+  'themeMentionRate',
+  'themeAcrossRuns',
+  'manageQuestionsCta',
+  'manageQuestionsTitle',
+  'manageQuestionsHint',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

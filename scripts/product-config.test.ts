@@ -90,6 +90,14 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.overTimeHelper, 'Each column is one run. Same questions — mention status as you re-run.')
     assert.equal(config.copy.overTimeQuestion, 'Question')
     assert.equal(config.copy.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
+    assert.equal(config.copy.themeMentionRate, '{pct}% mentioned')
+    assert.equal(config.copy.themeAcrossRuns, 'Across runs: {a}% → {b}%')
+    assert.equal(config.copy.manageQuestionsCta, 'Manage questions')
+    assert.equal(config.copy.manageQuestionsTitle, 'Manage questions')
+    assert.equal(
+      config.copy.manageQuestionsHint,
+      'Add, remove, or rename questions for this check. Save, then Run again.',
+    )
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }

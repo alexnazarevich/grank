@@ -172,6 +172,29 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   padding: 0.45rem 0.8rem; font: inherit; font-weight: 700; cursor: pointer;
 }
 .owned-add button:disabled { opacity: 0.55; cursor: not-allowed; }
+.theme-heading {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.35rem 0.85rem;
+}
+.theme-heading h2.theme-title { margin-bottom: 0; }
+.theme-rate { margin: 0; color: var(--accent); font-weight: 750; font-size: 0.95rem; }
+.theme-across { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.82rem; }
+.theme-answer-row td { padding-top: 0.15rem; }
+.run-over-time-label {
+  margin: 0 0 0.35rem; font-size: 0.95rem; font-weight: 700; color: var(--ink);
+}
+.manage-questions { margin-top: 0.35rem; }
+.manage-panel {
+  border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem 1rem; margin-top: 0.75rem;
+}
+.manage-panel h3 {
+  margin: 0 0 0.35rem; font-size: 1.05rem; text-transform: none; letter-spacing: 0; color: var(--ink);
+}
+.manage-theme { margin: 0.85rem 0 0.15rem; color: var(--muted); font-size: 0.78rem; font-weight: 700; }
+.manage-list { list-style: none; padding: 0; margin: 0; }
+.manage-q {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.35rem 0.75rem;
+  align-items: baseline; padding: 0.45rem 0; border-bottom: 1px solid var(--line);
+}
 .change-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.2rem 0 0; }
 .change-chip { margin-left: 0; font-size: 0.78rem; }
 .run-legend { margin-bottom: 0.45rem; }
