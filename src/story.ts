@@ -51,4 +51,9 @@ export const STORY = {
   manageQuestionsCta: 'Manage questions',
   manageQuestionsTitle: 'Manage questions',
   manageQuestionsHint: 'Add, remove, or rename questions for this check. Save, then Run again.',
+  whoInsteadBoardTitle: 'Who showed up instead',
+  whoInsteadBoardHelper:
+    'Names that showed up in place of you on unbranded questions this run — not market share.',
+  whoInsteadBoardEmpty: 'No one else showed up yet.',
+  whoInsteadBoardCount: 'Appeared on {n} questions',
 } as const

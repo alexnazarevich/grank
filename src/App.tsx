@@ -45,6 +45,8 @@ import {
   type OwnedQuestion,
 } from './ownedQuestions'
 import { MentionMark } from './MentionMark'
+import { whoInsteadNames } from './mentionLabel'
+import { WhoInsteadBoard } from './WhoInsteadBoard'
 import { RunHistoryPanel } from './RunHistoryPanel'
 import { landThemeId, type AnswerFact, type Framing, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
@@ -1862,28 +1864,21 @@ export default function App() {
               </section>
             ) : null}
 
-            {land && beat ? (
-              <section className="block">
-                <h2>
-                  Who shows up instead{' '}
-                  <span className={`tag plain ${beat.whoInsteadLive ? 'live' : ''}`}>
-                    {beat.whoInsteadLive ? 'Generated · OpenAI' : 'Unavailable'}
-                  </span>
-                </h2>
-                {screen.omittedWhoInstead ? (
-                  <p className="why">Who-instead was not saved for this check.</p>
-                ) : beat.whoInstead.length > 0 ? (
-                  <ul className="who">
-                    {beat.whoInstead.map((name) => (
-                      <li key={name}>
-                        <strong>{name}</strong>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="why">Couldn’t find alternatives</p>
-                )}
-              </section>
+            {land && beat && !fullReport ? (
+              <WhoInsteadBoard
+                copy={config.copy}
+                titleId="who-instead-land"
+                omitted={screen.omittedWhoInstead}
+                engine={{
+                  live: beat.whoInsteadLive,
+                  label: beat.whoInsteadLive ? STORY.answerLabel : 'Unavailable',
+                }}
+                rows={
+                  screen.omittedWhoInstead
+                    ? []
+                    : whoInsteadNames(beat.whoInstead, 'unbranded').map((name) => ({ name, questions: 0 }))
+                }
+              />
             ) : null}
 
             {showDelta ? (

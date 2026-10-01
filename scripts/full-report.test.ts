@@ -16,7 +16,7 @@ import {
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { fullReportOpensPayGate, interpretFullReportResponse } from '../src/fullReportClient.ts'
-import { mentionStatusLabel, whoInsteadNames } from '../src/mentionLabel.ts'
+import { mentionStatusLabel, whoInsteadBoard, whoInsteadCountLabel, whoInsteadNames } from '../src/mentionLabel.ts'
 import { STORY } from '../src/story.ts'
 
 const KEY = 'sk-openai-full-report-secret'
@@ -969,6 +969,33 @@ describe('full-report question accordion', () => {
     assert.deepEqual(whoInsteadNames([' Jira ', 'Asana', 'Height', 'Extra'], 'unbranded'), [' Jira ', 'Asana', 'Height'])
     assert.deepEqual(whoInsteadNames(['Jira', 'Asana'], 'unbranded'), ['Jira', 'Asana'])
     assert.deepEqual(whoInsteadNames(['Jira'], 'branded'), [])
+    assert.equal(STORY.whoInsteadBoardTitle, 'Who showed up instead')
+    assert.equal(
+      STORY.whoInsteadBoardHelper,
+      'Names that showed up in place of you on unbranded questions this run — not market share.',
+    )
+    assert.equal(STORY.whoInsteadBoardEmpty, 'No one else showed up yet.')
+    assert.equal(STORY.whoInsteadBoardCount, 'Appeared on {n} questions')
+    assert.equal(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 2), 'Appeared on 2 questions')
+    assert.equal(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 1), 'Appeared on 1 questions')
+    const rows = whoInsteadBoard([
+      {
+        questions: [
+          { framing: 'unbranded', mention: 'not_mentioned', whoInstead: ['Jira', 'Asana', 'jira'] },
+          { framing: 'unbranded', mention: 'unclear', whoInstead: [' Height ', 'Jira'] },
+          { framing: 'unbranded', mention: 'mentioned', whoInstead: ['Notion'] },
+          { framing: 'unbranded', whoInstead: ['Coda'] },
+          { framing: 'branded', mention: 'not_mentioned', whoInstead: ['Slack', 'Jira'] },
+        ],
+      },
+    ])
+    assert.deepEqual(rows, [
+      { name: 'Jira', questions: 2 },
+      { name: 'Asana', questions: 1 },
+      { name: 'Height', questions: 1 },
+    ])
+    assert.deepEqual(whoInsteadBoard([{ questions: [] }]), [])
+    assert.equal(/SOV|market share %|% mentioned/.test(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 4)), false)
   })
 
   it('opens the answer from the question and keeps the chip trailing', () => {
@@ -980,6 +1007,10 @@ describe('full-report question accordion', () => {
     assert.match(section, /aria-label=\{item\.question\}/)
     assert.match(section, /mentionStatusLabel\(item\.mention, copy\)/)
     assert.match(section, /whoInsteadNames\(item\.whoInstead, item\.framing\)/)
+    const render = section.slice(section.indexOf('export function FullReportSection'))
+    const boardAt = render.indexOf('<WhoInsteadBoard')
+    const themeBlockAt = render.indexOf('theme-block')
+    assert.equal(boardAt > 0 && themeBlockAt > boardAt, true)
     assert.match(
       section,
       /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' \? ' mentioned' : ''\}`\}/,
