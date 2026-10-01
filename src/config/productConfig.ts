@@ -55,9 +55,13 @@ export type ProductCopy = {
   overTimeHelper: string
   overTimeQuestion: string
   overTimeLegend: string
-  /** `{pct}` is Mentioned ÷ questions in the theme for the latest run. */
+  /** `{pct}` is Mentioned ÷ questions in the theme for the latest run. Header only, when there is no run grid. */
   themeMentionRate: string
-  /** `{a}` is the oldest run and `{b}` is the newest. Shown only when both exist. */
+  /** Lead cell of the theme % row inside each over-time grid. */
+  themeMentionRow: string
+  /** `{pct}` is Mentioned ÷ questions in the theme for that run column. */
+  themeMentionCell: string
+  /** `{a}` is the oldest run and `{b}` is the newest. Kept for copy; the grid row is the skim. */
   themeAcrossRuns: string
   manageQuestionsCta: string
   manageQuestionsTitle: string
@@ -175,6 +179,8 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     overTimeQuestion: STORY.overTimeQuestion,
     overTimeLegend: STORY.overTimeLegend,
     themeMentionRate: STORY.themeMentionRate,
+    themeMentionRow: STORY.themeMentionRow,
+    themeMentionCell: STORY.themeMentionCell,
     themeAcrossRuns: STORY.themeAcrossRuns,
     manageQuestionsCta: STORY.manageQuestionsCta,
     manageQuestionsTitle: STORY.manageQuestionsTitle,
@@ -255,6 +261,8 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'overTimeQuestion',
   'overTimeLegend',
   'themeMentionRate',
+  'themeMentionRow',
+  'themeMentionCell',
   'themeAcrossRuns',
   'manageQuestionsCta',
   'manageQuestionsTitle',

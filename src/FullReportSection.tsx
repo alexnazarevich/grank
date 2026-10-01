@@ -8,7 +8,6 @@ import {
   gridRuns,
   runColumnLabel,
   runQuestionKey,
-  themeAcrossLabel,
   themeMentionRates,
   themeRateLabel,
   type CheckRun,
@@ -197,6 +196,30 @@ function ThemeGridRow({
   )
 }
 
+/** First data row under the date headers. One % per run; Unclear and Not are not mentioned. */
+function ThemePercentRow({
+  label,
+  template,
+  percents,
+  columnCount,
+}: {
+  label: string
+  template: string
+  percents: Array<number | null | undefined>
+  columnCount: number
+}) {
+  return (
+    <tr className="theme-pct-row">
+      <th scope="row">{label}</th>
+      {Array.from({ length: columnCount }, (_, index) => {
+        const pct = percents[index]
+        const text = typeof pct === 'number' ? themeRateLabel(template, pct) : null
+        return <td key={index}>{text === null ? <span className="muted">—</span> : text}</td>
+      })}
+    </tr>
+  )
+}
+
 function ManageQuestions({
   editor,
   report,
@@ -376,8 +399,8 @@ export function FullReportSection({
         const framing = themeFramingOf(theme)
         const rate = rateByKey.get(framing ? `${theme.id}:${framing}` : theme.id)
         const latest = rate?.latest
-        const across = rate?.across
         const word = framingLabel(framing)
+        const inGrid = shown.length > 0
         return (
           <section key={`${theme.id}:${theme.framing}`} className="block theme-block">
             <div className="theme-heading">
@@ -385,15 +408,12 @@ export function FullReportSection({
                 {word ? <span className="eyebrow theme-framing">{word}</span> : null}
                 <span>{theme.title}</span>
               </h2>
-              {latest === null || latest === undefined ? (
+              {inGrid ? null : latest === null || latest === undefined ? (
                 <p className="theme-rate">—</p>
               ) : (
                 <p className="theme-rate">{themeRateLabel(copy.themeMentionRate, latest)}</p>
               )}
             </div>
-            {across ? (
-              <p className="theme-across">{themeAcrossLabel(copy.themeAcrossRuns, across.oldest, across.newest)}</p>
-            ) : null}
             <p className="theme-count">
               {theme.questions.length} {theme.questions.length === 1 ? 'question' : 'questions'}
             </p>
@@ -411,6 +431,12 @@ export function FullReportSection({
                     </tr>
                   </thead>
                   <tbody>
+                    <ThemePercentRow
+                      label={copy.themeMentionRow}
+                      template={copy.themeMentionCell}
+                      percents={rate?.byRun ?? []}
+                      columnCount={shown.length}
+                    />
                     {theme.questions.map((item, index) => (
                       <ThemeGridRow
                         key={`${theme.id}-${theme.framing}-${index}`}

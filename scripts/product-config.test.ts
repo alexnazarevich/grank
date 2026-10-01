@@ -91,6 +91,8 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.overTimeQuestion, 'Question')
     assert.equal(config.copy.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
     assert.equal(config.copy.themeMentionRate, '{pct}% mentioned')
+    assert.equal(config.copy.themeMentionRow, '% mentioned')
+    assert.equal(config.copy.themeMentionCell, '{pct}%')
     assert.equal(config.copy.themeAcrossRuns, 'Across runs: {a}% → {b}%')
     assert.equal(config.copy.manageQuestionsCta, 'Manage questions')
     assert.equal(config.copy.manageQuestionsTitle, 'Manage questions')

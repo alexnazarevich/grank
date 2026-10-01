@@ -248,6 +248,14 @@ describe('full-report row markup', () => {
                 { question: 'How do people describe Linear?', mention: 'unclear', whoInstead: [] },
               ],
             },
+            {
+              at: '2026-10-01T00:00:00.000Z',
+              mode: 'full',
+              mentions: [
+                { question: 'What should a team use to track issues?', mention: 'mentioned', whoInstead: [] },
+                { question: 'How do teams plan a week?', mention: 'not_mentioned', whoInstead: [] },
+              ],
+            },
           ],
           report: {
             domain: 'linear.app',
@@ -300,14 +308,26 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('Generated · OpenAI'), false)
       assert.equal(html.includes('>Edit<'), false)
       assert.equal(html.includes('>Delete<'), false)
-      assert.match(html, /100% mentioned/)
-      assert.match(html, /Across runs: 0% → 100%/)
-      assert.match(html, /0% mentioned/)
-      assert.match(html, /Across runs: 100% → 0%/)
+      assert.equal(html.includes('Across runs:'), false)
+      assert.equal(html.includes('100% mentioned'), false)
+      assert.equal(html.includes('0% mentioned'), false)
+      assert.equal(html.includes('>Theme<'), false)
+      const pctRows = [...html.matchAll(/<tr class="theme-pct-row">([\s\S]*?)<\/tr>/g)].map((match) => match[1])
+      assert.deepEqual(pctRows, [
+        '<th scope="row">% mentioned</th><td>0%</td><td>100%</td><td>50%</td>',
+        '<th scope="row">% mentioned</th><td>100%</td><td>0%</td><td><span class="muted">—</span></td>',
+      ])
+      const firstPct = html.indexOf('theme-pct-row')
+      const firstQuestion = html.indexOf('What should a team use to track issues?')
+      const secondPct = html.indexOf('theme-pct-row', firstPct + 1)
+      const trustQuestion = html.indexOf('How do people describe Linear?')
+      assert.equal(firstPct >= 0 && firstPct < firstQuestion, true)
+      assert.equal(secondPct > firstQuestion && secondPct < trustQuestion, true)
       assert.equal((html.match(/Shared label/g) || []).length, 2)
       assert.match(html, />Question</)
       assert.match(html, /Sep 1, 12:00 AM/)
       assert.match(html, /Sep 30, 3:04 PM/)
+      assert.match(html, /Oct 1, 12:00 AM/)
       assert.match(html, />Mentioned</)
       assert.match(html, />Not mentioned</)
       assert.match(html, />Unclear</)
