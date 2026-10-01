@@ -31,6 +31,7 @@ import {
   OWNED_QUESTION_MAX,
   type OwnedQuestion,
 } from '../../src/ownedQuestions.ts'
+import { appendRunHistory, mentionsFromReport, mentionsFromStored, type CheckRun } from '../../src/runHistory.ts'
 import { LABEL_GENERATED } from '../../src/savedResult.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
 import { json, scrubSecret } from './http.ts'
@@ -76,22 +77,28 @@ function maxTokens(batch: PlannedTheme[]): number {
   return Math.min(4500, 350 + questions * 130)
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
 async function domainFromRequest(request: Request): Promise<{
   domain: string | null | 'too-large'
   pins: unknown
   owned: unknown
+  checkId: string | null
 }> {
   const url = new URL(request.url)
   const query = url.searchParams.get('domain')
-  if (query) return { domain: canonicalHostname(query), pins: [], owned: undefined }
+  if (query) return { domain: canonicalHostname(query), pins: [], owned: undefined, checkId: null }
   const raw = await request.text()
-  if (raw.length > 80_000) return { domain: 'too-large', pins: [], owned: undefined }
-  if (!raw.trim()) return { domain: null, pins: [], owned: undefined }
+  if (raw.length > 80_000) return { domain: 'too-large', pins: [], owned: undefined, checkId: null }
+  if (!raw.trim()) return { domain: null, pins: [], owned: undefined, checkId: null }
   try {
-    const body = JSON.parse(raw) as { domain?: unknown; pins?: unknown; owned?: unknown }
-    return { domain: canonicalHostname(body.domain), pins: body.pins, owned: body.owned }
+    const body = JSON.parse(raw) as { domain?: unknown; pins?: unknown; owned?: unknown; checkId?: unknown }
+    const checkId = typeof body.checkId === 'string' && UUID_RE.test(body.checkId) ? body.checkId : null
+    return { domain: canonicalHostname(body.domain), pins: body.pins, owned: body.owned, checkId }
   } catch {
-    return { domain: null, pins: [], owned: undefined }
+    return { domain: null, pins: [], owned: undefined, checkId: null }
   }
 }
 
@@ -447,6 +454,84 @@ async function completeOwnedBatch(
 }
 
 /** Answer a saved question set. Does not generate a new theme roster. */
+async function updateOwnedReport(
+  sb: ServiceDb,
+  userId: string,
+  checkId: string,
+  domain: string,
+  themes: FullReportTheme[],
+  includesBranded: boolean,
+  config: ProductConfig,
+): Promise<{ id: string; createdAt: string; runs: CheckRun[] } | { error: string; status: number } | null> {
+  let loaded: Response
+  try {
+    loaded = await sbFetch(
+      sb,
+      `/rest/v1/checks?id=eq.${checkId}&user_id=eq.${userId}&select=id,domain,mode,result,created_at`,
+      { headers: serviceHeaders(sb.serviceRole) },
+    )
+  } catch {
+    return null
+  }
+  if (!loaded.ok) return null
+  let rows: unknown
+  try {
+    rows = await loaded.json()
+  } catch {
+    return null
+  }
+  const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined
+  if (!row || !isRecord(row.result)) return { error: 'That check is not in your history.', status: 404 }
+  if (row.result.report !== 'full') return { error: 'That check is not an owned report.', status: 400 }
+  const now = new Date().toISOString()
+  const runs = appendRunHistory({
+    runs: row.result.runs,
+    prior: mentionsFromStored(row.result, domain, 'full'),
+    next: mentionsFromReport({ domain, themes }, domain),
+    at: now,
+    priorAt: typeof row.created_at === 'string' ? row.created_at : now,
+    limit: config.trackingHistoryLimit,
+    mode: 'full',
+    priorMode: 'full',
+  })
+  const result = {
+    report: 'full',
+    labels: {
+      questions: LABEL_GENERATED,
+      answered: LABEL_GENERATED,
+      whoInstead: LABEL_GENERATED,
+      mode: 'Full report',
+    },
+    model: MODEL,
+    questionsGenerated: true,
+    questionSetOwned: true,
+    tracking: { cadence: config.trackingCadence },
+    runs,
+    fullReport: {
+      domain,
+      model: MODEL,
+      includesBranded,
+      themes,
+    },
+  }
+  let updated: Response
+  try {
+    updated = await sbFetch(sb, `/rest/v1/checks?id=eq.${checkId}&user_id=eq.${userId}`, {
+      method: 'PATCH',
+      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
+      body: JSON.stringify({ result }),
+    })
+  } catch {
+    return null
+  }
+  if (!updated.ok) return null
+  return {
+    id: checkId,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : now,
+    runs,
+  }
+}
+
 async function answerOwnedReport(opts: {
   sb: ServiceDb
   userId: string
@@ -455,6 +540,7 @@ async function answerOwnedReport(opts: {
   apiKey: string
   config: ProductConfig
   request: Request
+  checkId: string | null
 }): Promise<Response> {
   await ensureProfile(opts.sb, opts.userId).catch(() => {})
   const planName = await readPlan(opts.sb, opts.userId, opts.config)
@@ -494,19 +580,33 @@ async function answerOwnedReport(opts: {
   }
   const includesBranded =
     opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
-  const saved = await saveReport(
-    opts.sb,
-    opts.userId,
-    opts.domain,
-    themes,
-    includesBranded,
-    opts.config,
-    planName,
-    true,
-  )
+  const saved = opts.checkId
+    ? await updateOwnedReport(
+        opts.sb,
+        opts.userId,
+        opts.checkId,
+        opts.domain,
+        themes,
+        includesBranded,
+        opts.config,
+      )
+    : await saveReport(
+        opts.sb,
+        opts.userId,
+        opts.domain,
+        themes,
+        includesBranded,
+        opts.config,
+        planName,
+        true,
+      )
   if (!saved) {
     await admitted.release()
     return json(502, { error: 'Could not save this full report.' })
+  }
+  if ('error' in saved) {
+    await admitted.release()
+    return json(saved.status, { error: saved.error })
   }
   const body = {
     ok: true,
@@ -516,6 +616,7 @@ async function answerOwnedReport(opts: {
     includesBranded,
     themes,
     check: { id: saved.id, domain: opts.domain, createdAt: saved.createdAt },
+    ...('runs' in saved ? { runs: saved.runs } : {}),
   }
   const text = JSON.stringify(body)
   if (text.includes(opts.apiKey) || text.includes(opts.sb.serviceRole)) {
@@ -566,6 +667,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       apiKey,
       config,
       request,
+      checkId: incoming.checkId,
     })
   }
 

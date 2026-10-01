@@ -45,10 +45,12 @@ import {
   type OwnedQuestion,
 } from './ownedQuestions'
 import { MentionMark } from './MentionMark'
+import { RunDelta } from './RunDelta'
 import { landThemeId, type AnswerFact, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
 import { startCheckout } from './billingClient'
-import { listChecks, saveCheck, updateCheckQuestions } from './checksClient'
+import { listChecks, recordCheckRun, saveCheck, updateCheckQuestions } from './checksClient'
+import { cleanRuns, type CheckRun } from './runHistory'
 import {
   draftFromScreen,
   screenFromSaved,
@@ -325,6 +327,7 @@ export default function App() {
   const [questionsNote, setQuestionsNote] = useState('')
   const [addText, setAddText] = useState('')
   const [addThemeId, setAddThemeId] = useState<ThemeId>('problems')
+  const [runs, setRuns] = useState<CheckRun[]>([])
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -496,6 +499,7 @@ export default function App() {
     setActiveMode(reopened.activeMode)
     setDigStatus(reopened.digStatus)
     setSavedId(check.id)
+    setRuns(cleanRuns(check.result.runs, check.domain))
     setUrl(check.domain)
     setPageText(null)
     setPins([])
@@ -542,6 +546,7 @@ export default function App() {
     setSaveState('idle')
     setSaveMessage('')
     setSavedId(null)
+    setRuns([])
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
@@ -605,6 +610,7 @@ export default function App() {
     setOwning(false)
     setOwnedSet(false)
     setQuestionsDirty(false)
+    setRuns([])
     const domain = screen.domain
     const req = ++digReq.current
     digState.current = 'loading'
@@ -674,6 +680,7 @@ export default function App() {
     setActiveMode('unbranded')
     setDigStatus('idle')
     setSavedId(null)
+    setRuns([])
     setSaveState('idle')
     setSaveMessage('')
     setPageText(null)
@@ -867,6 +874,7 @@ export default function App() {
       setActiveMode('unbranded')
       setDigStatus('idle')
       setSavedId(check.id)
+      setRuns(cleanRuns(check.result.runs, check.domain))
       setUrl(check.domain)
       setPageText(null)
       setPins([])
@@ -1160,12 +1168,13 @@ export default function App() {
       setQuestionsDirty(false)
       setOwnedSet(true)
     }
-    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions)
+    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions, savedId)
     setBusy(false)
     if (result.ok) {
       setOwnedSet(true)
       setQuestionsDirty(false)
       if (result.checkId) setSavedId(result.checkId)
+      if (result.runs.length > 0) setRuns(result.runs)
     }
     applyReportResult(result)
   }
@@ -1214,7 +1223,6 @@ export default function App() {
     )
     setScreen(next)
     setPhase('result')
-    setBusy(false)
     setOwnedSet(true)
     setQuestionsDirty(false)
     const draft = draftFromScreen(
@@ -1226,6 +1234,21 @@ export default function App() {
       config.storeHomepageSnippet ? pageText : null,
       true,
     )
+    if (savedId) {
+      const saved = await recordCheckRun(session.accessToken, savedId, draft)
+      setBusy(false)
+      if (!saved.ok) {
+        setSaveState('error')
+        setSaveMessage(saved.error)
+        return
+      }
+      setRuns(cleanRuns(saved.check.result.runs, saved.check.domain))
+      setSavedId(saved.check.id)
+      setSaveState('saved')
+      setSaveMessage('Saved.')
+      return
+    }
+    setBusy(false)
     void persist(session, draft)
   }
 
@@ -1264,6 +1287,7 @@ export default function App() {
   const pinRunMatches = pinSignature() === (ranPins ?? '')
   const ownedCount = fullReport ? ownedFromReport(fullReport).length : (activeBeat()?.questions.length ?? 0)
   const questionToolsBusy = busy || questionsSaving
+  const showDelta = owning && (ownedSet || runs.length > 0)
   const reportEditor =
     owning && fullReport
       ? {
@@ -1492,6 +1516,7 @@ export default function App() {
             <p className="why">{config.copy.fullReportSub}</p>
             {owning ? <p className="why">{config.copy.ownedQuestionsHint}</p> : null}
             <FullReportSection report={fullReport} copy={config.copy} themesOnly editor={reportEditor} />
+            {showDelta ? <RunDelta runs={runs} copy={config.copy} /> : null}
             {owning ? (
               <div className="save-row">
                 <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
@@ -1798,6 +1823,8 @@ export default function App() {
                 )}
               </section>
             ) : null}
+
+            {showDelta ? <RunDelta runs={runs} copy={config.copy} /> : null}
 
             <div className={`save-row${emphasizeSave && !savedId ? ' nudge' : ''}`}>
               <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>

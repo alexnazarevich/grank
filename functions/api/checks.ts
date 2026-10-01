@@ -15,6 +15,7 @@ import {
   cleanOwnedQuestions,
   countOwnedQuestions,
 } from '../../src/ownedQuestions.ts'
+import { appendRunHistory, mentionsFromStored } from '../../src/runHistory.ts'
 import type { StoredResult } from '../../src/savedResult.ts'
 import { json, scrubSecret } from './http.ts'
 import { QUOTA_EXCEEDED_CODE, admitUsage, anonKeyFromRequest, linkAnonUsage } from './quota.ts'
@@ -159,7 +160,7 @@ export async function onRequest(context: { request: Request; env?: ChecksEnv }):
   if (!authed.ok) return json(authed.status, { error: publicError(authed.error, sb.serviceRole) })
 
   if (request.method === 'GET') return listChecks(sb, authed.user.id, config)
-  if (request.method === 'PATCH') return updateQuestions(sb, authed.user.id, request)
+  if (request.method === 'PATCH') return updateQuestions(sb, authed.user.id, request, config)
 
   const raw = await request.text()
   if (raw.length > 100_000) return json(413, { error: 'Check body is too large.' })
@@ -326,7 +327,12 @@ function publicCheck(row: Record<string, unknown>, result: StoredResult) {
 }
 
 /** Replace the question list on a check the user already owns. Does not insert a row. */
-async function updateQuestions(sb: ServiceDb, userId: string, request: Request): Promise<Response> {
+async function updateQuestions(
+  sb: ServiceDb,
+  userId: string,
+  request: Request,
+  config: ProductConfig,
+): Promise<Response> {
   const raw = await request.text()
   if (raw.length > 100_000) return json(413, { error: 'Check body is too large.' })
   let body: unknown
@@ -338,6 +344,7 @@ async function updateQuestions(sb: ServiceDb, userId: string, request: Request):
   if (!isRecord(body) || typeof body.id !== 'string' || !UUID_RE.test(body.id)) {
     return json(400, { error: 'Check id is required.' })
   }
+  if (body.recordRun === true) return recordOwnedRun(sb, userId, body, config)
   const id = body.id
 
   let loaded: Response
@@ -410,6 +417,92 @@ async function updateQuestions(sb: ServiceDb, userId: string, request: Request):
 
   const text = JSON.stringify({ ok: true, check: publicCheck(row, result) })
   if (text.includes(sb.serviceRole)) return json(500, { error: 'Could not save these questions.' })
+  return new Response(text, {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  })
+}
+
+/**
+ * Manual re-run of an owned check. Appends a mention snapshot on the same row.
+ * Does not insert a check and does not record a save. Visibility quota stays on /api/visibility.
+ */
+async function recordOwnedRun(
+  sb: ServiceDb,
+  userId: string,
+  body: Record<string, unknown>,
+  config: ProductConfig,
+): Promise<Response> {
+  const id = body.id
+  if (typeof id !== 'string' || !UUID_RE.test(id)) return json(400, { error: 'Check id is required.' })
+  const shaped = shapeStoredCheck(body, config, sb.serviceRole)
+  if (!shaped.ok) return json(400, { error: shaped.error })
+
+  let loaded: Response
+  try {
+    loaded = await sbFetch(
+      sb,
+      `/rest/v1/checks?id=eq.${id}&user_id=eq.${userId}&select=id,domain,mode,result,created_at`,
+      { headers: serviceHeaders(sb.serviceRole) },
+    )
+  } catch {
+    return json(502, { error: 'Could not store this run.' })
+  }
+  if (!loaded.ok) return json(502, { error: 'Could not store this run.' })
+  let rows: unknown
+  try {
+    rows = await loaded.json()
+  } catch {
+    return json(502, { error: 'Could not store this run.' })
+  }
+  const row = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined
+  if (!row || !isRecord(row.result) || typeof row.domain !== 'string') {
+    return json(404, { error: 'That check is not in your history.' })
+  }
+  const stored = row.result as StoredResult
+  if (stored.questionSetOwned !== true) {
+    return json(400, { error: 'Run history is for an owned question set.' })
+  }
+  if (stored.report === 'full') {
+    return json(400, { error: 'Run this report from the full report.' })
+  }
+
+  const now = new Date().toISOString()
+  const priorMode = row.mode === 'branded' ? 'branded' : 'unbranded'
+  const runs = appendRunHistory({
+    runs: stored.runs,
+    prior: mentionsFromStored(stored, row.domain, priorMode),
+    next: mentionsFromStored(shaped.result, shaped.domain, shaped.mode),
+    at: now,
+    priorAt: typeof row.created_at === 'string' ? row.created_at : now,
+    limit: config.trackingHistoryLimit,
+    mode: shaped.mode,
+    priorMode,
+  })
+  const result: StoredResult = {
+    ...shaped.result,
+    questionSetOwned: true,
+    runs,
+    tracking: { cadence: config.trackingCadence },
+  }
+
+  let updated: Response
+  try {
+    updated = await sbFetch(sb, `/rest/v1/checks?id=eq.${id}&user_id=eq.${userId}`, {
+      method: 'PATCH',
+      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
+      body: JSON.stringify({ result, mode: shaped.mode }),
+    })
+  } catch {
+    return json(502, { error: 'Could not store this run.' })
+  }
+  if (!updated.ok) return json(502, { error: 'Could not store this run.' })
+
+  const text = JSON.stringify({
+    ok: true,
+    check: publicCheck({ ...row, mode: shaped.mode }, result),
+  })
+  if (text.includes(sb.serviceRole)) return json(500, { error: 'Could not store this run.' })
   return new Response(text, {
     status: 200,
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },

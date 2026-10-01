@@ -62,6 +62,22 @@ Server enforcement reads `PRODUCT_CONFIG_JSON` and the env aliases. The UI displ
 
 Without those keys locally, step 1 still works and step 2 shows **Auth not configured**.
 
+## Tracked set (manual re-run)
+
+An owned saved check keeps a thin run history on the same row: `checks.result.runs`. Each entry is the question, its mention (`mentioned` / `not_mentioned` / `unclear`), and unbranded who-instead names. It is not a second copy of the report.
+
+**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. The screen shows **Vs last run** with the helper “What changed on this check since the previous run — same questions, labeled OpenAI answers.” Flip lines use Newly mentioned, No longer mentioned, Now mentioned, and Lost mention. Who-instead lines use Newly showing up instead and No longer showing up instead. The first comparison says “No previous run to compare yet. Run again later to see what changed.” If nothing changed, it is “No mention changes vs last run.”
+
+History stays in the existing `result` jsonb column. **No new Supabase migration.** Nothing to apply for this cut. No new host.
+
+Schedules are off. `TRACKING_CRON_ENABLED` defaults to false. `TRACKING_CADENCE` (default `weekly`) is stored on the check as `result.tracking.cadence` and is unused. `functions/scheduled.ts` exports `onScheduled`, does not call the model, and does not read a cron secret. Do not attach a Cloudflare Pages Cron Trigger.
+
+| Pages secret | Default | Purpose |
+| --- | --- | --- |
+| `TRACKING_CRON_ENABLED` | `false` | Must stay false. The scheduled function returns before any re-run. |
+| `TRACKING_CADENCE` | `weekly` | `daily`, `weekly`, or `monthly`. Stored, not read by a job. |
+| `TRACKING_HISTORY_LIMIT` | `8` | Newest mention snapshots kept on one check (minimum 2). |
+
 ## Free quota and one paid plan
 
 `paywallEnabled` defaults to **false** (kill switch). Guest land/dig keeps working, and `/api/billing` does not call Stripe.

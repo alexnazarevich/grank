@@ -1,12 +1,16 @@
 /**
- * Product knobs for save/re-run (8), quota/paid (9), and the full report (10).
+ * Product knobs for save/re-run (8), quota/paid (9), the full report (10), and tracked re-runs (13).
  * Safe defaults, then an optional JSON blob, then server env aliases.
  * Pages Functions enforce from env. The UI only displays the resolved config.
  */
 
+import { STORY } from '../story.ts'
+
 export type FreeQuotaUnit = 'checks' | 'saves' | 'both'
 export type FreeQuotaWindow = 'lifetime' | 'day' | 'month'
 export type PaidInterval = 'month' | 'year'
+/** Stored for a later schedule. Unused while tracking cron is off. */
+export type TrackingCadence = 'daily' | 'weekly' | 'monthly'
 
 export type ProductCopy = {
   saveCta: string
@@ -38,6 +42,18 @@ export type ProductCopy = {
   deleteQuestionCta: string
   saveQuestionsCta: string
   ownedQuestionsHint: string
+  deltaTitle: string
+  deltaHelper: string
+  deltaAwaiting: string
+  deltaEmpty: string
+  deltaNewlyMentioned: string
+  deltaNoLongerMentioned: string
+  deltaNowMentioned: string
+  deltaLostMention: string
+  deltaWhoAppeared: string
+  deltaWhoDropped: string
+  /** `{date}` is replaced in the UI. Not a schedule line. */
+  deltaComparedTo: string
 }
 
 export type ProductConfig = {
@@ -68,6 +84,12 @@ export type ProductConfig = {
   fullReportIncludesBranded: boolean
   /** How many questions can be pinned or edited for one full-report run. */
   pinnedQuestionMax: number
+  /** Pages Cron re-runs. False in this cut — no live schedule. */
+  trackingCronEnabled: boolean
+  /** Cadence knob stored for later. The cron handler does not read it while disabled. */
+  trackingCadence: TrackingCadence
+  /** How many mention snapshots to keep on one saved check. At least prior + current. */
+  trackingHistoryLimit: number
   copy: ProductCopy
 }
 
@@ -94,6 +116,9 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
   freeFullReports: 1,
   fullReportIncludesBranded: true,
   pinnedQuestionMax: 5,
+  trackingCronEnabled: false,
+  trackingCadence: 'weekly',
+  trackingHistoryLimit: 8,
   copy: {
     saveCta: 'Save this check',
     runAgainCta: 'Run again',
@@ -128,6 +153,17 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     saveQuestionsCta: 'Save questions',
     ownedQuestionsHint:
       'Add or delete questions on this check. Save them, then run again to answer this set.',
+    deltaTitle: STORY.deltaTitle,
+    deltaHelper: STORY.deltaHelper,
+    deltaAwaiting: STORY.deltaAwaiting,
+    deltaEmpty: STORY.deltaEmpty,
+    deltaNewlyMentioned: STORY.deltaNewlyMentioned,
+    deltaNoLongerMentioned: STORY.deltaNoLongerMentioned,
+    deltaNowMentioned: STORY.deltaNowMentioned,
+    deltaLostMention: STORY.deltaLostMention,
+    deltaWhoAppeared: STORY.deltaWhoAppeared,
+    deltaWhoDropped: STORY.deltaWhoDropped,
+    deltaComparedTo: STORY.deltaComparedTo,
   },
 }
 
@@ -155,6 +191,9 @@ export const PRODUCT_ENV_ALIASES = {
   freeFullReports: 'FREE_FULL_REPORTS',
   fullReportIncludesBranded: 'FULL_REPORT_INCLUDES_BRANDED',
   pinnedQuestionMax: 'PINNED_QUESTION_MAX',
+  trackingCronEnabled: 'TRACKING_CRON_ENABLED',
+  trackingCadence: 'TRACKING_CADENCE',
+  trackingHistoryLimit: 'TRACKING_HISTORY_LIMIT',
 } as const
 
 const COPY_KEYS: (keyof ProductCopy)[] = [
@@ -187,6 +226,17 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'deleteQuestionCta',
   'saveQuestionsCta',
   'ownedQuestionsHint',
+  'deltaTitle',
+  'deltaHelper',
+  'deltaAwaiting',
+  'deltaEmpty',
+  'deltaNewlyMentioned',
+  'deltaNoLongerMentioned',
+  'deltaNowMentioned',
+  'deltaLostMention',
+  'deltaWhoAppeared',
+  'deltaWhoDropped',
+  'deltaComparedTo',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -346,6 +396,21 @@ export function mergeProductConfig(base: ProductConfig, patch: unknown): Product
       base.pinnedQuestionMax,
       1,
       8,
+    ),
+    trackingCronEnabled: parseBool(
+      field(patch, 'trackingCronEnabled', 'TRACKING_CRON_ENABLED'),
+      base.trackingCronEnabled,
+    ),
+    trackingCadence: parseEnum(
+      field(patch, 'trackingCadence', 'TRACKING_CADENCE'),
+      ['daily', 'weekly', 'monthly'] as const,
+      base.trackingCadence,
+    ),
+    trackingHistoryLimit: parseIntRange(
+      field(patch, 'trackingHistoryLimit', 'TRACKING_HISTORY_LIMIT'),
+      base.trackingHistoryLimit,
+      2,
+      30,
     ),
     copy: parseCopy(patch.copy, base.copy),
   }
