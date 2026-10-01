@@ -45,12 +45,12 @@ import {
   type OwnedQuestion,
 } from './ownedQuestions'
 import { MentionMark } from './MentionMark'
-import { RunDelta } from './RunDelta'
+import { RunHistoryPanel } from './RunHistoryPanel'
 import { landThemeId, type AnswerFact, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
 import { startCheckout } from './billingClient'
 import { listChecks, recordCheckRun, saveCheck, updateCheckQuestions } from './checksClient'
-import { cleanRuns, type CheckRun } from './runHistory'
+import { cleanRuns, mentionsFromReport, type CheckRun } from './runHistory'
 import {
   draftFromScreen,
   screenFromSaved,
@@ -277,6 +277,22 @@ function historyKind(check: SavedCheck): string {
   return check.mode === 'branded' ? 'Branded' : 'Unbranded'
 }
 
+function pairedAnswers(questions: string[], replies: string[]): { question: string; answer: string }[] {
+  return questions.flatMap((question, index) => {
+    const answer = (replies[index] || '').replace(/\s+/g, ' ').trim()
+    return answer ? [{ question, answer }] : []
+  })
+}
+
+function reportAnswers(report: FullReport): { question: string; answer: string }[] {
+  return report.themes.flatMap((theme) =>
+    theme.questions.flatMap((item) => {
+      const answer = item.answer.replace(/\s+/g, ' ').trim()
+      return answer ? [{ question: item.question, answer }] : []
+    }),
+  )
+}
+
 function formatWhen(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return ''
@@ -328,6 +344,7 @@ export default function App() {
   const [addText, setAddText] = useState('')
   const [addThemeId, setAddThemeId] = useState<ThemeId>('problems')
   const [runs, setRuns] = useState<CheckRun[]>([])
+  const [checkedAt, setCheckedAt] = useState('')
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
 
@@ -500,6 +517,7 @@ export default function App() {
     setDigStatus(reopened.digStatus)
     setSavedId(check.id)
     setRuns(cleanRuns(check.result.runs, check.domain))
+    setCheckedAt(check.createdAt)
     setUrl(check.domain)
     setPageText(null)
     setPins([])
@@ -547,6 +565,7 @@ export default function App() {
     setSaveMessage('')
     setSavedId(null)
     setRuns([])
+    setCheckedAt('')
     setFullReport(null)
     setReportPhase('idle')
     setReportMessage('')
@@ -611,6 +630,7 @@ export default function App() {
     setOwnedSet(false)
     setQuestionsDirty(false)
     setRuns([])
+    setCheckedAt('')
     const domain = screen.domain
     const req = ++digReq.current
     digState.current = 'loading'
@@ -681,6 +701,7 @@ export default function App() {
     setDigStatus('idle')
     setSavedId(null)
     setRuns([])
+    setCheckedAt('')
     setSaveState('idle')
     setSaveMessage('')
     setPageText(null)
@@ -875,6 +896,7 @@ export default function App() {
       setDigStatus('idle')
       setSavedId(check.id)
       setRuns(cleanRuns(check.result.runs, check.domain))
+      setCheckedAt(check.createdAt)
       setUrl(check.domain)
       setPageText(null)
       setPins([])
@@ -1288,6 +1310,29 @@ export default function App() {
   const ownedCount = fullReport ? ownedFromReport(fullReport).length : (activeBeat()?.questions.length ?? 0)
   const questionToolsBusy = busy || questionsSaving
   const showDelta = owning && (ownedSet || runs.length > 0)
+  const runPreview: CheckRun | null = (() => {
+    if (runs.length > 0) return null
+    if (reportOnly && fullReport) {
+      const mentions = mentionsFromReport(fullReport, fullReport.domain)
+      if (mentions.length === 0) return null
+      return { at: checkedAt, mode: 'full', mentions }
+    }
+    if (!beat || beat.questions.length === 0) return null
+    const mentions: CheckRun['mentions'] = beat.questions.map((question, index) => {
+      const fact = factFor(beat.facts, index, question)
+      const next: CheckRun['mentions'][number] = { question, whoInstead: fact?.whoInstead ?? [] }
+      if (fact?.mention) next.mention = fact.mention
+      return next
+    })
+    return { at: checkedAt, mode: beat.mode, mentions }
+  })()
+  const latestMode = (runs.length > 0 ? runs[runs.length - 1]?.mode : runPreview?.mode) ?? null
+  const runAnswers =
+    latestMode === 'full' && fullReport
+      ? reportAnswers(fullReport)
+      : latestMode === 'branded' && screen?.branded
+        ? pairedAnswers(screen.branded.questions, screen.branded.answers)
+        : []
   const reportEditor =
     owning && fullReport
       ? {
@@ -1516,7 +1561,9 @@ export default function App() {
             <p className="why">{config.copy.fullReportSub}</p>
             {owning ? <p className="why">{config.copy.ownedQuestionsHint}</p> : null}
             <FullReportSection report={fullReport} copy={config.copy} themesOnly editor={reportEditor} />
-            {showDelta ? <RunDelta runs={runs} copy={config.copy} /> : null}
+            {showDelta ? (
+              <RunHistoryPanel runs={runs} preview={runPreview} answers={runAnswers} copy={config.copy} />
+            ) : null}
             {owning ? (
               <div className="save-row">
                 <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
@@ -1824,7 +1871,9 @@ export default function App() {
               </section>
             ) : null}
 
-            {showDelta ? <RunDelta runs={runs} copy={config.copy} /> : null}
+            {showDelta ? (
+              <RunHistoryPanel runs={runs} preview={runPreview} answers={runAnswers} copy={config.copy} />
+            ) : null}
 
             <div className={`save-row${emphasizeSave && !savedId ? ' nudge' : ''}`}>
               <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>

@@ -13,9 +13,13 @@ import { productConfigFromEnv } from '../src/config/productConfig.ts'
 import { STORY } from '../src/story.ts'
 import {
   appendRunHistory,
+  changeSummary,
   comparedToRunLabel,
   deltaFlipKind,
   deltaVsLastRun,
+  gridRuns,
+  mentionGrid,
+  runColumnLabel,
   type CheckRun,
   type RunMention,
 } from '../src/runHistory.ts'
@@ -62,6 +66,65 @@ describe('delta vs last run', () => {
     assert.equal(deltaFlipKind('mentioned', 'unclear'), 'lostMention')
     assert.equal(deltaFlipKind('not_mentioned', 'unclear'), null)
     assert.equal(comparedToRunLabel('Compared to run {date}', '2026-09-01T00:00:00.000Z'), 'Compared to run Sep 1, 2026')
+    assert.equal(runColumnLabel('2026-09-01T00:00:00.000Z'), 'Sep 1, 12:00 AM')
+    assert.equal(runColumnLabel('2026-09-30T15:04:00.000Z'), 'Sep 30, 3:04 PM')
+    assert.equal(runColumnLabel('not-a-date'), '')
+  })
+
+  it('rolls flip kinds into counts and lays questions across run columns', () => {
+    const prior: CheckRun = {
+      at: '2026-09-01T00:00:00.000Z',
+      mode: 'unbranded',
+      mentions: [
+        mention('Track issues', 'not_mentioned', ['Jira']),
+        mention('Replace a tracker', 'mentioned', ['Jira']),
+        mention('Pick a planner', 'unclear', ['Jira']),
+        mention('Compare tools', 'mentioned', ['Jira']),
+      ],
+    }
+    const current: CheckRun = {
+      at: '2026-09-30T15:04:00.000Z',
+      mode: 'unbranded',
+      mentions: [
+        mention('Track issues', 'mentioned', ['Height']),
+        mention('Replace a tracker', 'not_mentioned', ['Height']),
+        mention('Pick a planner', 'mentioned', ['Height']),
+        mention('Compare tools', 'unclear', ['Height']),
+      ],
+    }
+    const summary = changeSummary([prior, current])
+    assert.equal(summary.comparable, true)
+    assert.equal(summary.quiet, false)
+    assert.deepEqual(summary.chips, [
+      { id: 'newlyMentioned', count: 1 },
+      { id: 'lostMention', count: 2 },
+      { id: 'nowMentioned', count: 1 },
+      { id: 'whoAppeared', count: 1 },
+      { id: 'whoDropped', count: 1 },
+    ])
+    const quiet = changeSummary([prior, { ...prior, at: current.at }])
+    assert.equal(quiet.quiet, true)
+    assert.deepEqual(quiet.chips, [])
+    const waiting = changeSummary([prior])
+    assert.equal(waiting.comparable, false)
+    const rows = mentionGrid([prior, current])
+    assert.deepEqual(
+      rows.map((row) => row.question),
+      ['Track issues', 'Replace a tracker', 'Pick a planner', 'Compare tools'],
+    )
+    assert.equal(rows[0]?.cells[0]?.mention, 'not_mentioned')
+    assert.equal(rows[0]?.cells[1]?.mention, 'mentioned')
+    assert.equal(rows.length, 4)
+    assert.equal(rows[0]?.cells.length, 2)
+    const dropped = mentionGrid([
+      prior,
+      { ...current, mentions: current.mentions.filter((item) => item.question !== 'Compare tools') },
+    ])
+    assert.equal(dropped[3]?.question, 'Compare tools')
+    assert.equal(dropped[3]?.cells[1], null)
+    assert.equal(gridRuns([], prior).length, 1)
+    assert.equal(gridRuns([prior, current], prior).length, 2)
+    assert.equal(gridRuns([], null).length, 0)
   })
 
   it('treats an unchanged run as an empty delta and a single run as not comparable', () => {
@@ -499,44 +562,46 @@ describe('tracking cron stays off', () => {
   })
 })
 
-describe('vs last run story', () => {
-  it('uses the thin labels and only shows the delta on an owned check', () => {
-    assert.equal(STORY.deltaTitle, 'Vs last run')
-    assert.equal(
-      STORY.deltaHelper,
-      'What changed on this check since the previous run — same questions, labeled OpenAI answers.',
-    )
-    assert.equal(STORY.deltaAwaiting, 'No previous run to compare yet. Run again later to see what changed.')
-    assert.equal(STORY.deltaEmpty, 'No mention changes vs last run.')
+describe('what’s changed and over time story', () => {
+  it('uses the rollup and grid labels and only shows them on an owned check', () => {
+    assert.equal(STORY.deltaTitle, 'What’s changed')
+    assert.equal(STORY.deltaHelper, 'A short read on this check since the previous run.')
+    assert.equal(STORY.deltaAwaiting, 'Run again to start comparing over time.')
+    assert.equal(STORY.deltaEmpty, 'No mention changes since the previous run.')
     assert.equal(STORY.deltaNewlyMentioned, 'Newly mentioned')
-    assert.equal(STORY.deltaNoLongerMentioned, 'No longer mentioned')
     assert.equal(STORY.deltaNowMentioned, 'Now mentioned')
     assert.equal(STORY.deltaLostMention, 'Lost mention')
     assert.equal(STORY.deltaWhoAppeared, 'Newly showing up instead')
     assert.equal(STORY.deltaWhoDropped, 'No longer showing up instead')
-    assert.equal(STORY.deltaComparedTo, 'Compared to run {date}')
+    assert.equal(STORY.overTimeTitle, 'Over time')
+    assert.equal(STORY.overTimeHelper, 'Each column is one run. Same questions — mention status as you re-run.')
+    assert.equal(STORY.overTimeQuestion, 'Question')
+    assert.equal(STORY.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
     assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
-    const delta = readFileSync(new URL('../src/RunDelta.tsx', import.meta.url), 'utf8')
+    const panel = readFileSync(new URL('../src/RunHistoryPanel.tsx', import.meta.url), 'utf8')
     const scheduled = readFileSync(new URL('../functions/scheduled.ts', import.meta.url), 'utf8')
     assert.match(app, /const showDelta = owning && \(ownedSet \|\| runs\.length > 0\)/)
     assert.match(app, /recordCheckRun\(/)
-    assert.match(app, /showDelta \? <RunDelta/)
-    assert.match(delta, /copy\.deltaTitle/)
-    assert.match(delta, /copy\.deltaHelper/)
-    assert.match(delta, /copy\.deltaEmpty/)
-    assert.match(delta, /copy\.deltaAwaiting/)
-    assert.match(delta, /deltaNewlyMentioned/)
-    assert.match(delta, /deltaWhoAppeared/)
-    assert.match(delta, /deltaVsLastRun/)
-    assert.equal(delta.includes('fullReport'), false)
-    assert.equal(/monitoring|scheduled pulse|every week/i.test(delta + scheduled), false)
+    assert.match(app, /showDelta \? \(/)
+    assert.match(app, /<RunHistoryPanel/)
+    assert.match(panel, /copy\.deltaTitle/)
+    assert.match(panel, /copy\.deltaHelper/)
+    assert.match(panel, /copy\.deltaEmpty/)
+    assert.match(panel, /copy\.deltaAwaiting/)
+    assert.match(panel, /copy\.overTimeTitle/)
+    assert.match(panel, /copy\.overTimeHelper/)
+    assert.match(panel, /deltaNewlyMentioned/)
+    assert.match(panel, /deltaWhoAppeared/)
+    assert.match(panel, /changeSummary/)
+    assert.equal(panel.includes('run-delta-list'), false)
+    assert.equal(/monitoring|scheduled pulse|every week|Vs last run/i.test(panel + scheduled), false)
   })
 })
 
-describe('vs last run markup', () => {
-  it('renders the locked helper, empty states, and flip lines', async () => {
+describe('what’s changed and over time markup', () => {
+  it('renders a rollup and a mention grid, with one column before a second run', async () => {
     const server: ViteDevServer = await createServer({
       server: { middlewareMode: true },
       appType: 'custom',
@@ -544,51 +609,82 @@ describe('vs last run markup', () => {
       ssr: { external: ['react', 'react-dom'] },
     })
     try {
-      const { RunDelta } = (await server.ssrLoadModule('/src/RunDelta.tsx')) as typeof import('../src/RunDelta.tsx')
+      const { RunHistoryPanel } = (await server.ssrLoadModule(
+        '/src/RunHistoryPanel.tsx',
+      )) as typeof import('../src/RunHistoryPanel.tsx')
       const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
         '/src/config/productConfig.ts',
       )) as typeof import('../src/config/productConfig.ts')
       const copy = PRODUCT_DEFAULTS.copy
-      const question = (name: string) => name
       const prior: CheckRun = {
         at: '2026-09-01T00:00:00.000Z',
         mode: 'unbranded',
         mentions: [
-          mention(question('Track issues'), 'not_mentioned', ['Jira']),
-          mention(question('Replace a tracker'), 'mentioned', ['Jira']),
-          mention(question('Pick a planner'), 'unclear', ['Jira']),
-          mention(question('Compare tools'), 'mentioned', ['Jira']),
+          mention('Track issues', 'not_mentioned', ['Jira']),
+          mention('Replace a tracker', 'mentioned', ['Jira']),
+          mention('Pick a planner', 'unclear', ['Jira']),
+          mention('Compare tools', 'mentioned', ['Jira']),
         ],
       }
       const current: CheckRun = {
-        at: '2026-09-30T00:00:00.000Z',
+        at: '2026-09-30T15:04:00.000Z',
         mode: 'unbranded',
         mentions: [
-          mention(question('Track issues'), 'mentioned', ['Height']),
-          mention(question('Replace a tracker'), 'not_mentioned', ['Height']),
-          mention(question('Pick a planner'), 'mentioned', ['Height']),
-          mention(question('Compare tools'), 'unclear', ['Height']),
+          mention('Track issues', 'mentioned', ['Height']),
+          mention('Replace a tracker', 'not_mentioned', ['Height']),
+          mention('Pick a planner', 'mentioned', ['Height']),
+          mention('Compare tools', 'unclear', ['Height']),
         ],
       }
-      const waiting = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior], copy }))
-      assert.match(waiting, /Vs last run/)
-      assert.match(waiting, /What changed on this check since the previous run — same questions, labeled OpenAI answers\./)
-      assert.match(waiting, /No previous run to compare yet\. Run again later to see what changed\./)
-      assert.equal(waiting.includes('Compared to run'), false)
-      assert.equal(/monitoring|every week|scheduled/i.test(waiting), false)
+      const waiting = renderToStaticMarkup(
+        React.createElement(RunHistoryPanel, {
+          runs: [],
+          preview: prior,
+          answers: [{ question: 'Track issues', answer: 'Jira shows up for tracking.' }],
+          copy,
+        }),
+      )
+      assert.match(waiting, /What’s changed/)
+      assert.match(waiting, /A short read on this check since the previous run\./)
+      assert.match(waiting, /Run again to start comparing over time\./)
+      assert.match(waiting, /Over time/)
+      assert.match(waiting, /Each column is one run\. Same questions — mention status as you re-run\./)
+      assert.match(waiting, /Mentioned · Not mentioned · Unclear/)
+      assert.equal(waiting.match(/<th scope="col">/g)?.length, 2)
+      assert.match(waiting, /Sep 1, 12:00 AM/)
+      assert.match(waiting, /Not mentioned/)
+      assert.match(waiting, /Generated · OpenAI/)
+      assert.match(waiting, /Jira shows up for tracking\./)
+      assert.equal(/monitoring|every week|scheduled|Vs last run/i.test(waiting), false)
 
-      const same = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior, { ...prior, at: current.at }], copy }))
-      assert.match(same, /No mention changes vs last run\./)
-      assert.match(same, /Compared to run Sep 1, 2026/)
+      const same = renderToStaticMarkup(
+        React.createElement(RunHistoryPanel, { runs: [prior, { ...prior, at: current.at }], copy }),
+      )
+      assert.match(same, /No mention changes since the previous run\./)
+      assert.equal(same.match(/<th scope="col">/g)?.length, 3)
+      assert.equal(same.includes('Newly mentioned'), false)
 
-      const flipped = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior, current], copy }))
-      assert.match(flipped, /Track issues — Newly mentioned/)
-      assert.match(flipped, /Replace a tracker — No longer mentioned/)
-      assert.match(flipped, /Pick a planner — Now mentioned/)
-      assert.match(flipped, /Compare tools — Lost mention/)
-      assert.match(flipped, /Height — Newly showing up instead/)
-      assert.match(flipped, /Jira — No longer showing up instead/)
-      assert.equal(flipped.includes('mention report-mention'), false)
+      const flipped = renderToStaticMarkup(
+        React.createElement(RunHistoryPanel, {
+          runs: [prior, current],
+          answers: [{ question: 'Track issues', answer: 'This check is named in the reply.' }],
+          copy,
+        }),
+      )
+      assert.match(flipped, /1 Newly mentioned/)
+      assert.match(flipped, /2 Lost mention/)
+      assert.match(flipped, /1 Now mentioned/)
+      assert.match(flipped, /1 Newly showing up instead/)
+      assert.match(flipped, /1 No longer showing up instead/)
+      assert.equal(flipped.includes('Track issues — Newly mentioned'), false)
+      assert.equal(flipped.includes('No longer mentioned'), false)
+      assert.equal(flipped.includes('Run again to start comparing'), false)
+      assert.match(flipped, /Sep 1, 12:00 AM/)
+      assert.match(flipped, /Sep 30, 3:04 PM/)
+      assert.match(flipped, /class="tag plain mention mentioned"/)
+      assert.match(flipped, /This check is named in the reply\./)
+      assert.equal(flipped.split('This check is named in the reply.').length, 2)
+      assert.equal(/monitoring|every week|Vs last run/i.test(flipped), false)
     } finally {
       await server.close()
     }

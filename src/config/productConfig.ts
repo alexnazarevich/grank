@@ -47,13 +47,14 @@ export type ProductCopy = {
   deltaAwaiting: string
   deltaEmpty: string
   deltaNewlyMentioned: string
-  deltaNoLongerMentioned: string
   deltaNowMentioned: string
   deltaLostMention: string
   deltaWhoAppeared: string
   deltaWhoDropped: string
-  /** `{date}` is replaced in the UI. Not a schedule line. */
-  deltaComparedTo: string
+  overTimeTitle: string
+  overTimeHelper: string
+  overTimeQuestion: string
+  overTimeLegend: string
 }
 
 export type ProductConfig = {
@@ -158,12 +159,14 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     deltaAwaiting: STORY.deltaAwaiting,
     deltaEmpty: STORY.deltaEmpty,
     deltaNewlyMentioned: STORY.deltaNewlyMentioned,
-    deltaNoLongerMentioned: STORY.deltaNoLongerMentioned,
     deltaNowMentioned: STORY.deltaNowMentioned,
     deltaLostMention: STORY.deltaLostMention,
     deltaWhoAppeared: STORY.deltaWhoAppeared,
     deltaWhoDropped: STORY.deltaWhoDropped,
-    deltaComparedTo: STORY.deltaComparedTo,
+    overTimeTitle: STORY.overTimeTitle,
+    overTimeHelper: STORY.overTimeHelper,
+    overTimeQuestion: STORY.overTimeQuestion,
+    overTimeLegend: STORY.overTimeLegend,
   },
 }
 
@@ -231,12 +234,14 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'deltaAwaiting',
   'deltaEmpty',
   'deltaNewlyMentioned',
-  'deltaNoLongerMentioned',
   'deltaNowMentioned',
   'deltaLostMention',
   'deltaWhoAppeared',
   'deltaWhoDropped',
-  'deltaComparedTo',
+  'overTimeTitle',
+  'overTimeHelper',
+  'overTimeQuestion',
+  'overTimeLegend',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
