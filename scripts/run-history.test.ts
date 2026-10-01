@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, it } from 'node:test'
+import { createServer, type ViteDevServer } from 'vite'
 import { onRequest } from '../functions/api/checks.ts'
 import { onRequest as onFullReport } from '../functions/api/full-report.ts'
 import { onScheduled } from '../functions/scheduled.ts'
@@ -10,6 +13,8 @@ import { productConfigFromEnv } from '../src/config/productConfig.ts'
 import { STORY } from '../src/story.ts'
 import {
   appendRunHistory,
+  comparedToRunLabel,
+  deltaFlipKind,
   deltaVsLastRun,
   type CheckRun,
   type RunMention,
@@ -48,6 +53,15 @@ describe('delta vs last run', () => {
     assert.deepEqual(delta.flips, [{ question: QUESTION, from: 'mentioned', to: 'not_mentioned' }])
     assert.deepEqual(delta.appeared, ['Height'])
     assert.deepEqual(delta.dropped, ['Jira'])
+  })
+
+  it('names each mention flip with the locked story kind', () => {
+    assert.equal(deltaFlipKind('not_mentioned', 'mentioned'), 'newlyMentioned')
+    assert.equal(deltaFlipKind('mentioned', 'not_mentioned'), 'noLongerMentioned')
+    assert.equal(deltaFlipKind('unclear', 'mentioned'), 'nowMentioned')
+    assert.equal(deltaFlipKind('mentioned', 'unclear'), 'lostMention')
+    assert.equal(deltaFlipKind('not_mentioned', 'unclear'), null)
+    assert.equal(comparedToRunLabel('Compared to run {date}', '2026-09-01T00:00:00.000Z'), 'Compared to run Sep 1, 2026')
   })
 
   it('treats an unchanged run as an empty delta and a single run as not comparable', () => {
@@ -488,19 +502,95 @@ describe('tracking cron stays off', () => {
 describe('vs last run story', () => {
   it('uses the thin labels and only shows the delta on an owned check', () => {
     assert.equal(STORY.deltaTitle, 'Vs last run')
+    assert.equal(
+      STORY.deltaHelper,
+      'What changed on this check since the previous run — same questions, labeled OpenAI answers.',
+    )
+    assert.equal(STORY.deltaAwaiting, 'No previous run to compare yet. Run again later to see what changed.')
     assert.equal(STORY.deltaEmpty, 'No mention changes vs last run.')
-    assert.equal(STORY.deltaAwaiting, 'No earlier run to compare yet.')
+    assert.equal(STORY.deltaNewlyMentioned, 'Newly mentioned')
+    assert.equal(STORY.deltaNoLongerMentioned, 'No longer mentioned')
+    assert.equal(STORY.deltaNowMentioned, 'Now mentioned')
+    assert.equal(STORY.deltaLostMention, 'Lost mention')
+    assert.equal(STORY.deltaWhoAppeared, 'Newly showing up instead')
+    assert.equal(STORY.deltaWhoDropped, 'No longer showing up instead')
+    assert.equal(STORY.deltaComparedTo, 'Compared to run {date}')
     assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
     const delta = readFileSync(new URL('../src/RunDelta.tsx', import.meta.url), 'utf8')
+    const scheduled = readFileSync(new URL('../functions/scheduled.ts', import.meta.url), 'utf8')
     assert.match(app, /const showDelta = owning && \(ownedSet \|\| runs\.length > 0\)/)
     assert.match(app, /recordCheckRun\(/)
     assert.match(app, /showDelta \? <RunDelta/)
-    assert.match(delta, /STORY\.deltaTitle/)
-    assert.match(delta, /STORY\.deltaEmpty/)
-    assert.match(delta, /STORY\.deltaAwaiting/)
+    assert.match(delta, /copy\.deltaTitle/)
+    assert.match(delta, /copy\.deltaHelper/)
+    assert.match(delta, /copy\.deltaEmpty/)
+    assert.match(delta, /copy\.deltaAwaiting/)
+    assert.match(delta, /deltaNewlyMentioned/)
+    assert.match(delta, /deltaWhoAppeared/)
     assert.match(delta, /deltaVsLastRun/)
     assert.equal(delta.includes('fullReport'), false)
+    assert.equal(/monitoring|scheduled pulse|every week/i.test(delta + scheduled), false)
+  })
+})
+
+describe('vs last run markup', () => {
+  it('renders the locked helper, empty states, and flip lines', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { RunDelta } = (await server.ssrLoadModule('/src/RunDelta.tsx')) as typeof import('../src/RunDelta.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const copy = PRODUCT_DEFAULTS.copy
+      const question = (name: string) => name
+      const prior: CheckRun = {
+        at: '2026-09-01T00:00:00.000Z',
+        mode: 'unbranded',
+        mentions: [
+          mention(question('Track issues'), 'not_mentioned', ['Jira']),
+          mention(question('Replace a tracker'), 'mentioned', ['Jira']),
+          mention(question('Pick a planner'), 'unclear', ['Jira']),
+          mention(question('Compare tools'), 'mentioned', ['Jira']),
+        ],
+      }
+      const current: CheckRun = {
+        at: '2026-09-30T00:00:00.000Z',
+        mode: 'unbranded',
+        mentions: [
+          mention(question('Track issues'), 'mentioned', ['Height']),
+          mention(question('Replace a tracker'), 'not_mentioned', ['Height']),
+          mention(question('Pick a planner'), 'mentioned', ['Height']),
+          mention(question('Compare tools'), 'unclear', ['Height']),
+        ],
+      }
+      const waiting = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior], copy }))
+      assert.match(waiting, /Vs last run/)
+      assert.match(waiting, /What changed on this check since the previous run — same questions, labeled OpenAI answers\./)
+      assert.match(waiting, /No previous run to compare yet\. Run again later to see what changed\./)
+      assert.equal(waiting.includes('Compared to run'), false)
+      assert.equal(/monitoring|every week|scheduled/i.test(waiting), false)
+
+      const same = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior, { ...prior, at: current.at }], copy }))
+      assert.match(same, /No mention changes vs last run\./)
+      assert.match(same, /Compared to run Sep 1, 2026/)
+
+      const flipped = renderToStaticMarkup(React.createElement(RunDelta, { runs: [prior, current], copy }))
+      assert.match(flipped, /Track issues — Newly mentioned/)
+      assert.match(flipped, /Replace a tracker — No longer mentioned/)
+      assert.match(flipped, /Pick a planner — Now mentioned/)
+      assert.match(flipped, /Compare tools — Lost mention/)
+      assert.match(flipped, /Height — Newly showing up instead/)
+      assert.match(flipped, /Jira — No longer showing up instead/)
+      assert.equal(flipped.includes('mention report-mention'), false)
+    } finally {
+      await server.close()
+    }
   })
 })

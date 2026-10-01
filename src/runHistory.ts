@@ -26,6 +26,31 @@ export type MentionFlip = {
   to: Mention
 }
 
+/** Story label for a mention change. Unlisted pairs stay on the chip words. */
+export type DeltaFlipKind = 'newlyMentioned' | 'noLongerMentioned' | 'nowMentioned' | 'lostMention'
+
+export function deltaFlipKind(from: Mention, to: Mention): DeltaFlipKind | null {
+  if (from === 'unclear' && to === 'mentioned') return 'nowMentioned'
+  if (from === 'not_mentioned' && to === 'mentioned') return 'newlyMentioned'
+  if (from === 'mentioned' && to === 'not_mentioned') return 'noLongerMentioned'
+  if (from === 'mentioned' && to === 'unclear') return 'lostMention'
+  return null
+}
+
+/** `{date}` is a calendar day in UTC. Empty when the stamp or the time is unusable. */
+export function comparedToRunLabel(template: string, iso: string): string {
+  if (!template.includes('{date}')) return ''
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date)
+  return template.replaceAll('{date}', formatted)
+}
+
 export type RunDelta = {
   /** False until a prior run and a current run both exist. */
   comparable: boolean

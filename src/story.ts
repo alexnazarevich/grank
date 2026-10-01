@@ -32,6 +32,14 @@ export const STORY = {
   foilFoot:
     'Land on unbranded. Dig into branded when you’re ready. Free checks, then one simple upgrade if you need more — no credit packs.',
   deltaTitle: 'Vs last run',
+  deltaHelper: 'What changed on this check since the previous run — same questions, labeled OpenAI answers.',
+  deltaAwaiting: 'No previous run to compare yet. Run again later to see what changed.',
   deltaEmpty: 'No mention changes vs last run.',
-  deltaAwaiting: 'No earlier run to compare yet.',
+  deltaNewlyMentioned: 'Newly mentioned',
+  deltaNoLongerMentioned: 'No longer mentioned',
+  deltaNowMentioned: 'Now mentioned',
+  deltaLostMention: 'Lost mention',
+  deltaWhoAppeared: 'Newly showing up instead',
+  deltaWhoDropped: 'No longer showing up instead',
+  deltaComparedTo: 'Compared to run {date}',
 } as const

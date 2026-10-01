@@ -77,6 +77,20 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.deleteQuestionCta, 'Delete')
     assert.equal(config.copy.saveQuestionsCta, 'Save questions')
     assert.match(config.copy.ownedQuestionsHint, /Save them, then run again/)
+    assert.equal(config.copy.deltaTitle, 'Vs last run')
+    assert.equal(
+      config.copy.deltaHelper,
+      'What changed on this check since the previous run — same questions, labeled OpenAI answers.',
+    )
+    assert.equal(config.copy.deltaAwaiting, 'No previous run to compare yet. Run again later to see what changed.')
+    assert.equal(config.copy.deltaEmpty, 'No mention changes vs last run.')
+    assert.equal(config.copy.deltaNewlyMentioned, 'Newly mentioned')
+    assert.equal(config.copy.deltaNoLongerMentioned, 'No longer mentioned')
+    assert.equal(config.copy.deltaNowMentioned, 'Now mentioned')
+    assert.equal(config.copy.deltaLostMention, 'Lost mention')
+    assert.equal(config.copy.deltaWhoAppeared, 'Newly showing up instead')
+    assert.equal(config.copy.deltaWhoDropped, 'No longer showing up instead')
+    assert.equal(config.copy.deltaComparedTo, 'Compared to run {date}')
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }

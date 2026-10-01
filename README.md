@@ -66,11 +66,11 @@ Without those keys locally, step 1 still works and step 2 shows **Auth not confi
 
 An owned saved check keeps a thin run history on the same row: `checks.result.runs`. Each entry is the question, its mention (`mentioned` / `not_mentioned` / `unclear`), and unbranded who-instead names. It is not a second copy of the report.
 
-**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. The screen shows **Vs last run**: questions that flipped Mentioned ↔ Not mentioned / Unclear, and who-instead names that appeared or dropped. If there is no earlier run, the line is “No earlier run to compare yet.” If nothing changed, it is “No mention changes vs last run.”
+**Run again** on that check still calls the live model, then appends a snapshot. The first re-run stores the prior result and the new one. Later re-runs append. The screen shows **Vs last run** with the helper “What changed on this check since the previous run — same questions, labeled OpenAI answers.” Flip lines use Newly mentioned, No longer mentioned, Now mentioned, and Lost mention. Who-instead lines use Newly showing up instead and No longer showing up instead. The first comparison says “No previous run to compare yet. Run again later to see what changed.” If nothing changed, it is “No mention changes vs last run.”
 
-History stays in the existing `result` jsonb column. **No new Supabase migration.** Nothing to apply for this cut.
+History stays in the existing `result` jsonb column. **No new Supabase migration.** Nothing to apply for this cut. No new host.
 
-Schedules are off. `TRACKING_CRON_ENABLED` defaults to false. `TRACKING_CADENCE` (default `weekly`) is stored on the check as `result.tracking.cadence` for a later bet and is unused while cron is off. `functions/scheduled.ts` exports `onScheduled` and does not call the model. There is no Pages Cron trigger in this repo. Do not add one until that flag is turned on.
+Schedules are off. `TRACKING_CRON_ENABLED` defaults to false. `TRACKING_CADENCE` (default `weekly`) is stored on the check as `result.tracking.cadence` and is unused. `functions/scheduled.ts` exports `onScheduled`, does not call the model, and does not read a cron secret. Do not attach a Cloudflare Pages Cron Trigger.
 
 | Pages secret | Default | Purpose |
 | --- | --- | --- |

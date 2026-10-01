@@ -1,12 +1,12 @@
 /**
  * Pages Cron scaffold for tracked re-runs (bet 13).
  *
- * No cron trigger is registered. This file does not export onRequest, so it is
- * not an HTTP route. onScheduled does not call OpenAI and does not write checks.
+ * Do not attach a Cloudflare Pages Cron Trigger. This file does not export
+ * onRequest, so it is not an HTTP route. onScheduled does not call OpenAI,
+ * does not write checks, and does not read a cron secret.
  *
- * Later, when Alex turns schedules on: set TRACKING_CRON_ENABLED=true and add a
- * Pages Cron Trigger that invokes this function. Until then the handler returns
- * before any re-run, including when the flag is accidentally set.
+ * TRACKING_CADENCE is stored for later and unused. TRACKING_CRON_ENABLED
+ * stays false until Alex enables schedules.
  */
 
 import { productConfigFromEnv } from '../src/config/productConfig.ts'

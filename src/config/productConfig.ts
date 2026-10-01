@@ -1,8 +1,10 @@
 /**
- * Product knobs for save/re-run (8), quota/paid (9), and the full report (10).
+ * Product knobs for save/re-run (8), quota/paid (9), the full report (10), and tracked re-runs (13).
  * Safe defaults, then an optional JSON blob, then server env aliases.
  * Pages Functions enforce from env. The UI only displays the resolved config.
  */
+
+import { STORY } from '../story.ts'
 
 export type FreeQuotaUnit = 'checks' | 'saves' | 'both'
 export type FreeQuotaWindow = 'lifetime' | 'day' | 'month'
@@ -40,6 +42,18 @@ export type ProductCopy = {
   deleteQuestionCta: string
   saveQuestionsCta: string
   ownedQuestionsHint: string
+  deltaTitle: string
+  deltaHelper: string
+  deltaAwaiting: string
+  deltaEmpty: string
+  deltaNewlyMentioned: string
+  deltaNoLongerMentioned: string
+  deltaNowMentioned: string
+  deltaLostMention: string
+  deltaWhoAppeared: string
+  deltaWhoDropped: string
+  /** `{date}` is replaced in the UI. Not a schedule line. */
+  deltaComparedTo: string
 }
 
 export type ProductConfig = {
@@ -139,6 +153,17 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     saveQuestionsCta: 'Save questions',
     ownedQuestionsHint:
       'Add or delete questions on this check. Save them, then run again to answer this set.',
+    deltaTitle: STORY.deltaTitle,
+    deltaHelper: STORY.deltaHelper,
+    deltaAwaiting: STORY.deltaAwaiting,
+    deltaEmpty: STORY.deltaEmpty,
+    deltaNewlyMentioned: STORY.deltaNewlyMentioned,
+    deltaNoLongerMentioned: STORY.deltaNoLongerMentioned,
+    deltaNowMentioned: STORY.deltaNowMentioned,
+    deltaLostMention: STORY.deltaLostMention,
+    deltaWhoAppeared: STORY.deltaWhoAppeared,
+    deltaWhoDropped: STORY.deltaWhoDropped,
+    deltaComparedTo: STORY.deltaComparedTo,
   },
 }
 
@@ -201,6 +226,17 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'deleteQuestionCta',
   'saveQuestionsCta',
   'ownedQuestionsHint',
+  'deltaTitle',
+  'deltaHelper',
+  'deltaAwaiting',
+  'deltaEmpty',
+  'deltaNewlyMentioned',
+  'deltaNoLongerMentioned',
+  'deltaNowMentioned',
+  'deltaLostMention',
+  'deltaWhoAppeared',
+  'deltaWhoDropped',
+  'deltaComparedTo',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
