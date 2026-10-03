@@ -66,7 +66,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.whoInsteadBoardTitle, 'Who showed up instead')
     assert.equal(
       config.copy.whoInsteadBoardHelper,
-      'Names that showed up in place of you on unbranded questions this run — not market share.',
+      'By topic, on unbranded questions this run — not market share.',
     )
     assert.equal(config.copy.whoInsteadBoardEmpty, 'No one else showed up yet.')
     assert.equal(config.copy.whoInsteadBoardCount, 'Appeared on {n} questions')

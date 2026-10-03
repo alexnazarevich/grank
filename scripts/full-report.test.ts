@@ -16,7 +16,7 @@ import {
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
 import { fullReportOpensPayGate, interpretFullReportResponse } from '../src/fullReportClient.ts'
-import { mentionStatusLabel, whoInsteadBoard, whoInsteadCountLabel, whoInsteadNames } from '../src/mentionLabel.ts'
+import { mentionStatusLabel, whoInsteadByTopic, whoInsteadCountLabel, whoInsteadNames } from '../src/mentionLabel.ts'
 import { STORY } from '../src/story.ts'
 
 const KEY = 'sk-openai-full-report-secret'
@@ -972,30 +972,97 @@ describe('full-report question accordion', () => {
     assert.equal(STORY.whoInsteadBoardTitle, 'Who showed up instead')
     assert.equal(
       STORY.whoInsteadBoardHelper,
-      'Names that showed up in place of you on unbranded questions this run — not market share.',
+      'By topic, on unbranded questions this run — not market share.',
     )
     assert.equal(STORY.whoInsteadBoardEmpty, 'No one else showed up yet.')
     assert.equal(STORY.whoInsteadBoardCount, 'Appeared on {n} questions')
     assert.equal(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 2), 'Appeared on 2 questions')
     assert.equal(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 1), 'Appeared on 1 questions')
-    const rows = whoInsteadBoard([
+    const topics = whoInsteadByTopic([
       {
+        id: 'problems',
+        title: 'Problems you solve',
+        framing: 'unbranded',
         questions: [
-          { framing: 'unbranded', mention: 'not_mentioned', whoInstead: ['Jira', 'Asana', 'jira'] },
-          { framing: 'unbranded', mention: 'unclear', whoInstead: [' Height ', 'Jira'] },
-          { framing: 'unbranded', mention: 'mentioned', whoInstead: ['Notion'] },
-          { framing: 'unbranded', whoInstead: ['Coda'] },
-          { framing: 'branded', mention: 'not_mentioned', whoInstead: ['Slack', 'Jira'] },
+          { question: 'Track issues?', framing: 'unbranded', mention: 'not_mentioned', whoInstead: ['Jira', 'Asana', 'jira'] },
+          { question: 'Plan a week?', framing: 'unbranded', mention: 'unclear', whoInstead: [' Height ', 'Jira'] },
+          { question: 'You showed up', framing: 'unbranded', mention: 'mentioned', whoInstead: ['Notion'] },
+          { question: 'No fact', framing: 'unbranded', whoInstead: ['Coda'] },
+        ],
+      },
+      {
+        id: 'described',
+        title: 'How you’re described',
+        framing: 'branded',
+        questions: [
+          { question: 'Describe you?', framing: 'branded', mention: 'not_mentioned', whoInstead: ['Slack', 'Jira'] },
+        ],
+      },
+      {
+        id: 'alternatives',
+        title: 'Alternatives & who else',
+        framing: 'unbranded',
+        questions: [
+          {
+            question: 'Who else tracks issues?',
+            framing: 'unbranded',
+            mention: 'not_mentioned',
+            whoInstead: ['Linear', 'Jira', 'Height', 'Extra'],
+          },
+        ],
+      },
+      {
+        id: 'buying',
+        title: 'Buying & next step',
+        framing: 'unbranded',
+        questions: [
+          { question: 'What should I buy?', framing: 'unbranded', mention: 'mentioned', whoInstead: ['Notion'] },
         ],
       },
     ])
-    assert.deepEqual(rows, [
+    assert.deepEqual(
+      topics.map((topic) => topic.title),
+      ['Problems you solve', 'Alternatives & who else'],
+    )
+    assert.deepEqual(topics[0]?.names, [
       { name: 'Jira', questions: 2 },
       { name: 'Asana', questions: 1 },
       { name: 'Height', questions: 1 },
     ])
-    assert.deepEqual(whoInsteadBoard([{ questions: [] }]), [])
-    assert.equal(/SOV|market share %|% mentioned/.test(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 4)), false)
+    assert.deepEqual(topics[0]?.questions, [
+      { question: 'Track issues?', names: ['Jira', 'Asana'] },
+      { question: 'Plan a week?', names: ['Height', 'Jira'] },
+    ])
+    assert.deepEqual(topics[1]?.names, [
+      { name: 'Height', questions: 1 },
+      { name: 'Jira', questions: 1 },
+      { name: 'Linear', questions: 1 },
+    ])
+    assert.deepEqual(topics[1]?.questions, [
+      { question: 'Who else tracks issues?', names: ['Linear', 'Jira', 'Height'] },
+    ])
+    assert.equal(topics.some((topic) => topic.id === 'described' || topic.id === 'buying'), false)
+    assert.equal(JSON.stringify(topics).includes('Slack'), false)
+    assert.equal(JSON.stringify(topics).includes('Notion'), false)
+    assert.equal(JSON.stringify(topics).includes('Coda'), false)
+    assert.equal(JSON.stringify(topics).includes('Extra'), false)
+    assert.deepEqual(
+      whoInsteadByTopic([{ id: 'problems', title: 'Problems you solve', framing: 'unbranded', questions: [] }]),
+      [],
+    )
+    assert.deepEqual(
+      whoInsteadByTopic([
+        {
+          id: 'trust',
+          title: 'Trust & proof',
+          framing: 'branded',
+          questions: [{ question: 'Proof?', framing: 'branded', mention: 'not_mentioned', whoInstead: ['Slack'] }],
+        },
+      ]),
+      [],
+    )
+    assert.equal(/SOV|market share %|% mentioned|Competitors/.test(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 4)), false)
+    assert.equal(/SOV|Competitors|competitive share/.test(STORY.whoInsteadBoardHelper), false)
   })
 
   it('opens the answer from the question and keeps the chip trailing', () => {
@@ -1011,6 +1078,11 @@ describe('full-report question accordion', () => {
     const boardAt = render.indexOf('<WhoInsteadBoard')
     const themeBlockAt = render.indexOf('theme-block')
     assert.equal(boardAt > 0 && themeBlockAt > boardAt, true)
+    assert.match(section, /whoInsteadByTopic\(report\.themes\)/)
+    assert.equal(section.includes('whoInsteadBoard('), false)
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    assert.equal(app.includes('WhoInsteadBoard'), false)
+    assert.equal(app.includes('who-instead-land'), false)
     assert.match(
       section,
       /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' \? ' mentioned' : ''\}`\}/,
