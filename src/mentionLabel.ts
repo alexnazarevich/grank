@@ -5,6 +5,7 @@
 
 import type { ProductCopy } from './config/productConfig.ts'
 import type { Framing, Mention } from './mentionFacts.ts'
+import { mentionPercent } from './runHistory.ts'
 
 export type MentionLabelCopy = Pick<ProductCopy, 'mentionYes' | 'mentionNo' | 'mentionUnclear'>
 
@@ -101,6 +102,66 @@ export function whoInsteadByTopic(
     })
   }
   return topics
+}
+
+export type CompetitorName = {
+  name: string
+  /** Percent of this topic's unbranded questions where the name showed up instead. */
+  pct: number
+}
+
+export type CompetitorQuestion = {
+  question: string
+  /** OpenAI who-instead names on this answer, including names past the column cap. */
+  names: string[]
+}
+
+export type CompetitorTopic = {
+  id: string
+  title: string
+  framing?: Framing
+  /** Mentioned percent on this topic for this run. Null when the topic has no questions. */
+  you: number | null
+  /** At most {@link TOPIC_ROW_CAP}. Highest appearance count, ties A to Z. */
+  names: CompetitorName[]
+  questions: CompetitorQuestion[]
+}
+
+/**
+ * This run’s competitors grid. You is the topic mention percent.
+ * Name columns reuse the who-instead cap. The percent is appearances ÷ unbranded questions.
+ * Gemini text is not an input. Branded topics keep You and no name columns.
+ */
+export function competitorTopics(
+  themes: readonly {
+    id: string
+    title: string
+    framing?: Framing
+    questions: readonly BoardQuestion[]
+  }[],
+): CompetitorTopic[] {
+  return themes.map((theme) => {
+    const unbranded = theme.framing === 'branded' ? [] : theme.questions.filter((item) => item.framing !== 'branded')
+    const grouped = whoInsteadByTopic([theme])[0]
+    const names = (grouped?.names ?? []).map((row) => ({
+      name: row.name,
+      pct:
+        unbranded.length === 0
+          ? 0
+          : Math.min(100, Math.max(0, Math.round((row.questions / unbranded.length) * 100))),
+    }))
+    return {
+      id: theme.id,
+      title: theme.title,
+      framing: theme.framing,
+      you: mentionPercent(theme.questions.map((item) => item.mention)),
+      names,
+      questions: theme.questions.map((item) => ({
+        question: item.question,
+        names: substitutesOn(item),
+      })),
+    }
+  })
 }
 
 /** `{n}` → how many questions. The template stays plural, including when n is 1. */

@@ -58,4 +58,13 @@ export const STORY = {
   whoInsteadBoardEmpty: 'No one else showed up yet.',
   whoInsteadBoardCount: 'Appeared on {n} questions',
   whoInsteadBoardMore: '{n} more in the questions',
+  competitorsTab: 'Competitors',
+  competitorsHelper:
+    'Your mention rate, and names that showed up instead on unbranded questions this run. Not market share.',
+  competitorsYou: 'You',
+  geminiMentionsEmpty: 'No Gemini mentions on this check yet.',
+  engineOpenAI: 'OpenAI',
+  engineGemini: 'Gemini',
+  reportTopicColumn: 'Topic',
+  reportThisCheck: 'This check',
 } as const

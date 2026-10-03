@@ -108,6 +108,17 @@ describe('productConfigFromEnv', () => {
       config.copy.manageQuestionsHint,
       'Add, remove, or rename questions for this check. Save, then Run again.',
     )
+    assert.equal(config.copy.competitorsTab, 'Competitors')
+    assert.equal(
+      config.copy.competitorsHelper,
+      'Your mention rate, and names that showed up instead on unbranded questions this run. Not market share.',
+    )
+    assert.equal(config.copy.competitorsYou, 'You')
+    assert.equal(config.copy.geminiMentionsEmpty, 'No Gemini mentions on this check yet.')
+    assert.equal(config.copy.engineOpenAI, 'OpenAI')
+    assert.equal(config.copy.engineGemini, 'Gemini')
+    assert.equal(config.copy.reportTopicColumn, 'Topic')
+    assert.equal(config.copy.reportThisCheck, 'This check')
     for (const text of Object.values(config.copy)) {
       assert.equal(/\b3 free\b|\$29|\$\d/.test(text), false)
     }

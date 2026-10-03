@@ -70,7 +70,7 @@ export function RunHistoryPanel({
   preview?: CheckRun | null
   answers?: { question: string; answer: string }[]
   copy: ProductCopy
-  /** Full report keeps the rollup and draws run columns inside each theme. */
+  /** Full report keeps the rollup. Its run columns live on the Over time tab. */
   summaryOnly?: boolean
 }) {
   const shown = gridRuns(runs, preview)

@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
-import { THEME_CATALOG, type FullReport, type FullReportQuestion } from './fullReport.ts'
+import { THEME_CATALOG, type FullReport, type FullReportQuestion, type FullReportTheme } from './fullReport.ts'
 import type { Framing, ThemeId } from './mentionFacts.ts'
-import { mentionStatusLabel, whoInsteadByTopic, whoInsteadNames } from './mentionLabel.ts'
-import { WhoInsteadBoard } from './WhoInsteadBoard.tsx'
+import { competitorTopics, mentionStatusLabel, whoInsteadNames, type CompetitorTopic } from './mentionLabel.ts'
 import {
   gridRuns,
   runColumnLabel,
@@ -13,6 +12,7 @@ import {
   themeRateLabel,
   type CheckRun,
   type MentionGridCell,
+  type ThemeMentionRate,
 } from './runHistory.ts'
 import { geminiRow } from './engineBlock.ts'
 import { STORY } from './story.ts'
@@ -65,24 +65,42 @@ function cellsForQuestion(question: string, runs: CheckRun[]): Array<MentionGrid
 }
 
 /** Question toggles the answer already on the row. No extra model call. */
+function NameList({ names }: { names: string[] }) {
+  if (names.length === 0) return null
+  return (
+    <ul className="mention-names report-who">
+      {names.map((name) => (
+        <li key={name}>
+          <strong>{name}</strong>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 function ReportQuestion({
   item,
   copy,
   panelId,
   chipId,
   startOpen = false,
+  besideNames,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   panelId: string
   chipId: string
   startOpen?: boolean
+  /** Names already listed on the competitors expand, so the answer panel does not repeat them. */
+  besideNames?: string[]
 }) {
   const [open, setOpen] = useState(startOpen)
   const text = item.answer.trim()
   const label = item.mention ? mentionStatusLabel(item.mention, copy) : ''
   const names =
-    open && item.mention && item.mention !== 'mentioned' ? whoInsteadNames(item.whoInstead, item.framing) : []
+    open && !besideNames && item.mention && item.mention !== 'mentioned'
+      ? whoInsteadNames(item.whoInstead, item.framing)
+      : []
   return (
     <li className="q with-answer report-q">
       <div className="report-q-head">
@@ -106,17 +124,15 @@ function ReportQuestion({
           </span>
         ) : null}
       </div>
+      {besideNames && besideNames.length > 0 ? (
+        <>
+          <p className="who-instead-under">{copy.mentionWhoInstead}</p>
+          <NameList names={besideNames} />
+        </>
+      ) : null}
       {open ? (
         <div id={panelId} className="report-q-panel">
-          {names.length > 0 ? (
-            <ul className="mention-names report-who">
-              {names.map((name) => (
-                <li key={name}>
-                  <strong>{name}</strong>
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          {names.length > 0 ? <NameList names={names} /> : null}
           <div className={text ? 'answer' : 'answer miss'}>
             <div className="answer-meta">
               <span className="tag plain live">{GENERATED}</span>
@@ -204,28 +220,189 @@ function ThemeGridRow({
   )
 }
 
-/** First data row under the date headers. One % per run; Unclear and Not are not mentioned. */
-function ThemePercentRow({
-  label,
-  template,
+function PercentCell({ template, pct }: { template: string; pct: number | null | undefined }) {
+  if (typeof pct !== 'number') return <span className="muted">—</span>
+  return themeRateLabel(template, pct)
+}
+
+/** Topic × run. The cells are mention rates. Questions and answers stay in the expand. */
+function TopicOverTimeRow({
+  theme,
+  copy,
+  runs,
   percents,
   columnCount,
+  startOpen,
+  answersOpen,
 }: {
-  label: string
-  template: string
+  theme: FullReportTheme
+  copy: ProductCopy
+  runs: CheckRun[]
   percents: Array<number | null | undefined>
   columnCount: number
+  startOpen: boolean
+  answersOpen: boolean
 }) {
+  const [open, setOpen] = useState(startOpen)
+  const framing = themeFramingOf(theme)
+  const word = framingLabel(framing)
+  const panelId = `topic-${theme.id}-${theme.framing}`
   return (
-    <tr className="theme-pct-row">
-      <th scope="row">{label}</th>
-      {Array.from({ length: columnCount }, (_, index) => {
-        const pct = percents[index]
-        const text = typeof pct === 'number' ? themeRateLabel(template, pct) : null
-        return <td key={index}>{text === null ? <span className="muted">—</span> : text}</td>
-      })}
-    </tr>
+    <>
+      <tr className="topic-rate-row">
+        <th scope="row">
+          <button
+            type="button"
+            className="report-q-toggle"
+            aria-expanded={open}
+            aria-controls={panelId}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {word ? <span className="eyebrow theme-framing">{word}</span> : null}
+            <span className="report-q-text">{theme.title}</span>
+          </button>
+        </th>
+        {Array.from({ length: columnCount }, (_, index) => (
+          <td key={`${theme.id}:${theme.framing}:${index}`}>
+            <PercentCell template={copy.themeMentionCell} pct={percents[index]} />
+          </td>
+        ))}
+      </tr>
+      {open ? (
+        <tr className="theme-answer-row">
+          <td colSpan={columnCount + 1}>
+            <div id={panelId} className="topic-questions">
+              {runs.length > 0 ? (
+                <div className="run-grid-wrap">
+                  <table className="run-grid">
+                    <thead>
+                      <tr>
+                        <th scope="col">{copy.overTimeQuestion}</th>
+                        {runs.map((run, index) => (
+                          <th key={`${theme.id}:${run.at}:${index}`} scope="col">
+                            {runColumnLabel(run.at) || copy.reportThisCheck}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {theme.questions.map((item, index) => (
+                        <ThemeGridRow
+                          key={`${theme.id}-${theme.framing}-${index}`}
+                          item={item}
+                          copy={copy}
+                          runs={runs}
+                          panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
+                          startOpen={answersOpen}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <ul className="answers">
+                  {theme.questions.map((item, index) => (
+                    <ReportQuestion
+                      key={`${theme.id}-${theme.framing}-${index}`}
+                      item={item}
+                      copy={copy}
+                      panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
+                      chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
+                      startOpen={answersOpen}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+          </td>
+        </tr>
+      ) : null}
+    </>
   )
+}
+
+/** This run only. You, then at most five names for this topic. */
+function CompetitorTopicBlock({
+  theme,
+  row,
+  copy,
+  startOpen,
+  answersOpen,
+}: {
+  theme: FullReportTheme
+  row: CompetitorTopic
+  copy: ProductCopy
+  startOpen: boolean
+  answersOpen: boolean
+}) {
+  const [open, setOpen] = useState(startOpen)
+  const framing = themeFramingOf(theme)
+  const word = framingLabel(framing)
+  const panelId = `competitors-${theme.id}-${theme.framing}`
+  const namesByQuestion = row.questions.map((item) => item.names)
+  return (
+    <section className="competitors-topic">
+      <button
+        type="button"
+        className="report-q-toggle"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {word ? <span className="eyebrow theme-framing">{word}</span> : null}
+        <span className="report-q-text">{theme.title}</span>
+      </button>
+      <table className="competitors-grid">
+        <thead>
+          <tr>
+            <th scope="col">{copy.competitorsYou}</th>
+            {row.names.map((name) => (
+              <th key={name.name} scope="col">
+                {name.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <PercentCell template={copy.themeMentionCell} pct={row.you} />
+            </td>
+            {row.names.map((name) => (
+              <td key={name.name}>
+                <PercentCell template={copy.themeMentionCell} pct={name.pct} />
+              </td>
+            ))}
+          </tr>
+        </tbody>
+      </table>
+      {open ? (
+        <div id={panelId} className="topic-questions">
+          <ul className="answers">
+            {theme.questions.map((item, index) => (
+              <ReportQuestion
+                key={`${theme.id}-${theme.framing}-${index}`}
+                item={item}
+                copy={copy}
+                panelId={`competitors-a-${theme.id}-${theme.framing}-${index}`}
+                chipId={`competitors-m-${theme.id}-${theme.framing}-${index}`}
+                startOpen={answersOpen}
+                besideNames={namesByQuestion[index] ?? []}
+              />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+type ReportTab = 'over-time' | 'competitors'
+type ReportEngine = 'openai' | 'gemini'
+
+function ratePercents(rate: ThemeMentionRate | undefined, runCount: number): Array<number | null | undefined> {
+  if (runCount > 0) return rate?.byRun ?? []
+  return [rate?.latest ?? null]
 }
 
 function ManageQuestions({
@@ -375,6 +552,9 @@ export function FullReportSection({
   manageOpen = false,
   whoInsteadOpen = false,
   answersOpen = false,
+  initialTab = 'over-time',
+  initialEngine = 'openai',
+  topicsOpen = false,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -384,11 +564,19 @@ export function FullReportSection({
   preview?: CheckRun | null
   /** Opens the manage panel for tests. The report grid stays free of row edit controls. */
   manageOpen?: boolean
-  /** Opens who-instead topics for tests. The report starts collapsed. */
+  /** Opens topic expands for tests. Grids start collapsed. */
   whoInsteadOpen?: boolean
-  /** Opens each answer for tests. Rows start closed. */
+  /** Opens each answer for tests. Topic rows start closed unless this is set. */
   answersOpen?: boolean
+  /** In-page tab. Over time is first. No URL change. */
+  initialTab?: ReportTab
+  /** Engine filter on Over time. Gemini has no stored mentions. */
+  initialEngine?: ReportEngine
+  /** Opens topic expands on the active tab. */
+  topicsOpen?: boolean
 }) {
+  const [tab, setTab] = useState<ReportTab>(initialTab)
+  const [engine, setEngine] = useState<ReportEngine>(initialEngine)
   const shown = gridRuns(runs, preview)
   const rates = themeMentionRates(
     report.themes.map((theme) => ({
@@ -400,6 +588,9 @@ export function FullReportSection({
     shown,
   )
   const rateByKey = new Map(rates.map((rate) => [rate.framing ? `${rate.id}:${rate.framing}` : rate.id, rate]))
+  const competitors = competitorTopics(report.themes)
+  const columnCount = shown.length > 0 ? shown.length : 1
+  const topicsStartOpen = topicsOpen || whoInsteadOpen || answersOpen
   return (
     <section className="full-report" aria-label={copy.fullReportTitle}>
       {themesOnly ? null : (
@@ -408,85 +599,105 @@ export function FullReportSection({
           <p className="why">{copy.fullReportSub}</p>
         </>
       )}
-      <WhoInsteadBoard
-        copy={copy}
-        titleId="who-instead-report"
-        topics={whoInsteadByTopic(report.themes)}
-        initialOpen={whoInsteadOpen}
-      />
-      {report.themes.length === 0 ? <p className="why">{copy.fullReportEmptyThemes}</p> : null}
-      {report.themes.map((theme) => {
-        const framing = themeFramingOf(theme)
-        const rate = rateByKey.get(framing ? `${theme.id}:${framing}` : theme.id)
-        const latest = rate?.latest
-        const word = framingLabel(framing)
-        const inGrid = shown.length > 0
-        return (
-          <section key={`${theme.id}:${theme.framing}`} className="block theme-block">
-            <div className="theme-heading">
-              <h2 className="theme-title">
-                {word ? <span className="eyebrow theme-framing">{word}</span> : null}
-                <span>{theme.title}</span>
-              </h2>
-              {inGrid ? null : latest === null || latest === undefined ? (
-                <p className="theme-rate">—</p>
-              ) : (
-                <p className="theme-rate">{themeRateLabel(copy.themeMentionRate, latest)}</p>
-              )}
-            </div>
-            <p className="theme-count">
-              {theme.questions.length} {theme.questions.length === 1 ? 'question' : 'questions'}
-            </p>
-            {shown.length > 0 ? (
-              <div className="run-grid-wrap">
-                <table className="run-grid">
-                  <thead>
-                    <tr>
-                      <th scope="col">{copy.overTimeQuestion}</th>
-                      {shown.map((run, index) => (
-                        <th key={`${theme.id}:${run.at}:${index}`} scope="col">
-                          {runColumnLabel(run.at)}
+      <div className="segments report-tabs" role="tablist" aria-label="Full report">
+        <button
+          type="button"
+          role="tab"
+          id="report-tab-over-time"
+          aria-selected={tab === 'over-time'}
+          aria-controls="report-panel-over-time"
+          onClick={() => setTab('over-time')}
+        >
+          {copy.overTimeTitle}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="report-tab-competitors"
+          aria-selected={tab === 'competitors'}
+          aria-controls="report-panel-competitors"
+          onClick={() => setTab('competitors')}
+        >
+          {copy.competitorsTab}
+        </button>
+      </div>
+      {tab === 'over-time' ? (
+        <div role="tabpanel" id="report-panel-over-time" aria-labelledby="report-tab-over-time">
+          <div className="segments engine-filter" role="group" aria-label="Engine">
+            <button
+              type="button"
+              aria-pressed={engine === 'openai'}
+              onClick={() => setEngine('openai')}
+            >
+              {copy.engineOpenAI}
+            </button>
+            <button
+              type="button"
+              aria-pressed={engine === 'gemini'}
+              onClick={() => setEngine('gemini')}
+            >
+              {copy.engineGemini}
+            </button>
+          </div>
+          {engine === 'gemini' ? (
+            <p className="why">{copy.geminiMentionsEmpty}</p>
+          ) : report.themes.length === 0 ? (
+            <p className="why">{copy.fullReportEmptyThemes}</p>
+          ) : (
+            <div className="run-grid-wrap">
+              <table className="run-grid over-time-grid">
+                <thead>
+                  <tr>
+                    <th scope="col">{copy.reportTopicColumn}</th>
+                    {shown.length > 0 ? (
+                      shown.map((run, index) => (
+                        <th key={`${run.at}:${index}`} scope="col">
+                          {runColumnLabel(run.at) || copy.reportThisCheck}
                         </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <ThemePercentRow
-                      label={copy.themeMentionRow}
-                      template={copy.themeMentionCell}
-                      percents={rate?.byRun ?? []}
-                      columnCount={shown.length}
-                    />
-                    {theme.questions.map((item, index) => (
-                      <ThemeGridRow
-                        key={`${theme.id}-${theme.framing}-${index}`}
-                        item={item}
+                      ))
+                    ) : (
+                      <th scope="col">{copy.reportThisCheck}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.themes.map((theme) => {
+                    const framing = themeFramingOf(theme)
+                    const rate = rateByKey.get(framing ? `${theme.id}:${framing}` : theme.id)
+                    return (
+                      <TopicOverTimeRow
+                        key={`${theme.id}:${theme.framing}`}
+                        theme={theme}
                         copy={copy}
                         runs={shown}
-                        panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
-                        startOpen={answersOpen}
+                        percents={ratePercents(rate, shown.length)}
+                        columnCount={columnCount}
+                        startOpen={topicsStartOpen}
+                        answersOpen={answersOpen}
                       />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <ul className="answers">
-                {theme.questions.map((item, index) => (
-                  <ReportQuestion
-                    key={`${theme.id}-${theme.framing}-${index}`}
-                    item={item}
-                    copy={copy}
-                    panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
-                    chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
-                    startOpen={answersOpen}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
-        )
-      })}
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div role="tabpanel" id="report-panel-competitors" aria-labelledby="report-tab-competitors">
+          <p className="why">{copy.competitorsHelper}</p>
+          {report.themes.length === 0 ? <p className="why">{copy.fullReportEmptyThemes}</p> : null}
+          {report.themes.map((theme, index) => (
+            <CompetitorTopicBlock
+              key={`${theme.id}:${theme.framing}`}
+              theme={theme}
+              row={competitors[index] ?? { id: theme.id, title: theme.title, you: null, names: [], questions: [] }}
+              copy={copy}
+              startOpen={topicsStartOpen}
+              answersOpen={answersOpen}
+            />
+          ))}
+        </div>
+      )}
       {editor ? (
         <ManageQuestions editor={editor} report={report} copy={copy} initialOpen={manageOpen} />
       ) : null}

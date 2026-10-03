@@ -73,6 +73,14 @@ export type ProductCopy = {
   manageQuestionsCta: string
   manageQuestionsTitle: string
   manageQuestionsHint: string
+  competitorsTab: string
+  competitorsHelper: string
+  competitorsYou: string
+  geminiMentionsEmpty: string
+  engineOpenAI: string
+  engineGemini: string
+  reportTopicColumn: string
+  reportThisCheck: string
 }
 
 export type ProductConfig = {
@@ -197,6 +205,14 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     manageQuestionsCta: STORY.manageQuestionsCta,
     manageQuestionsTitle: STORY.manageQuestionsTitle,
     manageQuestionsHint: STORY.manageQuestionsHint,
+    competitorsTab: STORY.competitorsTab,
+    competitorsHelper: STORY.competitorsHelper,
+    competitorsYou: STORY.competitorsYou,
+    geminiMentionsEmpty: STORY.geminiMentionsEmpty,
+    engineOpenAI: STORY.engineOpenAI,
+    engineGemini: STORY.engineGemini,
+    reportTopicColumn: STORY.reportTopicColumn,
+    reportThisCheck: STORY.reportThisCheck,
   },
 }
 
@@ -284,6 +300,14 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'manageQuestionsCta',
   'manageQuestionsTitle',
   'manageQuestionsHint',
+  'competitorsTab',
+  'competitorsHelper',
+  'competitorsYou',
+  'geminiMentionsEmpty',
+  'engineOpenAI',
+  'engineGemini',
+  'reportTopicColumn',
+  'reportThisCheck',
 ]
 
 function isRecord(value: unknown): value is Record<string, unknown> {

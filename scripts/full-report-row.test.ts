@@ -78,26 +78,25 @@ describe('full-report row markup', () => {
           },
         }),
       )
-      assert.match(html, /What should a team use to track issues\?/)
+      assert.match(html, /id="report-tab-over-time"[^>]*aria-selected="true"|aria-selected="true"[^>]*id="report-tab-over-time"/)
+      assert.match(html, />Over time</)
+      assert.match(html, />Competitors</)
+      assert.equal((html.match(/role="tab"/g) || []).length, 2)
+      assert.equal(html.includes('>Citations<'), false)
+      assert.equal(html.includes('>Glance<'), false)
+      assert.equal(html.includes('>Overview<'), false)
+      assert.match(html, /Problems you solve/)
+      assert.match(html, /How you’re described|How you&#x27;re described/)
+      assert.equal(html.includes('What should a team use to track issues?'), false)
       assert.equal(html.includes('Who instead'), false)
-      assert.match(html, />Mentioned</)
-      assert.match(html, />Unclear</)
-      assert.match(html, />Not mentioned</)
+      assert.equal(html.includes('>Mentioned<'), false)
+      assert.equal(html.includes('>Unclear<'), false)
+      assert.equal(html.includes('>Not mentioned<'), false)
       assert.match(html, /aria-expanded="false"/)
-      assert.match(html, /report-q-toggle/)
-      assert.match(html, /report-mention/)
-      const chips = [...html.matchAll(/class="([^"]*report-mention[^"]*)">([^<]*)</g)]
-      assert.deepEqual(
-        chips.map((match) => [match[2].trim(), match[1]]),
-        [
-          ['Not mentioned', 'tag plain mention report-mention'],
-          ['Unclear', 'tag plain mention report-mention'],
-          ['Mentioned', 'tag plain mention report-mention mentioned'],
-          ['Not mentioned', 'tag plain mention report-mention'],
-        ],
-      )
       assert.match(html, />Unbranded</)
       assert.match(html, />Branded</)
+      assert.match(html, />0%</)
+      assert.match(html, />50%</)
       assert.equal(html.includes('q-badge'), false)
       assert.equal(html.includes('tag plain live'), false)
       assert.equal(html.includes(answer), false)
@@ -110,29 +109,86 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('<strong>Jira</strong>'), false)
       assert.equal(html.includes('<strong>Height</strong>'), false)
       assert.equal(html.includes('Couldn’t get an answer.'), false)
-      const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
-      assert.match(board, /Who showed up instead/)
-      assert.match(board, /By topic, on unbranded questions this run — not market share\./)
-      assert.equal(board.includes('No one else showed up yet.'), false)
-      assert.match(board, /who-instead-topic-toggle/)
-      assert.match(board, /Problems you solve/)
-      assert.equal(board.includes('How you’re described'), false)
-      assert.equal(board.includes('Slack'), false)
-      assert.match(board, /class="who-instead-name">Asana</)
-      assert.match(board, /class="who-instead-name">Height</)
-      assert.match(board, /class="who-instead-name">Jira</)
-      assert.equal(board.indexOf('>Asana<') < board.indexOf('>Height<'), true)
-      assert.equal(board.indexOf('>Height<') < board.indexOf('>Jira<'), true)
-      assert.equal((board.match(/Appeared on 1 questions/g) || []).length, 3)
-      assert.equal(board.includes('Appeared on 2'), false)
-      assert.equal(board.includes('What should a team use to track issues?'), false)
-      assert.equal(board.includes('%'), false)
-      assert.equal(board.includes('<strong>'), false)
-      assert.equal(board.includes('Who instead'), false)
-      assert.equal(/SOV|Competitors|market share %|multi-engine/i.test(board), false)
-      assert.equal((html.match(/report-q-toggle/g) || []).length, 5)
       assert.equal(html.includes('Add question'), false)
       assert.equal(html.includes('>Delete<'), false)
+      const opened = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          topicsOpen: true,
+          report: {
+            domain: 'linear.app',
+            model: 'gpt-4o-mini',
+            includesBranded: true,
+            themes: [
+              {
+                id: 'problems',
+                title: 'Problems you solve',
+                framing: 'unbranded',
+                questions: [
+                  {
+                    question: 'What should a team use to track issues?',
+                    answer,
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Jira', 'Asana'],
+                  },
+                  {
+                    question: 'How do teams plan a week?',
+                    answer: '',
+                    framing: 'unbranded',
+                    mention: undefined,
+                    whoInstead: [],
+                  },
+                  {
+                    question: 'Is the weekly plan obvious?',
+                    answer: 'It might be Linear, but that is only implied.',
+                    framing: 'unbranded',
+                    mention: 'unclear',
+                    whoInstead: ['Height'],
+                  },
+                ],
+              },
+              {
+                id: 'described',
+                title: 'How you’re described',
+                framing: 'branded',
+                questions: [
+                  {
+                    question: 'How do people describe Linear?',
+                    answer: branded,
+                    framing: 'branded',
+                    mention: 'mentioned',
+                    whoInstead: ['Jira'],
+                  },
+                  {
+                    question: 'What is missing from this category?',
+                    answer: 'The reply never names Linear.',
+                    framing: 'branded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Slack'],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      )
+      assert.match(opened, /What should a team use to track issues\?/)
+      assert.match(opened, /How do people describe Linear\?/)
+      const chips = [...opened.matchAll(/class="([^"]*report-mention[^"]*)">([^<]*)</g)]
+      assert.deepEqual(
+        chips.map((match) => [match[2].trim(), match[1]]),
+        [
+          ['Not mentioned', 'tag plain mention report-mention'],
+          ['Unclear', 'tag plain mention report-mention'],
+          ['Mentioned', 'tag plain mention report-mention mentioned'],
+          ['Not mentioned', 'tag plain mention report-mention'],
+        ],
+      )
+      assert.equal(opened.includes(answer), false)
+      assert.equal(opened.includes(branded), false)
+      assert.equal(opened.includes('<strong>Jira</strong>'), false)
+      assert.equal(opened.includes('answer-body'), false)
     } finally {
       await server.close()
     }
@@ -151,6 +207,7 @@ describe('full-report row markup', () => {
       const html = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
+          initialTab: 'competitors',
           whoInsteadOpen: true,
           report: {
             domain: 'linear.app',
@@ -210,14 +267,16 @@ describe('full-report row markup', () => {
           },
         }),
       )
-      const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
-      const topics = board.split('<li class="who-instead-topic">').slice(1)
-      assert.equal(topics.length, 2)
+      assert.match(
+        html,
+        /Your mention rate, and names that showed up instead on unbranded questions this run\. Not market share\./,
+      )
+      const topics = html.split('<section class="competitors-topic">').slice(1)
+      assert.equal(topics.length, 3)
       assert.match(topics[0], /Problems you solve/)
-      assert.match(topics[0], /class="who-instead-name">Jira</)
-      assert.match(topics[0], /Appeared on 2 questions/)
-      assert.match(topics[0], /class="who-instead-name">Asana</)
-      assert.equal(topics[0].includes('Linear'), false)
+      assert.match(topics[0], /<th scope="col">You<\/th><th scope="col">Jira<\/th><th scope="col">Asana<\/th>/)
+      assert.match(topics[0], /<td>0%<\/td><td>100%<\/td><td>50%<\/td>/)
+      assert.equal(topics[0].includes('>Linear<'), false)
       assert.equal(topics[0].includes('Slack'), false)
       assert.match(topics[0], /What should a team use to track issues\?/)
       assert.match(topics[0], /How do teams plan a week\?/)
@@ -225,17 +284,18 @@ describe('full-report row markup', () => {
       assert.match(topics[0], /<strong>Jira<\/strong>/)
       assert.match(topics[0], /<strong>Asana<\/strong>/)
       assert.match(topics[1], /Alternatives &amp; who else|Alternatives & who else/)
-      assert.match(topics[1], /class="who-instead-name">Linear</)
+      assert.match(topics[1], /<th scope="col">Linear<\/th>/)
+      assert.match(topics[1], /<td>0%<\/td><td>100%<\/td>/)
       assert.equal(topics[1].includes('>Jira<'), false)
       assert.match(topics[1], /Who else should I look at\?/)
-      assert.match(topics[1], /Who instead/)
       assert.match(topics[1], /<strong>Linear<\/strong>/)
-      assert.equal(board.includes('How you’re described'), false)
-      assert.equal(board.includes('Slack'), false)
-      assert.equal(board.includes('No one else showed up yet.'), false)
-      assert.equal(/SOV|Competitors|competitive share|market share %/i.test(board), false)
-      assert.equal(board.includes('more in the questions'), false)
-      assert.equal(board.includes('Top 5'), false)
+      assert.match(topics[2], /How you’re described|How you&#x27;re described/)
+      assert.match(topics[2], /<th scope="col">You<\/th>/)
+      assert.equal(topics[2].includes('>Slack<'), false)
+      assert.equal(html.includes('No one else showed up yet.'), false)
+      assert.equal(html.includes('more in the questions'), false)
+      assert.equal(html.includes('Top 5'), false)
+      assert.equal(/SOV|share of voice|\brank\b/i.test(html), false)
       assert.match(html, />Unbranded</)
       assert.match(html, />Branded</)
     } finally {
@@ -256,6 +316,7 @@ describe('full-report row markup', () => {
       const html = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
+          initialTab: 'competitors',
           whoInsteadOpen: true,
           report: {
             domain: 'linear.app',
@@ -315,20 +376,20 @@ describe('full-report row markup', () => {
           },
         }),
       )
-      const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
-      const topics = board.split('<li class="who-instead-topic">').slice(1)
+      const topics = html.split('<section class="competitors-topic">').slice(1)
       assert.equal(topics.length, 2)
-      const rowNames = [...topics[0].matchAll(/class="who-instead-name">([^<]+)</g)].map((match) => match[1])
-      assert.deepEqual(rowNames, ['Zebra', 'Apple', 'Mango', 'Delta', 'Echo'])
+      const rowNames = [...topics[0].matchAll(/<th scope="col">([^<]+)<\/th>/g)].map((match) => match[1])
+      assert.deepEqual(rowNames, ['You', 'Zebra', 'Apple', 'Mango', 'Delta', 'Echo'])
       assert.equal(rowNames.includes('Foxtrot'), false)
-      assert.match(topics[0], /1 more in the questions/)
+      assert.match(topics[0], /<td>0%<\/td><td>75%<\/td><td>50%<\/td><td>50%<\/td><td>25%<\/td><td>25%<\/td>/)
       assert.equal(topics[0].includes('Top 5'), false)
       assert.match(topics[0], /What is the edge case\?/)
       assert.match(topics[0], /Who instead/)
       assert.match(topics[0], /<strong>Foxtrot<\/strong>/)
-      assert.match(topics[1], /class="who-instead-name">Notion</)
+      assert.match(topics[1], /<th scope="col">Notion<\/th>/)
+      assert.match(topics[1], /<td>0%<\/td><td>100%<\/td>/)
       assert.equal(topics[1].includes('more in the questions'), false)
-      assert.equal(/SOV|Competitors|Top 5/i.test(board), false)
+      assert.equal(/SOV|Top 5|\brank\b/i.test(html), false)
     } finally {
       await server.close()
     }
@@ -393,13 +454,15 @@ describe('full-report row markup', () => {
       assert.equal(closed.includes('>Edit<'), false)
       assert.equal(closed.includes('>Delete<'), false)
       assert.equal(closed.includes('>Add question<'), false)
-      assert.match(closed, /0% mentioned/)
+      assert.match(closed, />Over time</)
+      assert.match(closed, /<td>0%<\/td>/)
+      assert.equal(closed.includes('0% mentioned'), false)
       assert.equal(closed.includes('Across runs:'), false)
       assert.match(closed, />Unbranded</)
       assert.equal(/>Branded</.test(closed), false)
       assert.equal(closed.includes('q-badge'), false)
       assert.equal(closed.includes('Generated · OpenAI'), false)
-      assert.match(closed, />Not mentioned</)
+      assert.equal(closed.includes('>Not mentioned<'), false)
       assert.equal(closed.includes('Jira shows up.'), false)
       const html = renderToStaticMarkup(
         React.createElement(FullReportSection, {
@@ -421,7 +484,7 @@ describe('full-report row markup', () => {
       assert.match(html, />Edit</)
       assert.match(html, />Save questions</)
       assert.equal(html.includes('Jira shows up.'), false)
-      assert.equal(html.includes('Over time'), false)
+      assert.match(html, />Over time</)
     } finally {
       await server.close()
     }
@@ -446,6 +509,7 @@ describe('full-report row markup', () => {
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
           themesOnly: true,
+          topicsOpen: true,
           runs: [
             {
               at: '2026-09-01T00:00:00.000Z',
@@ -517,7 +581,8 @@ describe('full-report row markup', () => {
           },
         }),
       )
-      assert.equal(html.includes('Over time'), false)
+      assert.match(html, />Over time</)
+      assert.match(html, /aria-selected="true"/)
       assert.match(html, />Unbranded</)
       assert.match(html, />Branded</)
       assert.equal(html.includes('q-badge'), false)
@@ -528,18 +593,18 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('100% mentioned'), false)
       assert.equal(html.includes('0% mentioned'), false)
       assert.equal(html.includes('>Theme<'), false)
-      const pctRows = [...html.matchAll(/<tr class="theme-pct-row">([\s\S]*?)<\/tr>/g)].map((match) => match[1])
-      assert.deepEqual(pctRows, [
-        '<th scope="row">% mentioned</th><td>0%</td><td>100%</td><td>50%</td>',
-        '<th scope="row">% mentioned</th><td>100%</td><td>0%</td><td><span class="muted">—</span></td>',
-      ])
-      const firstPct = html.indexOf('theme-pct-row')
+      const pctRows = [...html.matchAll(/<tr class="topic-rate-row">([\s\S]*?)<\/tr>/g)].map((match) => match[1])
+      assert.equal(pctRows.length, 2)
+      assert.match(pctRows[0], /<td>0%<\/td><td>100%<\/td><td>50%<\/td>/)
+      assert.match(pctRows[1], /<td>100%<\/td><td>0%<\/td><td><span class="muted">—<\/span><\/td>/)
+      const firstPct = html.indexOf('topic-rate-row')
       const firstQuestion = html.indexOf('What should a team use to track issues?')
-      const secondPct = html.indexOf('theme-pct-row', firstPct + 1)
+      const secondPct = html.indexOf('topic-rate-row', firstPct + 1)
       const trustQuestion = html.indexOf('How do people describe Linear?')
       assert.equal(firstPct >= 0 && firstPct < firstQuestion, true)
       assert.equal(secondPct > firstQuestion && secondPct < trustQuestion, true)
       assert.equal((html.match(/Shared label/g) || []).length, 2)
+      assert.match(html, />Topic</)
       assert.match(html, />Question</)
       assert.match(html, /Sep 1, 12:00 AM/)
       assert.match(html, /Sep 30, 3:04 PM/)
@@ -550,10 +615,11 @@ describe('full-report row markup', () => {
       assert.equal(html.includes(answer), false)
       assert.equal(html.includes('Teams plan in the tool they already use.'), false)
       assert.equal(/SOV|visibility score|monitoring/i.test(html), false)
-      assert.match(html, /Who showed up instead/)
-      assert.match(html, /No one else showed up yet\./)
+      assert.equal(html.includes('Who showed up instead'), false)
+      assert.equal(html.includes('No one else showed up yet.'), false)
       assert.equal(html.includes('Appeared on'), false)
       assert.equal(html.includes('who-instead-name'), false)
+      assert.equal((html.match(/class="run-grid over-time-grid"/g) || []).length, 1)
       assert.equal((html.match(/<table class="run-grid">/g) || []).length, 2)
     } finally {
       await server.close()
@@ -683,11 +749,17 @@ describe('unbranded engine blocks', () => {
       assert.match(hit, new RegExp(openai.replace(/[.]/g, '\\.')))
       assert.equal(hit.includes("Gemini didn't answer."), false)
       assert.equal(hit.includes('Monday should not render on branded.'), false)
-      const board = hit.slice(hit.indexOf('who-instead-board'), hit.indexOf('theme-block'))
-      assert.match(board, /Jira/)
-      assert.match(board, /Asana/)
-      assert.equal(board.includes('Monday'), false)
       assert.equal(hit.includes('<strong>Monday</strong>'), false)
+      const competitors = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          report: stored,
+          initialTab: 'competitors',
+        }),
+      )
+      assert.match(competitors, /<th scope="col">Jira<\/th>/)
+      assert.match(competitors, /<th scope="col">Asana<\/th>/)
+      assert.equal(competitors.includes('Monday'), false)
 
       const missedStored = fullReportFromStored({
         report: 'full',
