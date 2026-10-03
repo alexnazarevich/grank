@@ -854,7 +854,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
     assert.equal(
       STORY.answerHelper,
-      'Answers below are from our model for these questions — not a live multi-engine scrape.',
+      "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
     )
     assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
     assert.equal('showFullAnswer' in STORY, false)
@@ -886,7 +886,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.exampleLead, 'Or try an example:')
     assert.equal(
       STORY.homeProof,
-      'We generate questions and answers with OpenAI and label every block. This is not a live multi-engine scrape — and we never blend branded + unbranded into one score.',
+      "Unbranded answers are labeled OpenAI and Gemini. Branded answers are OpenAI only. We never blend them into one score.",
     )
     assert.equal(STORY.foilTitle, 'Built for thin teams')
     assert.equal(

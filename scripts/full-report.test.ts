@@ -107,7 +107,8 @@ describe('sharper questions and mention facts', () => {
   it('appends sharper rules and mention fields to the full-report system prompt', () => {
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes(SHARPER_Q_RULES), true)
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes(MENTION_FACT_RULES), true)
-    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('not a multi-engine scrape'), true)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('not a multi-engine scrape'), false)
+    assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('not a live web crawl'), true)
     assert.equal(FULL_REPORT_SYSTEM_PROMPT.includes('What is {brand}?'), true)
   })
 
@@ -514,7 +515,8 @@ describe('POST /api/full-report', () => {
       if (call.url.includes('api.openai.com')) {
         assert.equal(call.body.includes(KEY), false)
         assert.match(call.body, /gpt-4o-mini/)
-        assert.match(call.body, /not a multi-engine scrape/)
+        assert.equal(call.body.includes('not a multi-engine scrape'), false)
+        assert.match(call.body, /not a live web crawl/)
         assert.match(call.body, /visibility percentage/)
         assert.match(call.body, /alternatives/)
         assert.match(call.body, /recommendation-shaped questions only/)

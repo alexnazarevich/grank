@@ -49,7 +49,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.fullReportTitle, 'Full visibility report')
     assert.equal(
       config.copy.fullReportSub,
-      'More questions about this site, grouped by theme. Still Generated · OpenAI — not a multi-engine scrape.',
+      "More questions about this site, grouped by theme. Unbranded answers are labeled OpenAI and Gemini. We don't blend them.",
     )
     assert.equal(config.copy.fullReportLoading, 'Building your full report…')
     assert.equal(config.copy.fullReportEmptyThemes, 'No themes yet — try again.')

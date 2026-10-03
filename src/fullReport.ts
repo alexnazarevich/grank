@@ -446,7 +446,7 @@ export function fullReportPrompt(
   return lines.join('\n')
 }
 
-export const FULL_REPORT_SYSTEM_PROMPT = `You write a labeled visibility question set for one brand. This is a generated model exercise, not a live web crawl and not a multi-engine scrape.
+export const FULL_REPORT_SYSTEM_PROMPT = `You write a labeled visibility question set for one brand. This is a generated model exercise, not a live web crawl.
 Do not invent citations, rankings, traffic, or a visibility percentage. Do not blend themes into a score.
 Do not name any theme after a search engine or a results page.
 Return JSON only:
