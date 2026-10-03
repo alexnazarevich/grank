@@ -150,7 +150,7 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     fullReportMagicLinkHint: 'Sign in with a magic link to unlock your full report. No password.',
     fullReportTitle: 'Full visibility report',
     fullReportSub:
-      'More questions about this site, grouped by theme. Still Generated · OpenAI — not a multi-engine scrape.',
+      "More questions about this site, grouped by theme. Unbranded answers are labeled OpenAI and Gemini. We don't blend them.",
     fullReportLoading: 'Building your full report…',
     fullReportEmptyThemes: 'No themes yet — try again.',
     fullReportLimitHit: 'You’ve used your free full report.',

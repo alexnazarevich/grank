@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT, onRequest, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { BRANDED_SYSTEM_PROMPT, GEMINI_MODEL_DEFAULT, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiGenerateUrl, geminiModelFromEnv, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { geminiRow } from '../src/engineBlock.ts'
+import { whoInsteadByTopic } from '../src/mentionLabel.ts'
 import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
+import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import { stubQuestionsFor } from '../src/demoData.ts'
 import { STORY } from '../src/story.ts'
 import { fetchVisibility, interpretVisibilityResponse, parseClientAnswers, parseClientWhoInstead } from '../src/visibilityClient.ts'
@@ -851,7 +854,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.answerLabel, 'Generated · OpenAI')
     assert.equal(
       STORY.answerHelper,
-      'Answers below are from our model for these questions — not a live multi-engine scrape.',
+      "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
     )
     assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
     assert.equal('showFullAnswer' in STORY, false)
@@ -883,7 +886,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.exampleLead, 'Or try an example:')
     assert.equal(
       STORY.homeProof,
-      'We generate questions and answers with OpenAI and label every block. This is not a live multi-engine scrape — and we never blend branded + unbranded into one score.',
+      "Unbranded answers are labeled OpenAI and Gemini. Branded answers are OpenAI only. We never blend them into one score.",
     )
     assert.equal(STORY.foilTitle, 'Built for thin teams')
     assert.equal(
@@ -896,5 +899,279 @@ describe('unbranded samples and story copy', () => {
     )
     assert.equal(JSON.stringify(STORY).includes('11 models'), false)
     assert.equal(JSON.stringify(STORY).includes('blended visibility'), false)
+  })
+})
+
+const GEMINI_KEY = 'gemini-test-key-should-not-leak'
+
+function geminiPayload(answers: string[]) {
+  return JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify({ answers }) }] } }],
+  })
+}
+
+describe('gemini on unbranded questions', () => {
+  it('labels OpenAI and Gemini apart, and a miss is not the OpenAI label', () => {
+    assert.equal(STORY.answerLabel, 'Generated · OpenAI')
+    assert.equal(STORY.geminiLabel, 'Generated · Gemini')
+    assert.equal(STORY.geminiMiss, "Gemini didn't answer.")
+    assert.equal(/multi-engine|suite|blend|SOV|Perplexity|AI Overviews/i.test(`${STORY.geminiLabel} ${STORY.geminiMiss}`), false)
+    const hit = geminiRow(['Teams use a tracker for this job.'], 0)
+    assert.equal(hit?.label, 'Generated · Gemini')
+    assert.equal(hit?.body, 'Teams use a tracker for this job.')
+    assert.equal(hit?.miss, false)
+    const miss = geminiRow([''], 0)
+    assert.equal(miss?.label, 'Generated · Gemini')
+    assert.equal(miss?.body, "Gemini didn't answer.")
+    assert.equal(miss?.miss, true)
+    assert.equal(miss?.body === STORY.answerLabel, false)
+    assert.equal(geminiRow(undefined, 0), null)
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    const answers = readFileSync(new URL('../src/UnbrandedAnswers.tsx', import.meta.url), 'utf8')
+    assert.match(app, /land && beat\.questionsGenerated \?/)
+    assert.match(app, /<UnbrandedAnswers/)
+    assert.match(answers, /STORY\.answerLabel/)
+    assert.match(answers, /row\.label/)
+    assert.match(answers, /row\.body/)
+    const geminiAt = answers.indexOf('{row ? (')
+    assert.equal(geminiAt > 0, true)
+    const geminiBlock = answers.slice(geminiAt)
+    assert.equal(geminiBlock.includes('MentionMark'), false)
+    assert.equal(geminiBlock.includes('whoInstead'), false)
+    const report = readFileSync(new URL('../functions/api/full-report.ts', import.meta.url), 'utf8')
+    const scheduled = readFileSync(new URL('../functions/scheduled.ts', import.meta.url), 'utf8')
+    assert.equal(report.includes('generativelanguage'), false)
+    assert.equal(report.includes('GEMINI_API_KEY'), false)
+    assert.equal(scheduled.includes('GEMINI'), false)
+    assert.equal(PRODUCT_DEFAULTS.trackingCronEnabled, false)
+  })
+
+  it('keeps the flash model as a knob and does not call Vertex', () => {
+    assert.equal(GEMINI_MODEL_DEFAULT, 'gemini-2.5-flash')
+    assert.equal(geminiModelFromEnv(undefined), GEMINI_MODEL_DEFAULT)
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.0-flash' }), 'gemini-2.0-flash')
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), GEMINI_MODEL_DEFAULT)
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'https://aiplatform.googleapis.com/gemini' }), GEMINI_MODEL_DEFAULT)
+    const url = geminiGenerateUrl('gemini-2.0-flash')
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent')
+    assert.equal(url.includes('aiplatform.googleapis.com'), false)
+    const prompt = geminiAnswerPrompt(['What should a team use for issue tracking?'])
+    assert.equal(/whoInstead|mention|Perplexity|Vertex|multi-engine/i.test(prompt), false)
+    assert.deepEqual(
+      parseGeminiAnswers(JSON.stringify({ answers: ['A tracker helps.'], whoInstead: ['Monday'] }), 1),
+      ['A tracker helps.'],
+    )
+  })
+
+  it('returns Gemini text beside the OpenAI result and does not harvest Gemini names', async () => {
+    const urls: string[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      urls.push(url)
+      if (url.startsWith('https://linear.app')) {
+        return new Response('<title>Linear</title><p>Linear is an issue tracker for software teams.</p>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      }
+      if (url.includes('api.openai.com')) {
+        const sent = String(init?.body || '')
+        assert.match(sent, /gpt-4o-mini/)
+        assert.equal(sent.includes(GEMINI_KEY), false)
+        assert.equal(sent.includes('"answers"'), false)
+        return new Response(
+          modelPayload({
+            ...GOOD,
+            mentions: ['not_mentioned', 'not_mentioned', 'not_mentioned'],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      assert.match(url, /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-2\.5-flash:generateContent$/)
+      assert.equal(url.includes(GEMINI_KEY), false)
+      const headers = new Headers(init?.headers)
+      assert.equal(headers.get('x-goog-api-key'), GEMINI_KEY)
+      const sent = String(init?.body || '')
+      assert.equal(sent.includes(GEMINI_KEY), false)
+      assert.match(sent, /What is Linear\?/)
+      return new Response(
+        geminiPayload([
+          `Monday and ClickUp are common picks. key ${GEMINI_KEY} must not leak.`,
+          'Asana sometimes shows up in roundups.',
+          '',
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app'),
+        env: { OPENAI_API_KEY: KEY, GEMINI_API_KEY: GEMINI_KEY },
+      })
+      assert.equal(res.status, 200)
+      const text = await res.text()
+      assert.equal(text.includes(KEY), false)
+      assert.equal(text.includes(GEMINI_KEY), false)
+      const body = JSON.parse(text) as {
+        answered?: string
+        why?: string
+        model?: string
+        questions?: string[]
+        whoInstead?: string[]
+        answers?: string[]
+        gemini?: string[]
+        facts?: { mention?: string; whoInstead?: string[]; question?: string; framing?: string }[]
+      }
+      assert.equal(body.answered, 'partial')
+      assert.equal(body.why, GOOD.why)
+      assert.equal(body.model, 'gpt-4o-mini')
+      assert.deepEqual(body.questions, GOOD.questions)
+      assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
+      assert.equal('answers' in body, false)
+      assert.equal(body.gemini?.length, 3)
+      assert.match(body.gemini?.[0] || '', /Monday and ClickUp/)
+      assert.match(body.gemini?.[0] || '', /\[redacted\]/)
+      assert.match(body.gemini?.[1] || '', /Asana/)
+      assert.equal(body.gemini?.[2], '')
+      assert.equal(body.facts?.every((fact) => fact.mention === 'not_mentioned'), true)
+      assert.equal(body.facts?.every((fact) => fact.framing === 'unbranded'), true)
+      assert.deepEqual(body.facts?.[0]?.whoInstead, ['Jira', 'Asana'])
+      assert.equal(JSON.stringify(body.facts).includes('Monday'), false)
+      assert.equal(JSON.stringify(body.facts).includes('ClickUp'), false)
+      const topics = whoInsteadByTopic([
+        {
+          id: 'problems',
+          title: 'Problems you solve',
+          framing: 'unbranded',
+          questions: (body.facts || []).map((fact) => ({
+            question: fact.question || '',
+            framing: 'unbranded' as const,
+            mention: fact.mention as 'not_mentioned',
+            whoInstead: fact.whoInstead || [],
+          })),
+        },
+      ])
+      const names = topics.flatMap((topic) => topic.names.map((row) => row.name))
+      assert.deepEqual(names.sort(), ['Asana', 'Jira'])
+      assert.equal(names.includes('Monday'), false)
+      assert.equal(urls.some((url) => url.includes('generativelanguage.googleapis.com')), true)
+      assert.equal(urls.some((url) => url.includes('aiplatform.googleapis.com')), false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('keeps the OpenAI answer when Gemini fails or the key is missing', async () => {
+    const cases: { env: Record<string, string>; geminiStatus: number | 'throw' }[] = [
+      { env: { OPENAI_API_KEY: KEY }, geminiStatus: 500 },
+      { env: { OPENAI_API_KEY: KEY, GEMINI_API_KEY: GEMINI_KEY }, geminiStatus: 500 },
+      { env: { OPENAI_API_KEY: KEY, GEMINI_API_KEY: GEMINI_KEY }, geminiStatus: 'throw' },
+    ]
+    for (const item of cases) {
+      const urls: string[] = []
+      const prev = globalThis.fetch
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        urls.push(url)
+        if (!url.includes('api.openai.com') && !url.includes('generativelanguage.googleapis.com')) {
+          return new Response('nope', { status: 404 })
+        }
+        if (url.includes('generativelanguage.googleapis.com')) {
+          if (item.geminiStatus === 'throw') throw new Error(`network ${GEMINI_KEY}`)
+          return new Response(JSON.stringify({ error: { message: `bad ${GEMINI_KEY}` } }), { status: item.geminiStatus })
+        }
+        return new Response(modelPayload(GOOD), { status: 200, headers: { 'content-type': 'application/json' } })
+      }) as typeof fetch
+      try {
+        const res = await onRequest({
+          request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=unbranded'),
+          env: item.env,
+        })
+        assert.equal(res.status, 200)
+        const text = await res.text()
+        assert.equal(text.includes(KEY), false)
+        assert.equal(text.includes(GEMINI_KEY), false)
+        const body = JSON.parse(text) as {
+          answered?: string
+          why?: string
+          questions?: string[]
+          whoInstead?: string[]
+          gemini?: string[]
+        }
+        assert.equal(body.answered, 'partial')
+        assert.equal(body.why, GOOD.why)
+        assert.deepEqual(body.questions, GOOD.questions)
+        assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
+        assert.deepEqual(body.gemini, ['', '', ''])
+        const calledGemini = urls.some((url) => url.includes('generativelanguage.googleapis.com'))
+        assert.equal(calledGemini, Boolean(item.env.GEMINI_API_KEY))
+      } finally {
+        globalThis.fetch = prev
+      }
+    }
+  })
+
+  it('does not call Gemini for branded dig', async () => {
+    const urls: string[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      urls.push(url)
+      if (!url.includes('api.openai.com')) return new Response('nope', { status: 404 })
+      return new Response(
+        modelPayload({
+          questions: ['What is Linear?', 'How do people describe Linear?', 'What does Linear claim?'],
+          answers: ['Linear is a project tool. The note stays general. No quote.'],
+          answered: 'partial',
+          why: 'Named questions get a partial description.',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=branded'),
+        env: { OPENAI_API_KEY: KEY, GEMINI_API_KEY: GEMINI_KEY, GEMINI_MODEL: 'gemini-2.0-flash' },
+      })
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as { mode?: string; answers?: string[]; gemini?: unknown }
+      assert.equal(body.mode, 'branded')
+      assert.equal(body.answers?.length, 3)
+      assert.equal('gemini' in body, false)
+      assert.equal(urls.some((url) => url.includes('generativelanguage.googleapis.com')), false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('reads Gemini text on the client without turning it into who-instead or mention', () => {
+    const ok = interpretVisibilityResponse(
+      200,
+      {
+        ok: true,
+        mode: 'unbranded',
+        model: 'gpt-4o-mini',
+        questions: GOOD.questions,
+        answered: 'partial',
+        why: GOOD.why,
+        whoInstead: ['Jira', 'Asana'],
+        mentions: ['not_mentioned', 'not_mentioned', 'not_mentioned'],
+        gemini: ['Monday and ClickUp show up for this job.', ''],
+      },
+      false,
+      'linear.app',
+      'unbranded',
+    )
+    assert.equal(ok.ok, true)
+    if (!ok.ok) return
+    assert.deepEqual(ok.answers, [])
+    assert.deepEqual(ok.whoInstead, ['Jira', 'Asana'])
+    assert.equal(ok.gemini[0]?.includes('Monday'), true)
+    assert.equal(ok.gemini[1], '')
+    assert.equal(ok.gemini[2], '')
+    assert.equal(ok.facts.every((fact) => fact.mention === 'not_mentioned'), true)
+    assert.deepEqual(ok.facts[0]?.whoInstead, ['Jira', 'Asana'])
+    assert.equal(JSON.stringify(ok.facts).includes('Monday'), false)
   })
 })

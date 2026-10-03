@@ -13,8 +13,10 @@ export const STORY = {
   digBadge: 'Branded',
   digFail: 'Couldn’t generate branded questions — try again.',
   answerLabel: 'Generated · OpenAI',
+  geminiLabel: 'Generated · Gemini',
+  geminiMiss: "Gemini didn't answer.",
   answerHelper:
-    'Answers below are from our model for these questions — not a live multi-engine scrape.',
+    "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
   answerMiss: 'Couldn’t get an answer.',
   documentTitle: 'Grank — See if you show up in AI answers',
   headerBadge: 'SIMPLE AEO · LABELED MODEL CHECKS',
@@ -25,7 +27,7 @@ export const STORY = {
   homeLoading: 'Checking how AI might talk about you…',
   exampleLead: 'Or try an example:',
   homeProof:
-    'We generate questions and answers with OpenAI and label every block. This is not a live multi-engine scrape — and we never blend branded + unbranded into one score.',
+    "Unbranded answers are labeled OpenAI and Gemini. Branded answers are OpenAI only. We never blend them into one score.",
   foilTitle: 'Built for thin teams',
   foilBody:
     '“Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops. You need a glance: do you show up for what you solve — and who shows up instead.',

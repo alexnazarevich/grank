@@ -45,6 +45,8 @@ export type StoredBeat = {
   whoInstead?: string[]
   whoInsteadLive?: boolean
   facts?: AnswerFact[]
+  /** Unbranded Gemini text beside the OpenAI fields on this beat. */
+  gemini?: string[]
 }
 
 export type StoredLabels = {
@@ -78,6 +80,8 @@ export type StoredResult = {
   runs?: CheckRun[]
   /** Cadence stored for a later schedule. Unused while tracking cron is off. */
   tracking?: { cadence: string }
+  /** Unbranded Gemini text beside `answers`. A miss is empty strings and does not clear `answers`. */
+  gemini?: string[]
 }
 
 export type BeatDraft = {
@@ -91,6 +95,8 @@ export type BeatDraft = {
   whoInstead: string[]
   whoInsteadLive: boolean
   facts?: AnswerFact[]
+  /** Unbranded Gemini replies. Absent when this beat did not ask Gemini. */
+  gemini?: string[]
 }
 
 export type CheckDraft = {
@@ -107,6 +113,8 @@ export type CheckDraft = {
   whoInsteadLive: boolean
   homepageSupport: string | null
   homepageSnippet: string | null
+  /** Copied from the active beat. Unbranded only. */
+  gemini?: string[]
   unbranded: BeatDraft
   branded: BeatDraft | null
   /** Set when this draft is an owned question set, so the next run answers it. */
@@ -157,6 +165,7 @@ function beatDraft(beat: ModeBeat): BeatDraft {
     whoInstead: beat.mode === 'unbranded' ? beat.whoInstead : [],
     whoInsteadLive: beat.mode === 'unbranded' ? beat.whoInsteadLive : false,
     facts: beat.facts,
+    ...(beat.mode === 'unbranded' && beat.gemini ? { gemini: beat.gemini } : {}),
   }
 }
 
@@ -230,6 +239,12 @@ export function viewFromAha(aha: FlatAha, mode: CheckMode = 'unbranded'): Result
 function asStringList(value: unknown): string[] | null {
   if (!Array.isArray(value)) return null
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+/** Keep blank slots so a Gemini miss stays aligned and does not drop the row. */
+function readGemini(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.slice(0, 8).map((item) => (typeof item === 'string' ? item.replace(/\s+/g, ' ').trim().slice(0, 900) : ''))
 }
 
 export function viewFromSaved(check: SavedCheck): ResultModel {
@@ -314,6 +329,7 @@ function beatFromStored(raw: Record<string, unknown>, mode: CheckMode): ModeBeat
   const live = raw.answeredLive === true && answered !== null && why.length > 0
   const who = asStringList(raw.whoInstead)
   const generated = raw.questionsGenerated === true && (questions?.length ?? 0) > 0
+  const gemini = mode === 'unbranded' ? readGemini(raw.gemini) : undefined
   return {
     mode,
     questions: questions ?? [],
@@ -328,6 +344,7 @@ function beatFromStored(raw: Record<string, unknown>, mode: CheckMode): ModeBeat
     whoInstead: mode === 'unbranded' ? (who ?? []) : [],
     whoInsteadLive: mode === 'unbranded' && raw.whoInsteadLive === true,
     facts: readFacts(raw.facts, mode),
+    ...(gemini ? { gemini } : {}),
   }
 }
 
@@ -344,6 +361,7 @@ function beatFromFlat(result: StoredResult, mode: CheckMode): ModeBeat {
   const why = result.answers?.why || ''
   const live = Boolean(result.answers?.live && answered && why)
   const who = asStringList(result.whoInstead)
+  const gemini = mode === 'unbranded' ? readGemini(result.gemini) : undefined
   return {
     mode,
     questions: questions ?? [],
@@ -356,6 +374,7 @@ function beatFromFlat(result: StoredResult, mode: CheckMode): ModeBeat {
     whoInstead: mode === 'unbranded' ? (who ?? []) : [],
     whoInsteadLive: mode === 'unbranded' && result.whoInsteadLive === true,
     facts: readFacts(result.facts, mode),
+    ...(gemini ? { gemini } : {}),
   }
 }
 

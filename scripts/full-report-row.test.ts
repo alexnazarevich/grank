@@ -561,6 +561,55 @@ describe('full-report row markup', () => {
   })
 })
 
+describe('unbranded engine blocks', () => {
+  it('shows OpenAI and Gemini labels, and a miss leaves the OpenAI block', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { UnbrandedAnswers } = (await server.ssrLoadModule('/src/UnbrandedAnswers.tsx')) as typeof import('../src/UnbrandedAnswers.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule('/src/config/productConfig.ts')) as typeof import('../src/config/productConfig.ts')
+      const copy = PRODUCT_DEFAULTS.copy
+      const both = renderToStaticMarkup(
+        React.createElement(UnbrandedAnswers, {
+          mention: 'not_mentioned',
+          whoInstead: ['Jira', 'Asana'],
+          gemini: ['Monday and ClickUp are common picks for this job.'],
+          index: 0,
+          copy,
+        }),
+      )
+      assert.match(both, /Generated · OpenAI/)
+      assert.match(both, /Generated · Gemini/)
+      assert.match(both, /Monday and ClickUp are common picks for this job\./)
+      assert.match(both, /<strong>Jira<\/strong>/)
+      assert.equal(both.includes("Gemini didn't answer."), false)
+      assert.equal(both.includes('<strong>Monday</strong>'), false)
+      assert.equal(both.includes('<strong>ClickUp</strong>'), false)
+
+      const missed = renderToStaticMarkup(
+        React.createElement(UnbrandedAnswers, {
+          mention: 'not_mentioned',
+          whoInstead: ['Jira'],
+          gemini: [''],
+          index: 0,
+          copy,
+        }),
+      )
+      assert.match(missed, /Generated · OpenAI/)
+      assert.match(missed, /Generated · Gemini/)
+      assert.match(missed, /Gemini didn&#x27;t answer\./)
+      assert.match(missed, /<strong>Jira<\/strong>/)
+      assert.equal(missed.includes('Monday'), false)
+    } finally {
+      await server.close()
+    }
+  })
+})
+
 describe('land and dig mention mark', () => {
   it('keeps the chip on mention and lists whoInstead names underneath', async () => {
     const server: ViteDevServer = await createServer({

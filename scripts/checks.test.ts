@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { saveCheck } from '../src/checksClient.ts'
 import { PRODUCT_DEFAULTS, productConfigFromEnv } from '../src/config/productConfig.ts'
-import { LABEL_GENERATED, LABEL_SAMPLE, LABEL_UNBRANDED, viewFromAha, viewFromSaved } from '../src/savedResult.ts'
+import { LABEL_GENERATED, LABEL_SAMPLE, LABEL_UNBRANDED, screenFromSaved, viewFromAha, viewFromSaved } from '../src/savedResult.ts'
 import { idsBeyondCap, retentionCutoffIso, shapeStoredCheck } from '../functions/api/shapeCheck.ts'
 import { onRequest, SAVE_REQUIRES_PLAN, SERVER_AUTH_NOT_CONFIGURED } from '../functions/api/checks.ts'
 
@@ -136,6 +136,133 @@ describe('shapeStoredCheck', () => {
     assert.deepEqual(shaped.result.branded?.replies, ['Teams cite Linear for issue tracking.'])
     assert.equal('whoInstead' in (shaped.result.branded || {}), false)
     assert.equal(shaped.result.labels.mode, 'Branded')
+  })
+
+  it('stores Gemini text beside the OpenAI answer, and a miss does not clear it', () => {
+    const withText = shapeStoredCheck(
+      {
+        ...DRAFT,
+        gemini: ['Monday is a common pick for this job.', '', ''],
+        unbranded: {
+          questions: DRAFT.questions,
+          questionsGenerated: true,
+          answered: 'partial',
+          answeredWhy: DRAFT.answeredWhy,
+          answeredLive: true,
+          model: 'gpt-4o-mini',
+          whoInstead: ['Jira', 'Asana'],
+          whoInsteadLive: true,
+          gemini: ['Monday is a common pick for this job.', '', ''],
+          facts: [
+            {
+              question: DRAFT.questions[0],
+              framing: 'unbranded',
+              id: 'problems',
+              mention: 'not_mentioned',
+              whoInstead: ['Jira', 'Asana'],
+            },
+          ],
+        },
+      },
+      PRODUCT_DEFAULTS,
+    )
+    assert.equal(withText.ok, true)
+    if (!withText.ok) return
+    assert.equal(withText.result.answers?.answered, 'partial')
+    assert.equal(withText.result.answers?.why, DRAFT.answeredWhy)
+    assert.deepEqual(withText.result.whoInstead, ['Jira', 'Asana'])
+    assert.deepEqual(withText.result.gemini, ['Monday is a common pick for this job.', '', ''])
+    assert.deepEqual(withText.result.unbranded?.gemini, ['Monday is a common pick for this job.', '', ''])
+    assert.deepEqual(withText.result.unbranded?.whoInstead, ['Jira', 'Asana'])
+    assert.equal(withText.result.facts?.[0]?.mention, 'not_mentioned')
+    assert.deepEqual(withText.result.facts?.[0]?.whoInstead, ['Jira', 'Asana'])
+    assert.equal(JSON.stringify(withText.result.facts).includes('Monday'), false)
+    assert.equal(JSON.stringify(withText.result.whoInstead).includes('Monday'), false)
+
+    const missed = shapeStoredCheck(
+      {
+        ...DRAFT,
+        gemini: ['', '', ''],
+        unbranded: {
+          questions: DRAFT.questions,
+          questionsGenerated: true,
+          answered: 'partial',
+          answeredWhy: DRAFT.answeredWhy,
+          answeredLive: true,
+          model: 'gpt-4o-mini',
+          whoInstead: ['Jira', 'Asana'],
+          whoInsteadLive: true,
+          gemini: ['', '', ''],
+        },
+      },
+      PRODUCT_DEFAULTS,
+    )
+    assert.equal(missed.ok, true)
+    if (!missed.ok) return
+    assert.equal(missed.result.answers?.answered, 'partial')
+    assert.equal(missed.result.answers?.live, true)
+    assert.deepEqual(missed.result.whoInstead, ['Jira', 'Asana'])
+    assert.deepEqual(missed.result.gemini, ['', '', ''])
+    assert.deepEqual(missed.result.unbranded?.gemini, ['', '', ''])
+    const reopened = screenFromSaved({
+      id: 'check',
+      domain: 'linear.app',
+      mode: 'unbranded',
+      createdAt: '2026-10-03T00:00:00.000Z',
+      result: missed.result,
+    })
+    assert.equal(reopened.unbranded.answered, 'partial')
+    assert.deepEqual(reopened.unbranded.whoInstead, ['Jira', 'Asana'])
+    assert.deepEqual(reopened.unbranded.gemini, ['', '', ''])
+
+    const hidden = shapeStoredCheck(
+      { ...DRAFT, gemini: ['Monday is a common pick.'] },
+      productConfigFromEnv({ STORE_ANSWERS: 'false' }),
+    )
+    assert.equal(hidden.ok, true)
+    if (!hidden.ok) return
+    assert.equal('answers' in hidden.result, false)
+    assert.equal('gemini' in hidden.result, false)
+  })
+
+  it('does not store Gemini on the branded beat', () => {
+    const shaped = shapeStoredCheck(
+      {
+        ...DRAFT,
+        mode: 'branded',
+        replies: ['Linear is an issue tracker.'],
+        gemini: ['Should not land on the branded result.'],
+        branded: {
+          questions: ['What is Linear known for?'],
+          questionsGenerated: true,
+          replies: ['Teams cite Linear for issue tracking.'],
+          answered: 'yes',
+          answeredWhy: 'The brand is named in branded questions.',
+          answeredLive: true,
+          model: 'gpt-4o-mini',
+          gemini: ['Should not land on branded.'],
+        },
+        unbranded: {
+          questions: DRAFT.questions,
+          questionsGenerated: true,
+          answered: 'partial',
+          answeredWhy: DRAFT.answeredWhy,
+          answeredLive: true,
+          model: 'gpt-4o-mini',
+          whoInstead: ['Jira'],
+          whoInsteadLive: true,
+          gemini: ['A category reply that stays on unbranded.'],
+        },
+      },
+      PRODUCT_DEFAULTS,
+    )
+    assert.equal(shaped.ok, true)
+    if (!shaped.ok) return
+    assert.equal('gemini' in shaped.result, false)
+    assert.deepEqual(shaped.result.answers?.replies, ['Linear is an issue tracker.'])
+    assert.equal('gemini' in (shaped.result.branded || {}), false)
+    assert.deepEqual(shaped.result.unbranded?.gemini, ['A category reply that stays on unbranded.'])
+    assert.deepEqual(shaped.result.unbranded?.whoInstead, ['Jira'])
   })
 
   it('persists per-question mention facts with stable theme ids', () => {

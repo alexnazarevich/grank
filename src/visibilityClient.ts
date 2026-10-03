@@ -1,4 +1,4 @@
-/** Same-origin call to the Pages Function. Unbranded is the default; branded adds answers and omits who-instead. */
+/** Same-origin call to the Pages Function. Unbranded is the default; branded adds OpenAI answers and omits who-instead. Unbranded may include Gemini text beside the OpenAI result. */
 
 import { readAnonKey } from './authClient.ts'
 import type { Answered } from './demoData'
@@ -12,6 +12,8 @@ export type VisibilityOk = {
   questions: string[]
   /** Branded replies aligned to questions. "" means that row had no answer. Unbranded is []. */
   answers: string[]
+  /** Unbranded Gemini replies aligned to questions. "" is a miss. Empty when this payload has no Gemini slot. */
+  gemini: string[]
   answered: Answered
   why: string
   model: string
@@ -156,6 +158,11 @@ export function interpretVisibilityResponse(
   }
 
   const answers = mode === 'branded' ? parsedQa.answers : []
+  const geminiField = rec.gemini
+  const gemini =
+    mode === 'unbranded' && Array.isArray(geminiField)
+      ? questions.map((_, index) => normalizeAnswer(geminiField[index]))
+      : []
   const whoInstead = mode === 'branded' ? [] : parseClientWhoInstead(rec.whoInstead, domain)
   const hosted = domain || (typeof rec.domain === 'string' ? rec.domain : '')
   const cleaned = Array.isArray(rec.facts) ? cleanAnswerFacts(rec.facts, hosted, mode) : []
@@ -178,8 +185,10 @@ export function interpretVisibilityResponse(
     answered,
     why,
     model,
-    // Answers are the branded dig only. Unbranded stays a question list.
+    // OpenAI prose is the branded dig only. Unbranded keeps that list empty.
     answers,
+    // Gemini text is unbranded-only and is not a mention or a who-instead list.
+    gemini,
     // Who-instead is the unbranded beat only, even if a branded payload includes names.
     whoInstead,
     facts,

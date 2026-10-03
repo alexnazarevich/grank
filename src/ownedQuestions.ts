@@ -206,6 +206,15 @@ export function applyOwnedToStoredShort(
       questionsGenerated: generated,
       facts,
     }
+    const storedGemini = beatRec && Array.isArray(beatRec.gemini) ? beatRec.gemini : result.gemini
+    const priorGemini = Array.isArray(storedGemini)
+      ? storedGemini.map((item) => (typeof item === 'string' ? item : ''))
+      : null
+    if (priorGemini) {
+      const gemini = owned.map((item) => replyAt(priorQuestions, priorGemini, item.question))
+      next.gemini = gemini
+      next.unbranded = { ...next.unbranded, gemini }
+    }
   }
   return next
 }
@@ -232,7 +241,11 @@ export function applyOwnedToBeat(beat: ModeBeat, owned: OwnedQuestion[]): ModeBe
     }
     return { question: item.question, framing: beat.mode, id: item.themeId, whoInstead: [] as string[] }
   })
-  return { ...beat, questions, answers, facts: nextFacts }
+  const next: ModeBeat = { ...beat, questions, answers, facts: nextFacts }
+  if (beat.mode === 'unbranded' && beat.gemini) {
+    next.gemini = owned.map((item) => replyAt(beat.questions, beat.gemini ?? [], item.question))
+  }
+  return next
 }
 
 export function groupOwned(owned: OwnedQuestion[]): { id: ThemeId; title: string; questions: string[] }[] {

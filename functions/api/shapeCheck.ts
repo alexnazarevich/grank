@@ -83,6 +83,9 @@ function shapeBeat(
     beat.answeredLive = answeredLive
     beat.model = model
     if (mode === 'branded') beat.replies = replies
+    if (mode === 'unbranded' && Array.isArray(value.gemini)) {
+      beat.gemini = cleanReplies(value.gemini).map((reply) => scrubSecret(reply, secret))
+    }
   }
   if (config.storeWhoInstead && mode === 'unbranded') {
     beat.whoInstead = whoInstead
@@ -154,6 +157,9 @@ export function shapeStoredCheck(
       why,
       live: answeredLive,
       ...(mode === 'branded' ? { replies } : {}),
+    }
+    if (mode !== 'branded' && Array.isArray(rec.gemini)) {
+      result.gemini = cleanReplies(rec.gemini).map((reply) => scrubSecret(reply, secret))
     }
     if (homepageSupport) result.homepageSupport = homepageSupport
   }

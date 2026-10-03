@@ -6,8 +6,8 @@
 
 | Signal | Status |
 | --- | --- |
-| **Unbranded questions** (default) | **Generated · OpenAI** — category / job-to-be-done questions. `GET /api/visibility?domain=&mode=unbranded` (mode defaults to unbranded; POST JSON also works). The brand is known for the read, but the questions do not need its name. |
-| **Branded questions** | Same endpoint with `mode=branded`, on demand from **Ask about your brand**. Questions name the brand. Each one includes a short `answers[]` reply from the same `gpt-4o-mini` call (or `{ question, answer }` objects, which the function normalizes). Above the questions: “Answers below are from our model for these questions — not a live multi-engine scrape.” Each reply is badged **Generated · OpenAI**. A missing reply says “Couldn’t get an answer.” No invented praise. A failed branded check says “Couldn’t generate branded questions — try again.” |
+| **Unbranded questions** (default) | **Generated · OpenAI** — category / job-to-be-done questions, plus a second block **Generated · Gemini** on the same questions. `GET /api/visibility?domain=&mode=unbranded` (mode defaults to unbranded; POST JSON also works). The brand is known for the read, but the questions do not need its name. Mention and who-instead stay on the OpenAI read. If Gemini fails or `GEMINI_API_KEY` is missing, that block says **Gemini didn't answer.** and the OpenAI result still shows. |
+| **Branded questions** | Same endpoint with `mode=branded`, on demand from **Ask about your brand**. Questions name the brand. Each one includes a short `answers[]` reply from the same `gpt-4o-mini` call (or `{ question, answer }` objects, which the function normalizes). Above the questions: “OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.” Each reply is badged **Generated · OpenAI**. A missing reply says “Couldn’t get an answer.” No invented praise. A failed branded check says “Couldn’t generate branded questions — try again.” |
 | **Answered by you?** | **Live model** — the verdict belongs to the active set only (unbranded or branded). Yes / partial / no, conservative, one-sentence why. Not a multi-engine scan and not a blended score. |
 | **Who shows up instead** | **Unbranded only.** 1–3 real alternate brand names from that call. No names → “Couldn’t find alternatives”. Branded responses omit it. |
 | Homepage fetch | Small supporting line only (`GET /api/homepage`). It does not set the primary verdict. |
@@ -38,6 +38,8 @@ Privileged values stay on Cloudflare Pages (Production and Preview). Never creat
 | --- | --- |
 | `OPENAI_API_KEY` | `/api/visibility` |
 | `OPENAI_MODEL` | optional; visibility still defaults to `gpt-4o-mini` |
+| `GEMINI_API_KEY` | `/api/visibility` unbranded replies. Not a `VITE_*` variable. A missing key does not fail the OpenAI result. |
+| `GEMINI_MODEL` | optional flash model id. Default `gemini-2.5-flash`. |
 | `SUPABASE_URL` | `/api/checks` (server writes) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `/api/checks` only. Never ship to the browser. |
 | `PRODUCT_CONFIG_JSON` | optional knob blob. Single env aliases (`MAX_SAVED_CHECKS_PER_USER`, `STORE_QUESTIONS`, `PAYWALL_ENABLED`, …) override one field. |
@@ -112,7 +114,7 @@ Apply `supabase/migrations/20260926150000_quota_paid.sql` after the save migrati
 
 ## Full report
 
-After the short land/dig result, **Show full report** asks for a magic link when you are signed out (same Supabase auth as Save). The first look stays free. Signed in, `POST /api/full-report` builds one themed report (~50–60 questions, 3–6 theme ids). Each theme is unbranded-only or branded-only. Alternatives stay unbranded. Buying and edge may be two themes with the same id, one framing each. Empty themes are omitted. **Generated · OpenAI** is on the expanded answer. There is still no blended score and no multi-engine scrape.
+After the short land/dig result, **Show full report** asks for a magic link when you are signed out (same Supabase auth as Save). The first look stays free. Signed in, `POST /api/full-report` builds one themed report (~50–60 questions, 3–6 theme ids). Each theme is unbranded-only or branded-only. Alternatives stay unbranded. Buying and edge may be two themes with the same id, one framing each. Empty themes are omitted. **Generated · OpenAI** is on the expanded answer. There is still no blended score.
 
 The first `freeFullReports` (default 1 per account) do not use the check quota. A further full report does not spend free check quota. While `paywallEnabled` is on, a free account hits the upgrade wall on that second report. Saving the complimentary full report is allowed; a further save after it hits the same wall. A paid account counts the extra report as a check against `paidQuotaAmount`. Production keeps the paywall on (`PAYWALL_ENABLED=true`). The button and section copy come from `productConfig.copy` (`showFullReportCta`, `fullReportMagicLinkHint`, `fullReportTitle`, `fullReportSub`, `fullReportLoading`, `fullReportEmptyThemes`, `fullReportLimitHit`). The theme eyebrow reuses the land and dig words, Unbranded and Branded.
 
@@ -150,7 +152,7 @@ npx wrangler pages dev dist
 ## 5-minute demo
 
 1. Open homepage → paste URL or try linear.app / notion.so.
-2. Land on **Unbranded** — “Do you show up for what you solve?” Each question is badged Unbranded.
+2. Land on **Unbranded** — “Do you show up for what you solve?” Each question is badged Unbranded, with **Generated · OpenAI** and **Generated · Gemini**.
 3. Point at **Answered by you?** — that read is for the unbranded set. **Who shows up instead** is on this beat only.
-4. **Ask about your brand** → branded questions (“What do they say about you?”), badged Branded, each with a model answer labeled **Generated · OpenAI** (or “Couldn’t get an answer”). Who-instead is gone. Switch back with **Unbranded** — the first result stays cached, still a question list with no answer blocks.
-5. Close: one screen, one model, two labeled sets. No blended score.
+4. **Ask about your brand** → branded questions (“What do they say about you?”), badged Branded, each with a model answer labeled **Generated · OpenAI** (or “Couldn’t get an answer”). Who-instead is gone. Branded does not call Gemini. Switch back with **Unbranded** — the first result stays cached, still **Generated · OpenAI** and **Generated · Gemini**.
+5. Close: unbranded shows both labels. Branded stays **Generated · OpenAI**. Cron stays off.

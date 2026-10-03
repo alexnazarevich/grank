@@ -2,9 +2,10 @@
  * Cloudflare Pages Function: GET or POST /api/visibility?domain=linear.app&mode=unbranded
  * Live questions and answered-by-you via OpenAI gpt-4o-mini.
  * mode=unbranded (default): category / JTBD questions, plus who-instead.
- * mode=branded: questions that name the brand, each with a short model answer.
- * No who-instead on branded. No blended score. Missing answers stay empty.
- * OPENAI_API_KEY is read from the Pages env only. Never returned.
+ * The same unbranded questions also get a Gemini reply, stored beside the OpenAI result.
+ * mode=branded: questions that name the brand, each with a short OpenAI answer. No Gemini.
+ * No who-instead on branded. Missing answers stay empty.
+ * OPENAI_API_KEY and GEMINI_API_KEY are read from the Pages env only. Never returned.
  */
 
 import { productConfigFromEnv } from '../../src/config/productConfig.ts'
@@ -22,6 +23,9 @@ export { parseWhoInstead }
 
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
+/** Default flash model. Override with GEMINI_MODEL. Not a Vertex host. */
+export const GEMINI_MODEL_DEFAULT = 'gemini-2.5-flash'
+const GEMINI_API_ORIGIN = 'https://generativelanguage.googleapis.com'
 const TIMEOUT_MS = 20_000
 const EXCERPT_TIMEOUT_MS = 4_000
 const USER_AGENT = 'GrankBot/0.1 (+https://grank.pages.dev)'
@@ -306,6 +310,122 @@ function alignOwned(
   }
 }
 
+/** Flash model id only. Anything else, including a Vertex path, stays on the default. */
+export function geminiModelFromEnv(env: VisibilityEnv | undefined): string {
+  const raw = typeof env?.GEMINI_MODEL === 'string' ? env.GEMINI_MODEL.trim() : ''
+  if (/^gemini-[a-z0-9.-]*flash[a-z0-9.-]*$/i.test(raw)) return raw
+  return GEMINI_MODEL_DEFAULT
+}
+
+export function geminiGenerateUrl(model: string): string {
+  return `${GEMINI_API_ORIGIN}/v1beta/models/${encodeURIComponent(model)}:generateContent`
+}
+
+/** Ask Gemini to answer the questions OpenAI already wrote. No mention and no who-instead. */
+export function geminiAnswerPrompt(questions: string[]): string {
+  return [
+    'Answer each question below as a careful assistant would.',
+    'Return JSON only: {"answers":["one reply per question, same order and same length as the list"]}.',
+    'Each reply is 2 to 4 sentences from public knowledge. If you cannot answer, use an empty string.',
+    'Do not invent quotes or URLs.',
+    ...questions.map((question, index) => `${index + 1}. ${question}`),
+  ].join('\n')
+}
+
+function geminiAnswerText(value: unknown): string {
+  if (typeof value === 'string') return normalizeAnswer(value)
+  if (value && typeof value === 'object' && typeof (value as Record<string, unknown>).answer === 'string') {
+    return normalizeAnswer((value as Record<string, unknown>).answer)
+  }
+  return ''
+}
+
+/** Parallel replies. A bad payload is a miss for every question — never a partial parse of names. */
+export function parseGeminiAnswers(raw: string, count: number): string[] {
+  const blank = () => Array.from({ length: Math.max(0, count) }, () => '')
+  if (count <= 0) return []
+  let text = raw.trim()
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text)
+  if (fence) text = fence[1].trim()
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return blank()
+  let data: unknown
+  try {
+    data = JSON.parse(text.slice(start, end + 1))
+  } catch {
+    return blank()
+  }
+  if (!data || typeof data !== 'object') return blank()
+  const answers = (data as Record<string, unknown>).answers
+  if (!Array.isArray(answers)) return blank()
+  return Array.from({ length: count }, (_, index) => geminiAnswerText(answers[index]))
+}
+
+function scrubKeys(value: string, keys: string[]): string {
+  return keys.reduce((out, key) => scrubSecret(out, key), value)
+}
+
+function geminiPayloadText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const candidates = (payload as { candidates?: unknown }).candidates
+  if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== 'object') return ''
+  const content = (candidates[0] as { content?: { parts?: unknown } }).content
+  const parts = content?.parts
+  if (!Array.isArray(parts)) return ''
+  return parts
+    .map((part) => (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
+      ? (part as { text: string }).text
+      : ''))
+    .join('')
+}
+
+/**
+ * Same unbranded questions, Gemini text only.
+ * Missing key, HTTP failure, and a bad payload all return empty strings.
+ * Callers attach that array beside an OpenAI result they already built.
+ */
+async function geminiReplies(opts: {
+  apiKey: string
+  model: string
+  questions: string[]
+  scrub: string[]
+}): Promise<string[]> {
+  const misses = () => opts.questions.map(() => '')
+  if (!opts.apiKey || opts.questions.length === 0) return misses()
+  const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
+  let res: Response
+  try {
+    res = await fetch(geminiGenerateUrl(opts.model), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-goog-api-key': opts.apiKey,
+      },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: Math.min(2400, 500 + opts.questions.length * 220),
+          responseMimeType: 'application/json',
+        },
+      }),
+    })
+  } catch {
+    return misses()
+  }
+  if (!res.ok) return misses()
+  try {
+    const text = geminiPayloadText(await res.json())
+    return parseGeminiAnswers(scrubKeys(text, opts.scrub), opts.questions.length).map((answer) =>
+      scrubKeys(answer, opts.scrub),
+    )
+  } catch {
+    return misses()
+  }
+}
+
 function ownedVisibilityPrompt(
   domain: string,
   mode: VisibilityMode,
@@ -333,6 +453,7 @@ async function completeVisibility(
   excerpt: string | null,
   mode: VisibilityMode,
   owned: string[] | null = null,
+  gemini: { apiKey: string; model: string } = { apiKey: '', model: GEMINI_MODEL_DEFAULT },
 ): Promise<Response> {
   const lines = [`Mode: ${mode}`, `Brand domain: ${domain}`]
   if (excerpt) lines.push(`Homepage excerpt (may be incomplete):\n${excerpt}`)
@@ -419,9 +540,18 @@ async function completeVisibility(
     why: parsed.why,
     facts,
   }
-  // Who-instead stays on the unbranded beat. Answers stay on the branded beat.
+  // Who-instead stays on the unbranded beat. OpenAI prose stays on the branded beat.
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
   if (mode === 'branded') body.answers = answers
+  // Gemini text is a sibling of the OpenAI result. A miss is empty strings, not a failed check.
+  if (mode === 'unbranded') {
+    body.gemini = await geminiReplies({
+      apiKey: gemini.apiKey,
+      model: gemini.model,
+      questions,
+      scrub: [apiKey, gemini.apiKey],
+    })
+  }
   return json(200, body)
 }
 
@@ -443,6 +573,8 @@ export async function onRequest(context: {
   const secret = context.env?.OPENAI_API_KEY
   const apiKey = typeof secret === 'string' ? secret.trim() : ''
   if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
+  const geminiSecret = context.env?.GEMINI_API_KEY
+  const geminiKey = typeof geminiSecret === 'string' ? geminiSecret.trim() : ''
 
   const gate = await gateModelCall({
     request,
@@ -453,7 +585,10 @@ export async function onRequest(context: {
 
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
-  const result = await completeVisibility(apiKey, domain, safeExcerpt, mode, questions)
+  const result = await completeVisibility(apiKey, domain, safeExcerpt, mode, questions, {
+    apiKey: geminiKey,
+    model: geminiModelFromEnv(context.env),
+  })
   if (result.status !== 200) {
     try {
       await gate.release()

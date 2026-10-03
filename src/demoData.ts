@@ -12,6 +12,11 @@ export type ModeBeat = {
   questions: string[]
   /** Branded model replies aligned to questions. Empty string → no answer for that row. Unbranded is []. */
   answers: string[]
+  /**
+   * Unbranded Gemini replies aligned to questions. "" is a miss for that row.
+   * Absent when this run did not ask Gemini (branded, or a failed OpenAI generation).
+   */
+  gemini?: string[]
   /** True when questions came from the model, not the sample bank. */
   questionsGenerated: boolean
   /** Null when the model call failed — never invent a Yes. */
