@@ -13,6 +13,8 @@ export const STORY = {
   digBadge: 'Branded',
   digFail: 'Couldn’t generate branded questions — try again.',
   answerLabel: 'Generated · OpenAI',
+  geminiLabel: 'Generated · Gemini',
+  geminiMiss: "Gemini didn't answer.",
   answerHelper:
     'Answers below are from our model for these questions — not a live multi-engine scrape.',
   answerMiss: 'Couldn’t get an answer.',

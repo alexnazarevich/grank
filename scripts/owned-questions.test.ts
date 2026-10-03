@@ -221,4 +221,62 @@ describe('owned question set', () => {
     assert.equal(next.facts?.[1]?.mention, undefined)
     assert.equal(next.unbranded?.questions?.[1], 'Who else should a team use for issue tracking?')
   })
+
+  it('keeps Gemini text beside the same question and does not add those names to who-instead', () => {
+    const stored: StoredResult = {
+      labels: {
+        questions: LABEL_GENERATED,
+        answered: 'Live model',
+        whoInstead: LABEL_GENERATED,
+        mode: LABEL_UNBRANDED,
+      },
+      model: 'gpt-4o-mini',
+      questionsGenerated: true,
+      questions: ['What should a team use for issue tracking?'],
+      answers: {
+        answered: 'partial',
+        why: 'Other tools get named.',
+        live: true,
+      },
+      whoInstead: ['Jira'],
+      gemini: ['Monday is a common pick for tracking work.'],
+      facts: [
+        {
+          question: 'What should a team use for issue tracking?',
+          framing: 'unbranded',
+          id: 'problems',
+          mention: 'not_mentioned',
+          whoInstead: ['Jira'],
+        },
+      ],
+      unbranded: {
+        questions: ['What should a team use for issue tracking?'],
+        questionsGenerated: true,
+        gemini: ['Monday is a common pick for tracking work.'],
+        whoInstead: ['Jira'],
+        facts: [
+          {
+            question: 'What should a team use for issue tracking?',
+            framing: 'unbranded',
+            id: 'problems',
+            mention: 'not_mentioned',
+            whoInstead: ['Jira'],
+          },
+        ],
+      },
+    }
+    const next = applyOwnedToStoredShort(stored, 'unbranded', [
+      { question: 'What should a team use for issue tracking?', themeId: 'problems' },
+      { question: 'What do support teams use for tickets?', themeId: 'problems' },
+    ])
+    assert.equal(next.answers?.answered, 'partial')
+    assert.deepEqual(next.whoInstead, ['Jira'])
+    assert.deepEqual(next.gemini, ['Monday is a common pick for tracking work.', ''])
+    assert.deepEqual(next.unbranded?.gemini, ['Monday is a common pick for tracking work.', ''])
+    assert.deepEqual(next.facts?.[0]?.whoInstead, ['Jira'])
+    assert.equal(next.facts?.[0]?.mention, 'not_mentioned')
+    assert.deepEqual(next.facts?.[1]?.whoInstead, [])
+    assert.equal(JSON.stringify(next.facts).includes('Monday'), false)
+    assert.equal(JSON.stringify(next.whoInstead).includes('Monday'), false)
+  })
 })

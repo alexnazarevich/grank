@@ -10,6 +10,7 @@ import {
 } from './demoData'
 import { liveAnsweredByYou } from './liveAnswered'
 import { STORY } from './story'
+import { UnbrandedAnswers } from './UnbrandedAnswers'
 import { fetchVisibility, type VisibilityFail, type VisibilityOk } from './visibilityClient'
 import { loadProductConfig } from './config/clientConfig'
 import { PRODUCT_DEFAULTS, type ProductConfig } from './config/productConfig'
@@ -134,6 +135,7 @@ function unbrandedBeat(domain: string, visibility: VisibilityOk | VisibilityFail
       mode: 'unbranded',
       questions: visibility.questions,
       answers: [],
+      ...(visibility.gemini.length === visibility.questions.length ? { gemini: visibility.gemini } : {}),
       questionsGenerated: true,
       answered: visibility.answered,
       answeredWhy: visibility.why,
@@ -195,6 +197,7 @@ function screenFromDraft(draft: CheckDraft): Screen {
     mode,
     questions: source.questions,
     answers: mode === 'branded' ? source.replies : [],
+    ...(mode === 'unbranded' && source.gemini ? { gemini: source.gemini } : {}),
     questionsGenerated: source.questionsGenerated,
     answered: source.answered,
     answeredWhy: source.answeredWhy,
@@ -264,6 +267,7 @@ function savedFromDraft(draft: CheckDraft): SavedCheck {
         live: draft.answeredLive,
         replies: draft.replies,
       },
+      ...(draft.gemini ? { gemini: draft.gemini } : {}),
       whoInstead: draft.whoInstead,
       whoInsteadLive: draft.whoInsteadLive,
       unbranded: draft.unbranded,
@@ -1678,29 +1682,26 @@ export default function App() {
                   {beat.questions.map((q, i) => {
                     const answer = land ? '' : (beat.answers[i] || '').trim()
                     const fact = factFor(beat.facts, i, q)
+                    const gemini = land && beat.questionsGenerated ? beat.gemini : undefined
                     const rowKey = `${beat.mode}:${i}`
                     const pinned = pins.find((pin) => pin.key === rowKey)
                     const shown = pinned?.question || q
                     return (
-                      <li key={rowKey} className={land ? 'q' : 'q with-answer'}>
+                      <li key={rowKey} className={land ? (gemini ? 'q with-answer' : 'q') : 'q with-answer'}>
                         <div className="q-line">
                           <span className="tag plain q-badge">
                             {land ? STORY.landBadge : STORY.digBadge}
                           </span>
                           <span>{shown}</span>
                         </div>
-                        {land && beat.questionsGenerated && fact?.mention ? (
-                          <>
-                            <div className="answer-meta">
-                              <span className="tag plain live">{STORY.answerLabel}</span>
-                            </div>
-                            <MentionMark
-                              mention={fact.mention}
-                              whoInstead={fact.whoInstead}
-                              framing="unbranded"
-                              copy={config.copy}
-                            />
-                          </>
+                        {land && beat.questionsGenerated ? (
+                          <UnbrandedAnswers
+                            mention={fact?.mention}
+                            whoInstead={fact?.whoInstead ?? []}
+                            gemini={gemini}
+                            index={i}
+                            copy={config.copy}
+                          />
                         ) : null}
                         {land ? null : (
                           <div className={answer ? 'answer' : 'answer miss'}>
