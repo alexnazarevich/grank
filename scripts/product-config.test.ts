@@ -70,6 +70,7 @@ describe('productConfigFromEnv', () => {
     )
     assert.equal(config.copy.whoInsteadBoardEmpty, 'No one else showed up yet.')
     assert.equal(config.copy.whoInsteadBoardCount, 'Appeared on {n} questions')
+    assert.equal(config.copy.whoInsteadBoardMore, '{n} more in the questions')
     assert.equal(config.copy.pinQuestionCta, 'Pin')
     assert.equal(config.copy.unpinQuestionCta, 'Unpin')
     assert.equal(config.copy.editQuestionCta, 'Edit')

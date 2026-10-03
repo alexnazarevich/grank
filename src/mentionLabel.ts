@@ -32,10 +32,16 @@ export type WhoInsteadTopicQuestion = {
   names: string[]
 }
 
+/** Names shown on one topic row. The questions underneath are not trimmed to this. */
+const TOPIC_ROW_CAP = 5
+
 export type WhoInsteadTopic = {
   id: string
   title: string
+  /** At most {@link TOPIC_ROW_CAP}, highest question count first. Ties break A to Z. */
   names: WhoInsteadBoardRow[]
+  /** Names that ranked past the row cap. Zero when the row shows everyone. */
+  more: number
   questions: WhoInsteadTopicQuestion[]
 }
 
@@ -83,12 +89,14 @@ export function whoInsteadByTopic(
       }
     }
     if (questions.length === 0) continue
+    const ranked = [...counts.values()].sort(
+      (a, b) => b.questions - a.questions || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+    )
     topics.push({
       id: theme.id,
       title: theme.title,
-      names: [...counts.values()].sort(
-        (a, b) => b.questions - a.questions || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
-      ),
+      names: ranked.slice(0, TOPIC_ROW_CAP),
+      more: Math.max(0, ranked.length - TOPIC_ROW_CAP),
       questions,
     })
   }

@@ -234,8 +234,101 @@ describe('full-report row markup', () => {
       assert.equal(board.includes('Slack'), false)
       assert.equal(board.includes('No one else showed up yet.'), false)
       assert.equal(/SOV|Competitors|competitive share|market share %/i.test(board), false)
+      assert.equal(board.includes('more in the questions'), false)
+      assert.equal(board.includes('Top 5'), false)
       assert.match(html, />Unbranded</)
       assert.match(html, />Branded</)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('shows five names on the row and keeps a sixth name under its question', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule('/src/FullReportSection.tsx')) as typeof import('../src/FullReportSection.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule('/src/config/productConfig.ts')) as typeof import('../src/config/productConfig.ts')
+      const html = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          whoInsteadOpen: true,
+          report: {
+            domain: 'linear.app',
+            model: 'gpt-4o-mini',
+            includesBranded: true,
+            themes: [
+              {
+                id: 'problems',
+                title: 'Problems you solve',
+                framing: 'unbranded',
+                questions: [
+                  {
+                    question: 'What should a team use to track issues?',
+                    answer: 'Zebra, Mango, and Delta.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Zebra', 'Mango', 'Delta'],
+                  },
+                  {
+                    question: 'How do teams plan a week?',
+                    answer: 'Zebra, Apple, and Mango.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Zebra', 'Apple', 'Mango'],
+                  },
+                  {
+                    question: 'How do teams plan a quarter?',
+                    answer: 'Zebra, Apple, and Echo.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Zebra', 'Apple', 'Echo'],
+                  },
+                  {
+                    question: 'What is the edge case?',
+                    answer: 'Foxtrot shows up here.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Foxtrot'],
+                  },
+                ],
+              },
+              {
+                id: 'alternatives',
+                title: 'Alternatives & who else',
+                framing: 'unbranded',
+                questions: [
+                  {
+                    question: 'Who else should I look at?',
+                    answer: 'Notion is the only other name.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Notion'],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      )
+      const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
+      const topics = board.split('<li class="who-instead-topic">').slice(1)
+      assert.equal(topics.length, 2)
+      const rowNames = [...topics[0].matchAll(/class="who-instead-name">([^<]+)</g)].map((match) => match[1])
+      assert.deepEqual(rowNames, ['Zebra', 'Apple', 'Mango', 'Delta', 'Echo'])
+      assert.equal(rowNames.includes('Foxtrot'), false)
+      assert.match(topics[0], /1 more in the questions/)
+      assert.equal(topics[0].includes('Top 5'), false)
+      assert.match(topics[0], /What is the edge case\?/)
+      assert.match(topics[0], /Who instead/)
+      assert.match(topics[0], /<strong>Foxtrot<\/strong>/)
+      assert.match(topics[1], /class="who-instead-name">Notion</)
+      assert.equal(topics[1].includes('more in the questions'), false)
+      assert.equal(/SOV|Competitors|Top 5/i.test(board), false)
     } finally {
       await server.close()
     }
