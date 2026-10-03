@@ -70,7 +70,7 @@ describe('full-report row markup', () => {
                     answer: 'The reply never names Linear.',
                     framing: 'branded',
                     mention: 'not_mentioned',
-                    whoInstead: [],
+                    whoInstead: ['Slack'],
                   },
                 ],
               },
@@ -112,8 +112,12 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('Couldn’t get an answer.'), false)
       const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
       assert.match(board, /Who showed up instead/)
-      assert.match(board, /Names that showed up in place of you on unbranded questions this run — not market share\./)
+      assert.match(board, /By topic, on unbranded questions this run — not market share\./)
       assert.equal(board.includes('No one else showed up yet.'), false)
+      assert.match(board, /who-instead-topic-toggle/)
+      assert.match(board, /Problems you solve/)
+      assert.equal(board.includes('How you’re described'), false)
+      assert.equal(board.includes('Slack'), false)
       assert.match(board, /class="who-instead-name">Asana</)
       assert.match(board, /class="who-instead-name">Height</)
       assert.match(board, /class="who-instead-name">Jira</)
@@ -121,12 +125,117 @@ describe('full-report row markup', () => {
       assert.equal(board.indexOf('>Height<') < board.indexOf('>Jira<'), true)
       assert.equal((board.match(/Appeared on 1 questions/g) || []).length, 3)
       assert.equal(board.includes('Appeared on 2'), false)
+      assert.equal(board.includes('What should a team use to track issues?'), false)
       assert.equal(board.includes('%'), false)
       assert.equal(board.includes('<strong>'), false)
-      assert.equal(/SOV|market share %|multi-engine/i.test(board), false)
+      assert.equal(board.includes('Who instead'), false)
+      assert.equal(/SOV|Competitors|market share %|multi-engine/i.test(board), false)
       assert.equal((html.match(/report-q-toggle/g) || []).length, 5)
       assert.equal(html.includes('Add question'), false)
       assert.equal(html.includes('>Delete<'), false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('groups substitutes by topic and shows each question’s names when opened', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule('/src/FullReportSection.tsx')) as typeof import('../src/FullReportSection.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule('/src/config/productConfig.ts')) as typeof import('../src/config/productConfig.ts')
+      const html = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          whoInsteadOpen: true,
+          report: {
+            domain: 'linear.app',
+            model: 'gpt-4o-mini',
+            includesBranded: true,
+            themes: [
+              {
+                id: 'problems',
+                title: 'Problems you solve',
+                framing: 'unbranded',
+                questions: [
+                  {
+                    question: 'What should a team use to track issues?',
+                    answer: 'Jira shows up for that job.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Jira', 'Asana'],
+                  },
+                  {
+                    question: 'How do teams plan a week?',
+                    answer: 'Height is the other name.',
+                    framing: 'unbranded',
+                    mention: 'unclear',
+                    whoInstead: ['Jira'],
+                  },
+                ],
+              },
+              {
+                id: 'alternatives',
+                title: 'Alternatives & who else',
+                framing: 'unbranded',
+                questions: [
+                  {
+                    question: 'Who else should I look at?',
+                    answer: 'Linear is one option.',
+                    framing: 'unbranded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Linear'],
+                  },
+                ],
+              },
+              {
+                id: 'described',
+                title: 'How you’re described',
+                framing: 'branded',
+                questions: [
+                  {
+                    question: 'How do people describe Linear?',
+                    answer: 'Linear is fast.',
+                    framing: 'branded',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Slack'],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      )
+      const board = html.slice(html.indexOf('who-instead-board'), html.indexOf('theme-block'))
+      const topics = board.split('<li class="who-instead-topic">').slice(1)
+      assert.equal(topics.length, 2)
+      assert.match(topics[0], /Problems you solve/)
+      assert.match(topics[0], /class="who-instead-name">Jira</)
+      assert.match(topics[0], /Appeared on 2 questions/)
+      assert.match(topics[0], /class="who-instead-name">Asana</)
+      assert.equal(topics[0].includes('Linear'), false)
+      assert.equal(topics[0].includes('Slack'), false)
+      assert.match(topics[0], /What should a team use to track issues\?/)
+      assert.match(topics[0], /How do teams plan a week\?/)
+      assert.match(topics[0], /Who instead/)
+      assert.match(topics[0], /<strong>Jira<\/strong>/)
+      assert.match(topics[0], /<strong>Asana<\/strong>/)
+      assert.match(topics[1], /Alternatives &amp; who else|Alternatives & who else/)
+      assert.match(topics[1], /class="who-instead-name">Linear</)
+      assert.equal(topics[1].includes('>Jira<'), false)
+      assert.match(topics[1], /Who else should I look at\?/)
+      assert.match(topics[1], /Who instead/)
+      assert.match(topics[1], /<strong>Linear<\/strong>/)
+      assert.equal(board.includes('How you’re described'), false)
+      assert.equal(board.includes('Slack'), false)
+      assert.equal(board.includes('No one else showed up yet.'), false)
+      assert.equal(/SOV|Competitors|competitive share|market share %/i.test(board), false)
+      assert.match(html, />Unbranded</)
+      assert.match(html, />Branded</)
     } finally {
       await server.close()
     }

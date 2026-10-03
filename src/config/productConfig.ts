@@ -34,7 +34,7 @@ export type ProductCopy = {
   whoInsteadBoardTitle: string
   whoInsteadBoardHelper: string
   whoInsteadBoardEmpty: string
-  /** `{n}` is how many unbranded questions named this substitute. */
+  /** `{n}` is how many unbranded questions in that topic named this substitute. */
   whoInsteadBoardCount: string
   pinQuestionCta: string
   unpinQuestionCta: string

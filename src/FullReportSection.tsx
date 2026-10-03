@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import { THEME_CATALOG, type FullReport, type FullReportQuestion } from './fullReport.ts'
 import type { Framing, ThemeId } from './mentionFacts.ts'
-import { mentionStatusLabel, whoInsteadBoard, whoInsteadNames } from './mentionLabel.ts'
+import { mentionStatusLabel, whoInsteadByTopic, whoInsteadNames } from './mentionLabel.ts'
 import { WhoInsteadBoard } from './WhoInsteadBoard.tsx'
 import {
   gridRuns,
@@ -366,6 +366,7 @@ export function FullReportSection({
   runs = [],
   preview = null,
   manageOpen = false,
+  whoInsteadOpen = false,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -375,6 +376,8 @@ export function FullReportSection({
   preview?: CheckRun | null
   /** Opens the manage panel for tests. The report grid stays free of row edit controls. */
   manageOpen?: boolean
+  /** Opens who-instead topics for tests. The report starts collapsed. */
+  whoInsteadOpen?: boolean
 }) {
   const shown = gridRuns(runs, preview)
   const rates = themeMentionRates(
@@ -398,7 +401,8 @@ export function FullReportSection({
       <WhoInsteadBoard
         copy={copy}
         titleId="who-instead-report"
-        rows={whoInsteadBoard(report.themes)}
+        topics={whoInsteadByTopic(report.themes)}
+        initialOpen={whoInsteadOpen}
       />
       {report.themes.length === 0 ? <p className="why">{copy.fullReportEmptyThemes}</p> : null}
       {report.themes.map((theme) => {

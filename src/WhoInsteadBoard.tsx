@@ -1,48 +1,95 @@
+import { useState } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
-import { whoInsteadCountLabel, type WhoInsteadBoardRow } from './mentionLabel.ts'
+import { whoInsteadCountLabel, type WhoInsteadTopic } from './mentionLabel.ts'
 
-/** One run-level list of substitutes. Counts only when the caller has a real per-question tally. */
+/** One topic on this run. The theme title is the control. Names stay on the row. */
+function WhoInsteadTopicRow({
+  topic,
+  copy,
+  panelId,
+  initialOpen,
+}: {
+  topic: WhoInsteadTopic
+  copy: ProductCopy
+  panelId: string
+  initialOpen: boolean
+}) {
+  const [open, setOpen] = useState(initialOpen)
+  return (
+    <li className="who-instead-topic">
+      <button
+        type="button"
+        className="who-instead-topic-toggle"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {topic.title}
+      </button>
+      <ul className="who-instead-list">
+        {topic.names.map((row) => (
+          <li key={row.name}>
+            <span className="who-instead-name">{row.name}</span>
+            {row.questions > 0 ? (
+              <span className="who-instead-count">
+                {whoInsteadCountLabel(copy.whoInsteadBoardCount, row.questions)}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {open ? (
+        <ul id={panelId} className="who-instead-questions">
+          {topic.questions.map((item, index) => (
+            <li key={`${index}:${item.question}`}>
+              <p className="who-instead-question">{item.question}</p>
+              <p className="who-instead-under">{copy.mentionWhoInstead}</p>
+              <ul className="mention-names">
+                {item.names.map((name) => (
+                  <li key={name}>
+                    <strong>{name}</strong>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  )
+}
+
+/** Full report only. Unbranded substitutes for this run, grouped by theme. */
 export function WhoInsteadBoard({
   copy,
-  rows,
+  topics,
   titleId,
-  engine,
-  omitted = false,
+  initialOpen = false,
 }: {
   copy: ProductCopy
-  rows: WhoInsteadBoardRow[]
+  topics: WhoInsteadTopic[]
   titleId: string
-  /** Land keeps the existing Generated · OpenAI label. The full report leaves it off this board. */
-  engine?: { live: boolean; label: string }
-  omitted?: boolean
+  /** Opens every topic for tests. The report starts collapsed. */
+  initialOpen?: boolean
 }) {
   return (
     <section className="block who-instead-board" aria-labelledby={titleId}>
       <h2 className="beat-title" id={titleId}>
         {copy.whoInsteadBoardTitle}
-        {engine ? (
-          <>
-            {' '}
-            <span className={`tag plain ${engine.live ? 'live' : ''}`}>{engine.label}</span>
-          </>
-        ) : null}
       </h2>
       <p className="why">{copy.whoInsteadBoardHelper}</p>
-      {omitted ? (
-        <p className="why">Who-instead was not saved for this check.</p>
-      ) : rows.length === 0 ? (
+      {topics.length === 0 ? (
         <p className="why">{copy.whoInsteadBoardEmpty}</p>
       ) : (
-        <ul className="who-instead-list">
-          {rows.map((row) => (
-            <li key={row.name}>
-              <span className="who-instead-name">{row.name}</span>
-              {row.questions > 0 ? (
-                <span className="who-instead-count">
-                  {whoInsteadCountLabel(copy.whoInsteadBoardCount, row.questions)}
-                </span>
-              ) : null}
-            </li>
+        <ul className="who-instead-topics">
+          {topics.map((topic, index) => (
+            <WhoInsteadTopicRow
+              key={`${topic.id}:${index}`}
+              topic={topic}
+              copy={copy}
+              panelId={`who-instead-${topic.id}-${index}`}
+              initialOpen={initialOpen}
+            />
           ))}
         </ul>
       )}

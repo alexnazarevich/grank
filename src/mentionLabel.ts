@@ -16,42 +16,83 @@ export function whoInsteadNames(whoInstead: string[], framing: Framing): string[
 
 export type WhoInsteadBoardRow = {
   name: string
-  /** Distinct unbranded questions this name appeared on. */
+  /** Distinct unbranded questions in this topic the name appeared on. */
   questions: number
 }
 
 type BoardQuestion = {
+  question: string
   framing: Framing
   mention?: Mention
   whoInstead: string[]
 }
 
+export type WhoInsteadTopicQuestion = {
+  question: string
+  names: string[]
+}
+
+export type WhoInsteadTopic = {
+  id: string
+  title: string
+  names: WhoInsteadBoardRow[]
+  questions: WhoInsteadTopicQuestion[]
+}
+
+/** Names already on one unbranded answer where you were not mentioned. Capped, never invented. */
+function substitutesOn(item: BoardQuestion): string[] {
+  if (item.framing !== 'unbranded' || !item.mention || item.mention === 'mentioned') return []
+  const seen = new Set<string>()
+  const names: string[] = []
+  for (const raw of whoInsteadNames(item.whoInstead, 'unbranded')) {
+    const name = raw.replace(/\s+/g, ' ').trim()
+    const key = name.toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    names.push(name)
+  }
+  return names
+}
+
 /**
- * Substitutes for this run, most frequent first.
- * Unbranded rows only, and only when you were not mentioned — names already on the answers, never invented.
+ * This run’s substitutes, grouped by the theme they came from.
+ * Branded themes are left out. A topic with no substitutes is omitted.
  */
-export function whoInsteadBoard(
-  themes: readonly { questions: readonly BoardQuestion[] }[],
-): WhoInsteadBoardRow[] {
-  const counts = new Map<string, WhoInsteadBoardRow>()
+export function whoInsteadByTopic(
+  themes: readonly {
+    id: string
+    title: string
+    framing?: Framing
+    questions: readonly BoardQuestion[]
+  }[],
+): WhoInsteadTopic[] {
+  const topics: WhoInsteadTopic[] = []
   for (const theme of themes) {
+    if (theme.framing === 'branded') continue
+    const counts = new Map<string, WhoInsteadBoardRow>()
+    const questions: WhoInsteadTopicQuestion[] = []
     for (const item of theme.questions) {
-      if (item.framing !== 'unbranded' || !item.mention || item.mention === 'mentioned') continue
-      const seen = new Set<string>()
-      for (const raw of whoInsteadNames(item.whoInstead, 'unbranded')) {
-        const name = raw.replace(/\s+/g, ' ').trim()
+      const names = substitutesOn(item)
+      if (names.length === 0) continue
+      questions.push({ question: item.question, names })
+      for (const name of names) {
         const key = name.toLowerCase()
-        if (!key || seen.has(key)) continue
-        seen.add(key)
         const existing = counts.get(key)
         if (existing) existing.questions += 1
         else counts.set(key, { name, questions: 1 })
       }
     }
+    if (questions.length === 0) continue
+    topics.push({
+      id: theme.id,
+      title: theme.title,
+      names: [...counts.values()].sort(
+        (a, b) => b.questions - a.questions || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+      ),
+      questions,
+    })
   }
-  return [...counts.values()].sort(
-    (a, b) => b.questions - a.questions || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
-  )
+  return topics
 }
 
 /** `{n}` → how many questions. The template stays plural, including when n is 1. */

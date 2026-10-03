@@ -306,6 +306,19 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
 .who-instead-list li:last-child { border-bottom: none; }
 .who-instead-name { font-weight: 750; }
 .who-instead-count { color: var(--muted); font-size: 0.82rem; }
+.block ul.who-instead-topics,
+.block ul.who-instead-questions { list-style: none; padding: 0; margin: 0; }
+.who-instead-topic { padding: 0.35rem 0 0.15rem; border-bottom: 1px solid var(--line); }
+.who-instead-topic:last-child { border-bottom: none; }
+.who-instead-topic-toggle {
+  display: block; width: 100%; margin: 0; padding: 0.35rem 0 0.15rem; border: 0; background: none;
+  color: inherit; font: inherit; font-weight: 750; line-height: 1.35; text-align: left; cursor: pointer;
+}
+.who-instead-topic-toggle:focus-visible {
+  outline: 2px solid #5eead466; outline-offset: 3px; border-radius: 6px;
+}
+.who-instead-question { margin: 0.65rem 0 0.1rem; }
+.who-instead-under { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.82rem; }
 .who { list-style: none; padding: 0; margin: 0; }
 .who li {
   display: flex; flex-direction: column; gap: 0.15rem; padding: 0.55rem 0;

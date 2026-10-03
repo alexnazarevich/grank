@@ -45,8 +45,6 @@ import {
   type OwnedQuestion,
 } from './ownedQuestions'
 import { MentionMark } from './MentionMark'
-import { whoInsteadNames } from './mentionLabel'
-import { WhoInsteadBoard } from './WhoInsteadBoard'
 import { RunHistoryPanel } from './RunHistoryPanel'
 import { landThemeId, type AnswerFact, type Framing, type ThemeId } from './mentionFacts'
 import { PinnedRun, QuestionPinControls, type PinItem } from './RunPins'
@@ -1862,23 +1860,6 @@ export default function App() {
                 </p>
                 {screen.homepageSupport ? <p className="support">{screen.homepageSupport}</p> : null}
               </section>
-            ) : null}
-
-            {land && beat && !fullReport ? (
-              <WhoInsteadBoard
-                copy={config.copy}
-                titleId="who-instead-land"
-                omitted={screen.omittedWhoInstead}
-                engine={{
-                  live: beat.whoInsteadLive,
-                  label: beat.whoInsteadLive ? STORY.answerLabel : 'Unavailable',
-                }}
-                rows={
-                  screen.omittedWhoInstead
-                    ? []
-                    : whoInsteadNames(beat.whoInstead, 'unbranded').map((name) => ({ name, questions: 0 }))
-                }
-              />
             ) : null}
 
             {showDelta ? (
