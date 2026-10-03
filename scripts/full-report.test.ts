@@ -7,11 +7,13 @@ import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
   applyRunPins,
+  attachUnbrandedGemini,
   fullReportFromStored,
   fullReportPrompt,
   mentionsBrand,
   selectThemePlan,
   shapeFullReport,
+  type FullReportTheme,
   type PlannedTheme,
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
@@ -28,7 +30,7 @@ const OLDER = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 const CHECK = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const CHECK_USAGE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
-type Call = { url: string; method: string; body: string }
+type Call = { url: string; method: string; body: string; headers: Headers }
 
 function urlOf(input: RequestInfo | URL): string {
   return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -42,6 +44,7 @@ function install(handler: (call: Call) => Response | Promise<Response>) {
       url: urlOf(input),
       method: init?.method || 'GET',
       body: typeof init?.body === 'string' ? init.body : '',
+      headers: new Headers(init?.headers),
     }
     calls.push(call)
     return handler(call)
@@ -1249,20 +1252,277 @@ describe('full-report question accordion', () => {
       assert.equal(res.status, 200, text)
       assert.equal(text.includes(KEY), false)
       const body = JSON.parse(text) as {
-        themes: { id: string; questions: { question: string; mention?: string; answer: string; whoInstead: string[] }[] }[]
+        themes: {
+          id: string
+          questions: { question: string; mention?: string; answer: string; whoInstead: string[]; gemini?: string }[]
+        }[]
       }
       const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
       const described = body.themes.find((theme) => theme.id === 'described')?.questions[0]
       assert.equal(problems?.question, kept)
       assert.equal(problems?.mention, 'unclear')
       assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
+      assert.equal(problems?.answer, 'Jira shows up for that job.')
+      assert.equal(problems?.gemini, '')
       assert.equal(described?.question, added)
       assert.equal(described?.mention, 'mentioned')
       assert.deepEqual(described?.whoInstead, [])
+      assert.equal(described?.answer, 'Linear is a fast issue tracker for software teams.')
+      assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
       assert.equal(body.themes.some((theme) => theme.questions.some((item) => item.question === 'What tool should I buy instead?')), false)
       assert.equal(mock.calls.some((call) => call.url.includes('kind=eq.full_report')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('generativelanguage.googleapis.com')), false)
+      const read = interpretFullReportResponse(200, JSON.parse(text), false)
+      assert.equal(read.ok, true)
+      if (!read.ok) return
+      const readProblems = read.report.themes.find((theme) => theme.id === 'problems')?.questions[0]
+      assert.equal(readProblems?.gemini, '')
+      assert.equal(readProblems?.answer, 'Jira shows up for that job.')
+      assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
     } finally {
       mock.restore()
     }
+  })
+
+  it('stores a Gemini reply on the field the client reads, and a miss leaves the OpenAI answer', async () => {
+    const kept = 'What should a team use for issue tracking?'
+    const added = 'How do teams describe Linear?'
+    const geminiKey = 'gemini-report-key-should-not-leak'
+    const openaiAnswer = 'Jira and Asana show up for that job.'
+    const cases: { geminiStatus: number | 'throw' | 'ok'; expectText: string }[] = [
+      { geminiStatus: 'ok', expectText: 'Monday is a common pick for this job. key [redacted] must not leak.' },
+      { geminiStatus: 500, expectText: '' },
+      { geminiStatus: 'throw', expectText: '' },
+    ]
+    for (const item of cases) {
+      const mock = install((call) => {
+        if (call.url.includes('/auth/v1/user')) {
+          return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+        }
+        if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+        if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+        if (call.url.includes('api.openai.com')) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      themes: [
+                        {
+                          id: 'problems',
+                          questions: [
+                            {
+                              question: kept,
+                              answer: openaiAnswer,
+                              mention: 'not_mentioned',
+                              whoInstead: ['Jira', 'Asana'],
+                            },
+                          ],
+                        },
+                        {
+                          id: 'described',
+                          questions: [
+                            {
+                              question: added,
+                              answer: 'Linear is a fast issue tracker for software teams.',
+                              mention: 'mentioned',
+                              whoInstead: ['Monday'],
+                            },
+                          ],
+                        },
+                      ],
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        if (call.url.includes('generativelanguage.googleapis.com')) {
+          assert.equal(call.url.includes('aiplatform.googleapis.com'), false)
+          assert.equal(call.url.includes(geminiKey), false)
+          assert.equal(call.headers.get('x-goog-api-key'), geminiKey)
+          assert.match(call.url, /\/models\/gemini-2\.5-flash:generateContent$/)
+          assert.equal(call.body.includes('whoInstead'), false)
+          assert.equal(call.body.includes(geminiKey), false)
+          if (item.geminiStatus === 'throw') throw new Error(`network ${geminiKey}`)
+          if (item.geminiStatus !== 'ok') {
+            return new Response(JSON.stringify({ error: { message: `bad ${geminiKey}` } }), { status: item.geminiStatus })
+          }
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          answers: [`Monday is a common pick for this job. key ${geminiKey} must not leak.`],
+                          whoInstead: ['Monday'],
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (call.url.includes('/rest/v1/usage_events')) {
+          throw new Error('owned re-run must not spend a full-report allotment')
+        }
+        if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+        }
+        if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+        }
+        return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+      })
+      try {
+        const res = await onRequest({
+          request: authedRequest({
+            owned: [
+              { question: kept, themeId: 'problems' },
+              { question: added, themeId: 'described' },
+            ],
+          }),
+          env: env({ GEMINI_API_KEY: geminiKey }),
+        })
+        const text = await res.text()
+        assert.equal(res.status, 200, text)
+        assert.equal(text.includes(KEY), false)
+        assert.equal(text.includes(geminiKey), false)
+        assert.equal(text.includes(SERVICE), false)
+        const body = JSON.parse(text) as {
+          themes: {
+            id: string
+            framing?: string
+            questions: {
+              question: string
+              answer: string
+              mention?: string
+              whoInstead: string[]
+              gemini?: string
+              framing: string
+            }[]
+          }[]
+        }
+        const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
+        const described = body.themes.find((theme) => theme.id === 'described')?.questions[0]
+        assert.equal(problems?.answer, openaiAnswer)
+        assert.equal(problems?.gemini, item.expectText)
+        assert.equal(problems?.mention, 'not_mentioned')
+        assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
+        assert.equal(described?.answer, 'Linear is a fast issue tracker for software teams.')
+        assert.equal(described?.mention, 'mentioned')
+        assert.deepEqual(described?.whoInstead, [])
+        assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+        const read = interpretFullReportResponse(200, JSON.parse(text), false)
+        assert.equal(read.ok, true)
+        if (!read.ok) return
+        const readProblems = read.report.themes.find((theme) => theme.id === 'problems')?.questions[0]
+        const readDescribed = read.report.themes.find((theme) => theme.id === 'described')?.questions[0]
+        assert.equal(readProblems?.gemini, item.expectText)
+        assert.equal(readProblems?.answer, openaiAnswer)
+        assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
+        assert.equal(readProblems?.mention, 'not_mentioned')
+        assert.equal(readDescribed?.gemini, undefined)
+        const names = whoInsteadByTopic(read.report.themes).flatMap((topic) => topic.names.map((row) => row.name))
+        assert.deepEqual(names.sort(), ['Asana', 'Jira'])
+        assert.equal(names.includes('Monday'), false)
+        assert.equal(
+          mock.calls.some((call) => call.url.includes('generativelanguage.googleapis.com')),
+          true,
+        )
+        assert.equal(mock.calls.some((call) => call.url.includes('aiplatform.googleapis.com')), false)
+      } finally {
+        mock.restore()
+      }
+    }
+  })
+})
+
+describe('unbranded gemini field', () => {
+  it('zips Gemini text onto unbranded rows and leaves the OpenAI answer alone', () => {
+    const themes: FullReportTheme[] = [
+      {
+        id: 'problems',
+        title: 'Problems you solve',
+        framing: 'unbranded',
+        questions: [
+          {
+            question: 'What should a team use for issue tracking?',
+            answer: 'Jira and Asana show up for that job.',
+            framing: 'unbranded',
+            mention: 'not_mentioned',
+            whoInstead: ['Jira', 'Asana'],
+          },
+        ],
+      },
+      {
+        id: 'described',
+        title: 'How you’re described',
+        framing: 'branded',
+        questions: [
+          {
+            question: 'How do teams describe Linear?',
+            answer: 'Linear is a fast issue tracker.',
+            framing: 'branded',
+            mention: 'mentioned',
+            whoInstead: [],
+            gemini: 'This must not stay on a branded row.',
+          },
+        ],
+      },
+      {
+        id: 'alternatives',
+        title: 'Alternatives & who else',
+        framing: 'unbranded',
+        questions: [
+          {
+            question: 'Who else tracks issues for a software team?',
+            answer: 'Asana is a common alternative.',
+            framing: 'unbranded',
+            mention: 'not_mentioned',
+            whoInstead: ['Asana'],
+          },
+        ],
+      },
+    ]
+    const attached = attachUnbrandedGemini(themes, ['Monday is a common pick.', ''])
+    const problems = attached[0]?.questions[0]
+    const described = attached[1]?.questions[0]
+    const alternatives = attached[2]?.questions[0]
+    assert.equal(problems?.gemini, 'Monday is a common pick.')
+    assert.equal(problems?.answer, 'Jira and Asana show up for that job.')
+    assert.equal(problems?.mention, 'not_mentioned')
+    assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
+    assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+    assert.equal(described?.answer, 'Linear is a fast issue tracker.')
+    assert.equal(alternatives?.gemini, '')
+    assert.equal(alternatives?.answer, 'Asana is a common alternative.')
+    assert.deepEqual(alternatives?.whoInstead, ['Asana'])
+    const stored = fullReportFromStored({
+      report: 'full',
+      fullReport: {
+        domain: 'linear.app',
+        model: 'gpt-4o-mini',
+        includesBranded: true,
+        themes: attached,
+      },
+    })
+    const storedProblems = stored?.themes.find((theme) => theme.id === 'problems')?.questions[0]
+    const storedBranded = stored?.themes.find((theme) => theme.id === 'described')?.questions[0]
+    assert.equal(storedProblems?.gemini, 'Monday is a common pick.')
+    assert.equal(storedProblems?.answer, 'Jira and Asana show up for that job.')
+    assert.deepEqual(storedProblems?.whoInstead, ['Jira', 'Asana'])
+    assert.equal(storedBranded?.gemini, undefined)
+    const names = whoInsteadByTopic(stored?.themes ?? []).flatMap((topic) => topic.names.map((row) => row.name))
+    assert.equal(names.includes('Monday'), false)
+    assert.equal(names.includes('Jira'), true)
   })
 })

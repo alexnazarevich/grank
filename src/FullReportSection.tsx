@@ -14,6 +14,7 @@ import {
   type CheckRun,
   type MentionGridCell,
 } from './runHistory.ts'
+import { geminiRow } from './engineBlock.ts'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
@@ -69,13 +70,15 @@ function ReportQuestion({
   copy,
   panelId,
   chipId,
+  startOpen = false,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   panelId: string
   chipId: string
+  startOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(startOpen)
   const text = item.answer.trim()
   const label = item.mention ? mentionStatusLabel(item.mention, copy) : ''
   const names =
@@ -120,6 +123,7 @@ function ReportQuestion({
             </div>
             <p className="answer-body">{text || STORY.answerMiss}</p>
           </div>
+          {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
         </div>
       ) : null}
     </li>
@@ -132,13 +136,15 @@ function ThemeGridRow({
   copy,
   runs,
   panelId,
+  startOpen = false,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   runs: CheckRun[]
   panelId: string
+  startOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(startOpen)
   const text = item.answer.trim()
   const names =
     open && item.mention && item.mention !== 'mentioned' ? whoInsteadNames(item.whoInstead, item.framing) : []
@@ -189,6 +195,7 @@ function ThemeGridRow({
                 </div>
                 <p className="answer-body">{text || STORY.answerMiss}</p>
               </div>
+              {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
             </div>
           </td>
         </tr>
@@ -367,6 +374,7 @@ export function FullReportSection({
   preview = null,
   manageOpen = false,
   whoInsteadOpen = false,
+  answersOpen = false,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -378,6 +386,8 @@ export function FullReportSection({
   manageOpen?: boolean
   /** Opens who-instead topics for tests. The report starts collapsed. */
   whoInsteadOpen?: boolean
+  /** Opens each answer for tests. Rows start closed. */
+  answersOpen?: boolean
 }) {
   const shown = gridRuns(runs, preview)
   const rates = themeMentionRates(
@@ -454,6 +464,7 @@ export function FullReportSection({
                         copy={copy}
                         runs={shown}
                         panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
+                        startOpen={answersOpen}
                       />
                     ))}
                   </tbody>
@@ -468,6 +479,7 @@ export function FullReportSection({
                     copy={copy}
                     panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                     chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
+                    startOpen={answersOpen}
                   />
                 ))}
               </ul>
@@ -479,5 +491,19 @@ export function FullReportSection({
         <ManageQuestions editor={editor} report={report} copy={copy} initialOpen={manageOpen} />
       ) : null}
     </section>
+  )
+}
+
+/** Second block on an unbranded row. Empty text is the miss line. */
+function GeminiBlock({ text }: { text: string }) {
+  const row = geminiRow([text], 0)
+  if (!row) return null
+  return (
+    <div className={row.miss ? 'answer miss' : 'answer'}>
+      <div className="answer-meta">
+        <span className="tag plain live">{row.label}</span>
+      </div>
+      <p className="answer-body">{row.body}</p>
+    </div>
   )
 }
