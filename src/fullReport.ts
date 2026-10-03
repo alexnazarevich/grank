@@ -29,6 +29,11 @@ export type FullReportQuestion = {
   mention?: Mention
   /** Unbranded only. Empty on branded and on a failed answer. */
   whoInstead: string[]
+  /**
+   * Unbranded Gemini reply beside `answer`. "" is a miss.
+   * Absent on branded. Not a mention and not a who-instead list.
+   */
+  gemini?: string
 }
 
 export type FullReportTheme = {
@@ -238,6 +243,49 @@ function cleanQuestion(value: unknown): string {
 function cleanAnswer(value: unknown): string {
   if (typeof value !== 'string') return ''
   return value.replace(/\s+/g, ' ').trim().slice(0, ANSWER_MAX)
+}
+
+const GEMINI_MAX = 900
+
+/** Gemini reply text. A missing or blank value is a miss, not a cleared OpenAI answer. */
+export function cleanGeminiText(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/g, ' ').trim().slice(0, GEMINI_MAX)
+}
+
+/** Unbranded question strings, in report order. Branded rows are skipped. */
+export function unbrandedQuestionTexts(themes: readonly FullReportTheme[]): string[] {
+  const questions: string[] = []
+  for (const theme of themes) {
+    for (const item of theme.questions) {
+      if (item.framing === 'unbranded') questions.push(item.question)
+    }
+  }
+  return questions
+}
+
+/**
+ * Zip Gemini replies onto unbranded questions only.
+ * Does not change `answer`, mention, or whoInstead. A short reply list leaves a miss.
+ */
+export function attachUnbrandedGemini(
+  themes: readonly FullReportTheme[],
+  replies: readonly string[],
+): FullReportTheme[] {
+  let cursor = 0
+  return themes.map((theme) => ({
+    ...theme,
+    questions: theme.questions.map((item) => {
+      if (item.framing !== 'unbranded') {
+        if (item.gemini === undefined) return item
+        const { gemini: _drop, ...rest } = item
+        return rest
+      }
+      const gemini = cleanGeminiText(replies[cursor])
+      cursor += 1
+      return { ...item, gemini }
+    }),
+  }))
 }
 
 /** A question is branded only when it names the brand. The badge stays honest. */
@@ -493,6 +541,7 @@ export function fullReportFromStored(result: unknown): FullReport | null {
         whoInstead: framing === 'unbranded' && mention ? parseWhoInstead(item.whoInstead, domain) : [],
       }
       if (mention) stored.mention = mention
+      if (framing === 'unbranded') stored.gemini = cleanGeminiText(item.gemini)
       questions.push(stored)
     }
     if (questions.length === 0) continue

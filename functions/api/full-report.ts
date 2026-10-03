@@ -1,26 +1,31 @@
 /**
  * POST /api/full-report { domain }
- * One signed-in full report: themed questions, each labeled Generated · OpenAI.
+ * One signed-in full report. OpenAI writes the questions and the answer on each row.
+ * Unbranded rows also carry a Gemini reply in `gemini`. A miss is an empty string.
+ * Branded rows stay OpenAI only. Mention and who-instead stay on the OpenAI answer.
  * The first freeFullReports runs are complimentary. A further run needs a paid
  * plan, then uses that plan's check quota. Free check quota cannot buy another
  * full report. No second report SKU.
- * OPENAI_API_KEY and SUPABASE_SERVICE_ROLE_KEY stay on the server.
+ * OPENAI_API_KEY, GEMINI_API_KEY, and SUPABASE_SERVICE_ROLE_KEY stay on the server.
  */
 
 import { historyCapForPlan, productConfigFromEnv, type ProductConfig } from '../../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
   applyRunPins,
+  attachUnbrandedGemini,
   cleanRunPins,
   fullReportPrompt,
   mergeThemePayloads,
   parseModelJson,
   selectThemePlan,
   shapeFullReport,
+  unbrandedQuestionTexts,
   type FullReportTheme,
   type PlannedTheme,
   type RunPin,
 } from '../../src/fullReport.ts'
+import { geminiModelFromEnv, geminiReplies } from './visibility.ts'
 import { mentionsBrand } from '../../src/mentionFacts.ts'
 import {
   cleanOwnedQuestions,
@@ -65,6 +70,22 @@ type ReportEnv = Record<string, string | undefined>
 type Reserved =
   | { ok: true; release: () => Promise<void> }
   | { ok: false; response: Response }
+
+/** Gemini text for unbranded rows. A missing key or a failed call is empty strings. */
+async function withUnbrandedGemini(
+  themes: FullReportTheme[],
+  env: ReportEnv | undefined,
+  scrub: string[],
+): Promise<FullReportTheme[]> {
+  const secret = typeof env?.GEMINI_API_KEY === 'string' ? env.GEMINI_API_KEY.trim() : ''
+  const replies = await geminiReplies({
+    apiKey: secret,
+    model: geminiModelFromEnv(env),
+    questions: unbrandedQuestionTexts(themes),
+    scrub: secret ? [...scrub, secret] : scrub,
+  })
+  return attachUnbrandedGemini(themes, replies)
+}
 
 function batches(plan: PlannedTheme[]): PlannedTheme[][] {
   if (plan.length <= 3) return [plan]
@@ -541,6 +562,7 @@ async function answerOwnedReport(opts: {
   config: ProductConfig
   request: Request
   checkId: string | null
+  env?: ReportEnv
 }): Promise<Response> {
   await ensureProfile(opts.sb, opts.userId).catch(() => {})
   const planName = await readPlan(opts.sb, opts.userId, opts.config)
@@ -571,15 +593,16 @@ async function answerOwnedReport(opts: {
   }
   const includesBranded =
     opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
-  const themes = mergeOwnedAnswers(
+  const merged = mergeOwnedAnswers(
     opts.owned,
     mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))),
     { domain: opts.domain, includesBranded },
   )
-  if (!themes) {
+  if (!merged) {
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
+  const themes = await withUnbrandedGemini(merged, opts.env, [opts.apiKey, opts.sb.serviceRole])
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,
@@ -619,7 +642,12 @@ async function answerOwnedReport(opts: {
     ...('runs' in saved ? { runs: saved.runs } : {}),
   }
   const text = JSON.stringify(body)
-  if (text.includes(opts.apiKey) || text.includes(opts.sb.serviceRole)) {
+  const geminiKey = typeof opts.env?.GEMINI_API_KEY === 'string' ? opts.env.GEMINI_API_KEY.trim() : ''
+  if (
+    text.includes(opts.apiKey) ||
+    text.includes(opts.sb.serviceRole) ||
+    (geminiKey !== '' && text.includes(geminiKey))
+  ) {
     return json(500, { error: 'Could not build the full report.' })
   }
   return new Response(text, {
@@ -668,6 +696,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       config,
       request,
       checkId: incoming.checkId,
+      env: context.env,
     })
   }
 
@@ -709,13 +738,14 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     themeMin: config.fullReportThemeMin,
     questionTarget: config.fullReportQuestionTarget,
   })
-  const themes = shaped
+  const shapedThemes = shaped
     ? applyRunPins(shaped, pins, { domain, includesBranded: config.fullReportIncludesBranded })
     : null
-  if (!themes) {
+  if (!shapedThemes) {
     await reserved.release()
     return json(502, { error: 'Couldn’t build the full report — try again.' })
   }
+  const themes = await withUnbrandedGemini(shapedThemes, context.env, [apiKey, sb.serviceRole])
 
   const saved = await saveReport(
     sb,
@@ -745,7 +775,8 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     },
   }
   const text = JSON.stringify(body)
-  if (text.includes(apiKey) || text.includes(sb.serviceRole)) {
+  const geminiKey = typeof context.env?.GEMINI_API_KEY === 'string' ? context.env.GEMINI_API_KEY.trim() : ''
+  if (text.includes(apiKey) || text.includes(sb.serviceRole) || (geminiKey !== '' && text.includes(geminiKey))) {
     return json(500, { error: 'Could not build the full report.' })
   }
   return new Response(text, {

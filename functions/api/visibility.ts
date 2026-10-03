@@ -385,7 +385,7 @@ function geminiPayloadText(payload: unknown): string {
  * Missing key, HTTP failure, and a bad payload all return empty strings.
  * Callers attach that array beside an OpenAI result they already built.
  */
-async function geminiReplies(opts: {
+export async function geminiReplies(opts: {
   apiKey: string
   model: string
   questions: string[]

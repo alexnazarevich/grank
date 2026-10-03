@@ -608,6 +608,128 @@ describe('unbranded engine blocks', () => {
       await server.close()
     }
   })
+
+  it('shows a Gemini block on each unbranded report answer, and a miss leaves the OpenAI answer', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule(
+        '/src/FullReportSection.tsx',
+      )) as typeof import('../src/FullReportSection.tsx')
+      const { fullReportFromStored } = (await server.ssrLoadModule(
+        '/src/fullReport.ts',
+      )) as typeof import('../src/fullReport.ts')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const openai = 'Jira and Asana show up for that job.'
+      const stored = fullReportFromStored({
+        report: 'full',
+        fullReport: {
+          domain: 'linear.app',
+          model: 'gpt-4o-mini',
+          includesBranded: true,
+          themes: [
+            {
+              id: 'problems',
+              title: 'Problems you solve',
+              framing: 'unbranded',
+              questions: [
+                {
+                  question: 'What should a team use to track issues?',
+                  answer: openai,
+                  framing: 'unbranded',
+                  mention: 'not_mentioned',
+                  whoInstead: ['Jira', 'Asana'],
+                  gemini: 'Monday is a common pick for this job.',
+                },
+              ],
+            },
+            {
+              id: 'described',
+              title: 'How you’re described',
+              framing: 'branded',
+              questions: [
+                {
+                  question: 'How do people describe Linear?',
+                  answer: 'Linear is a fast issue tracker.',
+                  framing: 'branded',
+                  mention: 'mentioned',
+                  whoInstead: ['Monday'],
+                  gemini: 'Monday should not render on branded.',
+                },
+              ],
+            },
+          ],
+        },
+      })
+      assert.ok(stored)
+      if (!stored) return
+      const hit = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          report: stored,
+          answersOpen: true,
+          whoInsteadOpen: true,
+        }),
+      )
+      assert.match(hit, /Generated · OpenAI/)
+      assert.match(hit, /Generated · Gemini/)
+      assert.match(hit, /Monday is a common pick for this job\./)
+      assert.match(hit, new RegExp(openai.replace(/[.]/g, '\\.')))
+      assert.equal(hit.includes("Gemini didn't answer."), false)
+      assert.equal(hit.includes('Monday should not render on branded.'), false)
+      const board = hit.slice(hit.indexOf('who-instead-board'), hit.indexOf('theme-block'))
+      assert.match(board, /Jira/)
+      assert.match(board, /Asana/)
+      assert.equal(board.includes('Monday'), false)
+      assert.equal(hit.includes('<strong>Monday</strong>'), false)
+
+      const missedStored = fullReportFromStored({
+        report: 'full',
+        fullReport: {
+          domain: 'linear.app',
+          model: 'gpt-4o-mini',
+          includesBranded: false,
+          themes: [
+            {
+              id: 'problems',
+              questions: [
+                {
+                  question: 'What should a team use to track issues?',
+                  answer: openai,
+                  mention: 'not_mentioned',
+                  whoInstead: ['Jira'],
+                  gemini: '',
+                },
+              ],
+            },
+          ],
+        },
+      })
+      assert.equal(missedStored?.themes[0]?.questions[0]?.gemini, '')
+      assert.equal(missedStored?.themes[0]?.questions[0]?.answer, openai)
+      const missed = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          report: missedStored!,
+          answersOpen: true,
+        }),
+      )
+      assert.match(missed, /Generated · OpenAI/)
+      assert.match(missed, /Generated · Gemini/)
+      assert.match(missed, /Gemini didn&#x27;t answer\./)
+      assert.match(missed, new RegExp(openai.replace(/[.]/g, '\\.')))
+      assert.match(missed, /<strong>Jira<\/strong>/)
+      assert.equal(missed.includes('Monday'), false)
+    } finally {
+      await server.close()
+    }
+  })
 })
 
 describe('land and dig mention mark', () => {
