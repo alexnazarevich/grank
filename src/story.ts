@@ -55,4 +55,5 @@ export const STORY = {
   whoInsteadBoardHelper: 'By topic, on unbranded questions this run — not market share.',
   whoInsteadBoardEmpty: 'No one else showed up yet.',
   whoInsteadBoardCount: 'Appeared on {n} questions',
+  whoInsteadBoardMore: '{n} more in the questions',
 } as const

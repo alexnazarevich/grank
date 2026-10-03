@@ -38,6 +38,9 @@ function WhoInsteadTopicRow({
           </li>
         ))}
       </ul>
+      {topic.more > 0 ? (
+        <p className="who-instead-more">{whoInsteadCountLabel(copy.whoInsteadBoardMore, topic.more)}</p>
+      ) : null}
       {open ? (
         <ul id={panelId} className="who-instead-questions">
           {topic.questions.map((item, index) => (

@@ -36,6 +36,8 @@ export type ProductCopy = {
   whoInsteadBoardEmpty: string
   /** `{n}` is how many unbranded questions in that topic named this substitute. */
   whoInsteadBoardCount: string
+  /** `{n}` is how many names were left off this topic row. */
+  whoInsteadBoardMore: string
   pinQuestionCta: string
   unpinQuestionCta: string
   editQuestionCta: string
@@ -161,6 +163,7 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     whoInsteadBoardHelper: STORY.whoInsteadBoardHelper,
     whoInsteadBoardEmpty: STORY.whoInsteadBoardEmpty,
     whoInsteadBoardCount: STORY.whoInsteadBoardCount,
+    whoInsteadBoardMore: STORY.whoInsteadBoardMore,
     pinQuestionCta: 'Pin',
     unpinQuestionCta: 'Unpin',
     editQuestionCta: 'Edit',
@@ -249,6 +252,7 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'whoInsteadBoardHelper',
   'whoInsteadBoardEmpty',
   'whoInsteadBoardCount',
+  'whoInsteadBoardMore',
   'pinQuestionCta',
   'unpinQuestionCta',
   'editQuestionCta',

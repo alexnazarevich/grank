@@ -1063,6 +1063,54 @@ describe('full-report question accordion', () => {
     )
     assert.equal(/SOV|market share %|% mentioned|Competitors/.test(whoInsteadCountLabel(STORY.whoInsteadBoardCount, 4)), false)
     assert.equal(/SOV|Competitors|competitive share/.test(STORY.whoInsteadBoardHelper), false)
+    assert.equal(topics[0]?.more, 0)
+    assert.equal(topics[1]?.more, 0)
+  })
+
+  it('caps each topic row at five names and keeps the rest on the questions', () => {
+    assert.equal(STORY.whoInsteadBoardMore, '{n} more in the questions')
+    assert.equal(whoInsteadCountLabel(STORY.whoInsteadBoardMore, 1), '1 more in the questions')
+    assert.equal(/Top 5|SOV|Competitors/.test(STORY.whoInsteadBoardMore), false)
+    const question = (text: string, whoInstead: string[]) => ({
+      question: text,
+      framing: 'unbranded' as const,
+      mention: 'not_mentioned' as const,
+      whoInstead,
+    })
+    const topics = whoInsteadByTopic([
+      {
+        id: 'problems',
+        title: 'Problems you solve',
+        framing: 'unbranded',
+        questions: [
+          question('Track?', ['Zebra', 'Mango', 'Delta']),
+          question('Plan?', ['Zebra', 'Apple', 'Mango']),
+          question('Week?', ['Zebra', 'Apple', 'Echo']),
+          question('Edge?', ['Foxtrot']),
+        ],
+      },
+      {
+        id: 'alternatives',
+        title: 'Alternatives & who else',
+        framing: 'unbranded',
+        questions: [question('Who else?', ['Notion'])],
+      },
+    ])
+    assert.deepEqual(topics[0]?.names, [
+      { name: 'Zebra', questions: 3 },
+      { name: 'Apple', questions: 2 },
+      { name: 'Mango', questions: 2 },
+      { name: 'Delta', questions: 1 },
+      { name: 'Echo', questions: 1 },
+    ])
+    assert.equal(topics[0]?.more, 1)
+    assert.equal(topics[0]?.names.some((row) => row.name === 'Foxtrot'), false)
+    assert.equal(
+      topics[0]?.questions.some((item) => item.question === 'Edge?' && item.names.includes('Foxtrot')),
+      true,
+    )
+    assert.deepEqual(topics[1]?.names, [{ name: 'Notion', questions: 1 }])
+    assert.equal(topics[1]?.more, 0)
   })
 
   it('opens the answer from the question and keeps the chip trailing', () => {
