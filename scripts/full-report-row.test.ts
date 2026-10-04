@@ -379,7 +379,7 @@ describe('full-report row markup', () => {
       const topics = html.split('<section class="competitors-topic">').slice(1)
       assert.equal(topics.length, 2)
       const rowNames = [...topics[0].matchAll(/<th scope="col">([^<]+)<\/th>/g)].map((match) => match[1])
-      assert.deepEqual(rowNames, ['You', 'Zebra', 'Apple', 'Mango', 'Delta', 'Echo'])
+      assert.deepEqual(rowNames, ['Topic', 'You', 'Zebra', 'Apple', 'Mango', 'Delta', 'Echo'])
       assert.equal(rowNames.includes('Foxtrot'), false)
       assert.match(topics[0], /<td>0%<\/td><td>75%<\/td><td>50%<\/td><td>50%<\/td><td>25%<\/td><td>25%<\/td>/)
       assert.equal(topics[0].includes('Top 5'), false)

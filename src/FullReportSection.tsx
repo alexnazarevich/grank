@@ -342,40 +342,45 @@ function CompetitorTopicBlock({
   const namesByQuestion = row.questions.map((item) => item.names)
   return (
     <section className="competitors-topic">
-      <button
-        type="button"
-        className="report-q-toggle"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((value) => !value)}
-      >
-        {word ? <span className="eyebrow theme-framing">{word}</span> : null}
-        <span className="report-q-text">{theme.title}</span>
-      </button>
-      <table className="competitors-grid">
-        <thead>
-          <tr>
-            <th scope="col">{copy.competitorsYou}</th>
-            {row.names.map((name) => (
-              <th key={name.name} scope="col">
-                {name.name}
+      <div className="run-grid-wrap">
+        <table className="run-grid competitors-grid">
+          <thead>
+            <tr>
+              <th scope="col">{copy.reportTopicColumn}</th>
+              <th scope="col">{copy.competitorsYou}</th>
+              {row.names.map((name) => (
+                <th key={name.name} scope="col">
+                  {name.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="topic-rate-row">
+              <th scope="row">
+                <button
+                  type="button"
+                  className="report-q-toggle"
+                  aria-expanded={open}
+                  aria-controls={panelId}
+                  onClick={() => setOpen((value) => !value)}
+                >
+                  {word ? <span className="eyebrow theme-framing">{word}</span> : null}
+                  <span className="report-q-text">{theme.title}</span>
+                </button>
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <PercentCell template={copy.themeMentionCell} pct={row.you} />
-            </td>
-            {row.names.map((name) => (
-              <td key={name.name}>
-                <PercentCell template={copy.themeMentionCell} pct={name.pct} />
+              <td>
+                <PercentCell template={copy.themeMentionCell} pct={row.you} />
               </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
+              {row.names.map((name) => (
+                <td key={name.name}>
+                  <PercentCell template={copy.themeMentionCell} pct={name.pct} />
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
       {open ? (
         <div id={panelId} className="topic-questions">
           <ul className="answers">
