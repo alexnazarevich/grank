@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer, type ViteDevServer } from 'vite'
@@ -203,6 +204,15 @@ describe('full report tabs', () => {
       assert.match(competitorsHtml, new RegExp(HELPER.replace(/[.]/g, '\\.')))
       assert.match(competitorsHtml, /<th scope="col">You<\/th><th scope="col">Jira<\/th>/)
       assert.match(competitorsHtml, /<td>50%<\/td><td>50%<\/td>/)
+      assert.match(
+        competitorsHtml,
+        /<div class="run-grid-wrap"><table class="run-grid competitors-grid">/,
+      )
+      assert.match(competitorsHtml, /<th scope="col">Topic<\/th><th scope="col">You<\/th>/)
+      assert.match(competitorsHtml, /<tr class="topic-rate-row"><th scope="row">/)
+      const css = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+      assert.match(css, /\.run-grid thead th:first-child,\s*\.run-grid tbody th \{[^}]*position: sticky; left: 0/)
+      assert.equal(/\.competitors-grid\s*\{[^}]*width:\s*auto/.test(css), false)
       assert.equal(competitorsHtml.includes('Monday'), false)
       assert.equal(competitorsHtml.includes('Sep 1, 12:00 AM'), false)
       assert.equal(competitorsHtml.includes('Sep 30, 3:04 PM'), false)
