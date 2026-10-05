@@ -38,7 +38,7 @@ Privileged values stay on Cloudflare Pages (Production and Preview). Never creat
 | --- | --- |
 | `OPENAI_API_KEY` | `/api/visibility` |
 | `OPENAI_MODEL` | optional; visibility still defaults to `gpt-4o-mini` |
-| `GEMINI_API_KEY` | `/api/visibility` unbranded replies and signed-in full reports. Not a `VITE_*` variable. A missing key does not fail the OpenAI result. The Function logs `gemini miss missing_key` (or `http_reject` plus status, `timeout`, `bad_json`, `empty`). A signed-in full report includes that as `geminiMiss`. Guest visibility responses do not. The on-screen line stays “Gemini didn't answer.” |
+| `GEMINI_API_KEY` | `/api/visibility` unbranded replies and signed-in full reports. Not a `VITE_*` variable. A missing key or a Gemini failure does not fail the OpenAI result. The wait is capped and, on Run again, overlaps OpenAI. The Function logs `gemini miss missing_key` (or `http_reject` plus status, `timeout`, `bad_json`, `empty`). A signed-in full report includes that as `geminiMiss` and still returns 200. Guest visibility responses do not. The on-screen line stays “Gemini didn't answer.” |
 | `GEMINI_MODEL` | optional flash model id. Default `gemini-2.5-flash`. |
 | `SUPABASE_URL` | `/api/checks` (server writes) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `/api/checks` only. Never ship to the browser. |
