@@ -2,6 +2,9 @@
  * POST /api/full-report { domain }
  * One signed-in full report. OpenAI writes the questions and the answer on each row.
  * Unbranded rows also carry a Gemini reply in `gemini`. A miss is an empty string.
+ * When every unbranded reply is blank, the response also has `geminiMiss`
+ * (`missing_key`, `http_reject` plus status, `timeout`, `bad_json`, or `empty`).
+ * That field is not stored on the check. This route requires sign-in.
  * Branded rows stay OpenAI only. Mention and who-instead stay on the OpenAI answer.
  * The first freeFullReports runs are complimentary. A further run needs a paid
  * plan, then uses that plan's check quota. Free check quota cannot buy another
@@ -25,7 +28,7 @@ import {
   type PlannedTheme,
   type RunPin,
 } from '../../src/fullReport.ts'
-import { geminiModelFromEnv, geminiReplies } from './visibility.ts'
+import { geminiMissForResponse, geminiModelFromEnv, geminiReplies, type GeminiMiss } from './visibility.ts'
 import { mentionsBrand } from '../../src/mentionFacts.ts'
 import {
   cleanOwnedQuestions,
@@ -71,20 +74,28 @@ type Reserved =
   | { ok: true; release: () => Promise<void> }
   | { ok: false; response: Response }
 
-/** Gemini text for unbranded rows. A missing key or a failed call is empty strings. */
+/** Gemini text for unbranded rows. A missing key or a failed call is empty strings and one miss class. */
 async function withUnbrandedGemini(
   themes: FullReportTheme[],
   env: ReportEnv | undefined,
   scrub: string[],
-): Promise<FullReportTheme[]> {
+): Promise<{ themes: FullReportTheme[]; geminiMiss?: GeminiMiss }> {
   const secret = typeof env?.GEMINI_API_KEY === 'string' ? env.GEMINI_API_KEY.trim() : ''
-  const replies = await geminiReplies({
+  const result = await geminiReplies({
     apiKey: secret,
     model: geminiModelFromEnv(env),
     questions: unbrandedQuestionTexts(themes),
     scrub: secret ? [...scrub, secret] : scrub,
   })
-  return attachUnbrandedGemini(themes, replies)
+  return {
+    themes: attachUnbrandedGemini(themes, result.replies),
+    ...(result.miss ? { geminiMiss: result.miss } : {}),
+  }
+}
+
+function withGeminiMiss(body: Record<string, unknown>, miss?: GeminiMiss): Record<string, unknown> {
+  if (!miss) return body
+  return { ...body, geminiMiss: geminiMissForResponse(miss) }
 }
 
 function batches(plan: PlannedTheme[]): PlannedTheme[][] {
@@ -602,7 +613,8 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
-  const themes = await withUnbrandedGemini(merged, opts.env, [opts.apiKey, opts.sb.serviceRole])
+  const gemini = await withUnbrandedGemini(merged, opts.env, [opts.apiKey, opts.sb.serviceRole])
+  const themes = gemini.themes
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,
@@ -631,16 +643,19 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(saved.status, { error: saved.error })
   }
-  const body = {
-    ok: true,
-    report: 'full',
-    domain: opts.domain,
-    model: MODEL,
-    includesBranded,
-    themes,
-    check: { id: saved.id, domain: opts.domain, createdAt: saved.createdAt },
-    ...('runs' in saved ? { runs: saved.runs } : {}),
-  }
+  const body = withGeminiMiss(
+    {
+      ok: true,
+      report: 'full',
+      domain: opts.domain,
+      model: MODEL,
+      includesBranded,
+      themes,
+      check: { id: saved.id, domain: opts.domain, createdAt: saved.createdAt },
+      ...('runs' in saved ? { runs: saved.runs } : {}),
+    },
+    gemini.geminiMiss,
+  )
   const text = JSON.stringify(body)
   const geminiKey = typeof opts.env?.GEMINI_API_KEY === 'string' ? opts.env.GEMINI_API_KEY.trim() : ''
   if (
@@ -745,7 +760,8 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     await reserved.release()
     return json(502, { error: 'Couldn’t build the full report — try again.' })
   }
-  const themes = await withUnbrandedGemini(shapedThemes, context.env, [apiKey, sb.serviceRole])
+  const gemini = await withUnbrandedGemini(shapedThemes, context.env, [apiKey, sb.serviceRole])
+  const themes = gemini.themes
 
   const saved = await saveReport(
     sb,
@@ -761,19 +777,22 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     return json(502, { error: 'Could not save this full report.' })
   }
 
-  const body = {
-    ok: true,
-    report: 'full',
-    domain,
-    model: MODEL,
-    includesBranded: config.fullReportIncludesBranded,
-    themes,
-    check: {
-      id: saved.id,
+  const body = withGeminiMiss(
+    {
+      ok: true,
+      report: 'full',
       domain,
-      createdAt: saved.createdAt,
+      model: MODEL,
+      includesBranded: config.fullReportIncludesBranded,
+      themes,
+      check: {
+        id: saved.id,
+        domain,
+        createdAt: saved.createdAt,
+      },
     },
-  }
+    gemini.geminiMiss,
+  )
   const text = JSON.stringify(body)
   const geminiKey = typeof context.env?.GEMINI_API_KEY === 'string' ? context.env.GEMINI_API_KEY.trim() : ''
   if (text.includes(apiKey) || text.includes(sb.serviceRole) || (geminiKey !== '' && text.includes(geminiKey))) {
