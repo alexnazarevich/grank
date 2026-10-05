@@ -3,6 +3,8 @@
  * Live questions and answered-by-you via OpenAI gpt-4o-mini.
  * mode=unbranded (default): category / JTBD questions, plus who-instead.
  * The same unbranded questions also get a Gemini reply, stored beside the OpenAI result.
+ * A Gemini miss is empty strings. This route is also used by guests, so the miss class
+ * is logged (`gemini miss …`) and is not included on the response.
  * mode=branded: questions that name the brand, each with a short OpenAI answer. No Gemini.
  * No who-instead on branded. Missing answers stay empty.
  * OPENAI_API_KEY and GEMINI_API_KEY are read from the Pages env only. Never returned.
@@ -374,25 +376,134 @@ function geminiPayloadText(payload: unknown): string {
   const parts = content?.parts
   if (!Array.isArray(parts)) return ''
   return parts
-    .map((part) => (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
-      ? (part as { text: string }).text
-      : ''))
+    .map((part) => {
+      if (!part || typeof part !== 'object') return ''
+      const rec = part as { text?: unknown; thought?: unknown }
+      // A thought summary is not the answer. Joining it onto the JSON blanks every reply.
+      if (rec.thought === true) return ''
+      return typeof rec.text === 'string' ? rec.text : ''
+    })
     .join('')
+}
+
+export const GEMINI_MISS_CLASSES = ['missing_key', 'http_reject', 'timeout', 'bad_json', 'empty'] as const
+
+export type GeminiMissClass = (typeof GEMINI_MISS_CLASSES)[number]
+
+/** One class for the single Gemini call. `status` is set only for http_reject. */
+export type GeminiMiss = {
+  class: GeminiMissClass
+  status?: number
+}
+
+export type GeminiReplySet = {
+  replies: string[]
+  miss?: GeminiMiss
+}
+
+function httpStatus(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 100 || value > 599) return undefined
+  return value
+}
+
+/** Signed-in response shape. Class, plus the HTTP status for http_reject. No body, prompt, or key. */
+export function geminiMissForResponse(miss: GeminiMiss): { class: GeminiMissClass; status?: number } {
+  switch (miss.class) {
+    case 'http_reject': {
+      const status = httpStatus(miss.status)
+      return status === undefined ? { class: 'http_reject' } : { class: 'http_reject', status }
+    }
+    case 'missing_key':
+    case 'timeout':
+    case 'bad_json':
+    case 'empty':
+      return { class: miss.class }
+  }
+}
+
+/** Pages Function log line. Same vocabulary as geminiMiss, nothing else. */
+export function geminiMissLogLine(miss: GeminiMiss): string {
+  const safe = geminiMissForResponse(miss)
+  if (safe.class === 'http_reject' && typeof safe.status === 'number') return `gemini miss http_reject ${safe.status}`
+  return `gemini miss ${safe.class}`
+}
+
+export function geminiMaxOutputTokens(questionCount: number): number {
+  const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
+  return Math.min(8192, 600 + count * 280)
+}
+
+/**
+ * 2.5 Flash thinks unless thinkingBudget is 0, and those tokens count against maxOutputTokens.
+ * The old cap (at most 2400, often ~1000) then comes back empty, so every unbranded question misses.
+ * Older flash ids do not get thinkingConfig: a 2.0 model can reject the field.
+ */
+export function geminiGenerationConfig(model: string, questionCount: number): {
+  temperature: number
+  maxOutputTokens: number
+  responseMimeType: 'application/json'
+  thinkingConfig?: { thinkingBudget: 0 }
+} {
+  const base = {
+    temperature: 0.2,
+    maxOutputTokens: geminiMaxOutputTokens(questionCount),
+    responseMimeType: 'application/json' as const,
+  }
+  if (model.toLowerCase().startsWith('gemini-2.5-flash')) {
+    return { ...base, thinkingConfig: { thinkingBudget: 0 } }
+  }
+  return base
+}
+
+function answersArrayPresent(raw: string): boolean {
+  let text = raw.trim()
+  if (!text) return false
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text)
+  if (fence) text = fence[1].trim()
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return false
+  try {
+    const data = JSON.parse(text.slice(start, end + 1)) as unknown
+    return !!data && typeof data === 'object' && !Array.isArray(data) && Array.isArray((data as { answers?: unknown }).answers)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Blank replies from one payload.
+ * Text with no answers array is bad_json. An answers array of blanks, or no text, is empty.
+ * Any non-blank reply means the call is not a miss.
+ */
+export function geminiTextMiss(raw: string, count: number): { replies: string[]; miss?: GeminiMiss } {
+  if (count <= 0) return { replies: [] }
+  const replies = parseGeminiAnswers(raw, count)
+  if (replies.some((item) => item !== '')) return { replies }
+  if (!raw.trim() || answersArrayPresent(raw)) return { replies, miss: { class: 'empty' } }
+  return { replies, miss: { class: 'bad_json' } }
+}
+
+function noteGeminiMiss(replies: string[], miss: GeminiMiss): GeminiReplySet {
+  const safe = geminiMissForResponse(miss)
+  console.info(geminiMissLogLine(safe))
+  return { replies, miss: safe }
 }
 
 /**
  * Same unbranded questions, Gemini text only.
- * Missing key, HTTP failure, and a bad payload all return empty strings.
- * Callers attach that array beside an OpenAI result they already built.
+ * One call, one miss class when every reply is blank.
+ * Missing key, an HTTP error, a timeout, bad JSON, and an empty payload stay empty strings.
  */
 export async function geminiReplies(opts: {
   apiKey: string
   model: string
   questions: string[]
   scrub: string[]
-}): Promise<string[]> {
-  const misses = () => opts.questions.map(() => '')
-  if (!opts.apiKey || opts.questions.length === 0) return misses()
+}): Promise<GeminiReplySet> {
+  const blank = () => opts.questions.map(() => '')
+  if (opts.questions.length === 0) return { replies: [] }
+  if (!opts.apiKey.trim()) return noteGeminiMiss(blank(), { class: 'missing_key' })
   const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
   let res: Response
   try {
@@ -405,24 +516,30 @@ export async function geminiReplies(opts: {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: Math.min(2400, 500 + opts.questions.length * 220),
-          responseMimeType: 'application/json',
-        },
+        generationConfig: geminiGenerationConfig(opts.model, opts.questions.length),
       }),
     })
   } catch {
-    return misses()
+    // No HTTP status: AbortSignal timeout or another transport failure.
+    // The error message is not logged; it can contain the API key.
+    return noteGeminiMiss(blank(), { class: 'timeout' })
   }
-  if (!res.ok) return misses()
+  if (!res.ok) {
+    try {
+      await res.body?.cancel()
+    } catch {
+      // Status only. Never read the body.
+    }
+    return noteGeminiMiss(blank(), { class: 'http_reject', status: res.status })
+  }
   try {
     const text = geminiPayloadText(await res.json())
-    return parseGeminiAnswers(scrubKeys(text, opts.scrub), opts.questions.length).map((answer) =>
-      scrubKeys(answer, opts.scrub),
-    )
+    const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length)
+    const replies = outcome.replies.map((answer) => scrubKeys(answer, opts.scrub))
+    if (!outcome.miss) return { replies }
+    return noteGeminiMiss(replies, outcome.miss)
   } catch {
-    return misses()
+    return noteGeminiMiss(blank(), { class: 'bad_json' })
   }
 }
 
@@ -544,13 +661,15 @@ async function completeVisibility(
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
   if (mode === 'branded') body.answers = answers
   // Gemini text is a sibling of the OpenAI result. A miss is empty strings, not a failed check.
+  // This route is also used by guests, so the miss class stays in the Function log.
   if (mode === 'unbranded') {
-    body.gemini = await geminiReplies({
+    const geminiResult = await geminiReplies({
       apiKey: gemini.apiKey,
       model: gemini.model,
       questions,
       scrub: [apiKey, gemini.apiKey],
     })
+    body.gemini = geminiResult.replies
   }
   return json(200, body)
 }

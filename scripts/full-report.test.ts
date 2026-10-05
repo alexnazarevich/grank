@@ -1266,6 +1266,11 @@ describe('full-report question accordion', () => {
       assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
       assert.equal(problems?.answer, 'Jira shows up for that job.')
       assert.equal(problems?.gemini, '')
+      assert.deepEqual((JSON.parse(text) as { geminiMiss?: unknown }).geminiMiss, { class: 'missing_key' })
+      assert.equal(text.includes('gemini miss'), false)
+      const savedCheck = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
+      assert.equal(savedCheck?.body.includes('geminiMiss'), false)
+      assert.equal(savedCheck?.body.includes('missing_key'), false)
       assert.equal(described?.question, added)
       assert.equal(described?.mention, 'mentioned')
       assert.deepEqual(described?.whoInstead, [])
@@ -1291,12 +1296,26 @@ describe('full-report question accordion', () => {
     const added = 'How do teams describe Linear?'
     const geminiKey = 'gemini-report-key-should-not-leak'
     const openaiAnswer = 'Jira and Asana show up for that job.'
-    const cases: { geminiStatus: number | 'throw' | 'ok'; expectText: string }[] = [
-      { geminiStatus: 'ok', expectText: 'Monday is a common pick for this job. key [redacted] must not leak.' },
-      { geminiStatus: 500, expectText: '' },
-      { geminiStatus: 'throw', expectText: '' },
+    const cases: {
+      geminiStatus: number | 'throw' | 'timeout' | 'bad_json' | 'empty' | 'ok'
+      expectText: string
+      miss?: { class: string; status?: number }
+      log: string
+    }[] = [
+      { geminiStatus: 'ok', expectText: 'Monday is a common pick for this job. key [redacted] must not leak.', log: '' },
+      { geminiStatus: 400, expectText: '', miss: { class: 'http_reject', status: 400 }, log: 'gemini miss http_reject 400' },
+      { geminiStatus: 500, expectText: '', miss: { class: 'http_reject', status: 500 }, log: 'gemini miss http_reject 500' },
+      { geminiStatus: 'timeout', expectText: '', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
+      { geminiStatus: 'throw', expectText: '', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
+      { geminiStatus: 'bad_json', expectText: '', miss: { class: 'bad_json' }, log: 'gemini miss bad_json' },
+      { geminiStatus: 'empty', expectText: '', miss: { class: 'empty' }, log: 'gemini miss empty' },
     ]
     for (const item of cases) {
+      const logs: string[] = []
+      const prevInfo = console.info
+      console.info = (...args: unknown[]) => {
+        logs.push(args.map((part) => String(part)).join(' '))
+      }
       const mock = install((call) => {
         if (call.url.includes('/auth/v1/user')) {
           return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
@@ -1349,9 +1368,28 @@ describe('full-report question accordion', () => {
           assert.match(call.url, /\/models\/gemini-2\.5-flash:generateContent$/)
           assert.equal(call.body.includes('whoInstead'), false)
           assert.equal(call.body.includes(geminiKey), false)
+          const sent = JSON.parse(call.body) as {
+            generationConfig?: { thinkingConfig?: { thinkingBudget?: number }; responseMimeType?: string }
+          }
+          assert.equal(sent.generationConfig?.thinkingConfig?.thinkingBudget, 0)
+          assert.equal(sent.generationConfig?.responseMimeType, 'application/json')
+          if (item.geminiStatus === 'timeout') {
+            const err = new Error(`timed out ${geminiKey}`)
+            err.name = 'TimeoutError'
+            throw err
+          }
           if (item.geminiStatus === 'throw') throw new Error(`network ${geminiKey}`)
-          if (item.geminiStatus !== 'ok') {
-            return new Response(JSON.stringify({ error: { message: `bad ${geminiKey}` } }), { status: item.geminiStatus })
+          if (item.geminiStatus === 'bad_json') return new Response(`not-json ${geminiKey}`, { status: 200 })
+          if (item.geminiStatus === 'empty') {
+            return new Response(
+              JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answers":[""]}' }] } }] }),
+              { status: 200 },
+            )
+          }
+          if (typeof item.geminiStatus === 'number') {
+            return new Response(JSON.stringify({ error: { message: `bad ${geminiKey} prompt should not leak` } }), {
+              status: item.geminiStatus,
+            })
           }
           return new Response(
             JSON.stringify({
@@ -1399,7 +1437,11 @@ describe('full-report question accordion', () => {
         assert.equal(text.includes(KEY), false)
         assert.equal(text.includes(geminiKey), false)
         assert.equal(text.includes(SERVICE), false)
+        assert.equal(text.includes('prompt should not leak'), false)
+        assert.equal(text.includes('not-json'), false)
+        assert.equal(text.includes('timed out'), false)
         const body = JSON.parse(text) as {
+          geminiMiss?: { class: string; status?: number }
           themes: {
             id: string
             framing?: string
@@ -1423,6 +1465,13 @@ describe('full-report question accordion', () => {
         assert.equal(described?.mention, 'mentioned')
         assert.deepEqual(described?.whoInstead, [])
         assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+        if (item.miss) assert.deepEqual(body.geminiMiss, item.miss)
+        else assert.equal(body.geminiMiss, undefined)
+        assert.deepEqual(logs, item.log ? [item.log] : [])
+        assert.equal(logs.some((line) => line.includes(geminiKey) || line.includes(KEY)), false)
+        const savedCheck = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
+        assert.equal(savedCheck?.body.includes('geminiMiss'), false)
+        assert.equal(savedCheck?.body.includes(geminiKey), false)
         const read = interpretFullReportResponse(200, JSON.parse(text), false)
         assert.equal(read.ok, true)
         if (!read.ok) return
@@ -1433,6 +1482,8 @@ describe('full-report question accordion', () => {
         assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
         assert.equal(readProblems?.mention, 'not_mentioned')
         assert.equal(readDescribed?.gemini, undefined)
+        assert.equal(JSON.stringify(read).includes('geminiMiss'), false)
+        assert.equal(JSON.stringify(read).includes('http_reject'), false)
         const names = whoInsteadByTopic(read.report.themes).flatMap((topic) => topic.names.map((row) => row.name))
         assert.deepEqual(names.sort(), ['Asana', 'Jira'])
         assert.equal(names.includes('Monday'), false)
@@ -1442,6 +1493,7 @@ describe('full-report question accordion', () => {
         )
         assert.equal(mock.calls.some((call) => call.url.includes('aiplatform.googleapis.com')), false)
       } finally {
+        console.info = prevInfo
         mock.restore()
       }
     }
