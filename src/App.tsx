@@ -1229,6 +1229,7 @@ export default function App() {
       if (result.checkId) setSavedId(result.checkId)
       if (!result.openaiPaused && result.runs.length > 0) setRuns(result.runs)
     }
+    // This response's geminiMiss stays until the next stored load. Do not clear it here.
     applyReportResult(result)
   }
 

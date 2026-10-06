@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { BRANDED_SYSTEM_PROMPT, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, GEMINI_REPORT_BUDGET_MS, GEMINI_TIMEOUT_CAP_MS, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissLogLine, geminiModelFromEnv, geminiReplies, geminiTextMiss, geminiTimeoutFromEnv, geminiWaitMs, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { BRANDED_SYSTEM_PROMPT, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, GEMINI_REPORT_BUDGET_MS, GEMINI_TIMEOUT_CAP_MS, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiApiKeyFromEnv, geminiGenerateBody, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissLogLine, geminiModelFromEnv, geminiReplies, geminiTextMiss, geminiTimeoutFromEnv, geminiWaitMs, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
 import { geminiRow } from '../src/engineBlock.ts'
 import { whoInsteadByTopic } from '../src/mentionLabel.ts'
 import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
@@ -1252,6 +1252,88 @@ describe('gemini on unbranded questions', () => {
     assert.equal(geminiMissLogLine({ class: 'bad_json' }), 'gemini miss bad_json')
     assert.equal(geminiMissLogLine({ class: 'empty' }), 'gemini miss empty')
     assert.equal(geminiMissLogLine({ class: 'missing_key', status: 500 }).includes('500'), false)
+
+    const shapeQuestions = ['What should a team use for issue tracking?']
+    const model = geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-flash' })
+    const prompt = geminiAnswerPrompt(shapeQuestions)
+    const documented = geminiGenerateBody(model, prompt, shapeQuestions.length)
+    const documentedUrl = geminiGenerateUrl(model)
+    assert.equal(
+      documentedUrl,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+    )
+    assert.equal(documentedUrl.includes('key='), false)
+    assert.equal(documented.contents[0].role, 'user')
+    assert.equal(documented.contents[0].parts.length, 1)
+    assert.equal(documented.contents[0].parts[0].text, prompt)
+    assert.deepEqual(documented.generationConfig.thinkingConfig, { thinkingBudget: 0 })
+    assert.equal(documented.generationConfig.responseMimeType, 'application/json')
+    assert.equal(documented.generationConfig.temperature, 0.2)
+    assert.equal(documented.generationConfig.maxOutputTokens, 560)
+    assert.equal('responseSchema' in documented.generationConfig, false)
+    assert.equal('thinkingConfig' in documented, false)
+    assert.equal('responseSchema' in documented, false)
+    assert.equal(JSON.stringify(documented).includes(GEMINI_KEY), false)
+
+    assert.equal(geminiApiKeyFromEnv(undefined), '')
+    assert.equal(geminiApiKeyFromEnv({ GEMINI_API_KEY: '  gemini-key  ' }), 'gemini-key')
+    assert.equal(geminiApiKeyFromEnv({ GEMINI_API_KEY: '   ' }), '')
+    assert.equal(geminiApiKeyFromEnv({ VITE_GEMINI_API_KEY: GEMINI_KEY }), '')
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: '  gemini-2.5-flash  ' }), 'gemini-2.5-flash')
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'models/gemini-2.5-flash' }), GEMINI_MODEL_DEFAULT)
+    assert.equal(geminiModelFromEnv({ VITE_GEMINI_MODEL: 'gemini-2.0-flash' }), GEMINI_MODEL_DEFAULT)
+    assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), GEMINI_MODEL_DEFAULT)
+    const proUrl = geminiGenerateUrl(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }))
+    assert.equal(proUrl, geminiGenerateUrl(GEMINI_MODEL_DEFAULT))
+    const proBody = geminiGenerateBody(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), prompt, 1)
+    assert.deepEqual(proBody.generationConfig.thinkingConfig, { thinkingBudget: 0 })
+
+    const shapeCalls: { url: string; body: string; key: string | null }[] = []
+    const prevFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const headers = new Headers(init?.headers)
+      shapeCalls.push({ url, body: String(init?.body || ''), key: headers.get('x-goog-api-key') })
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"answers":["A tracker."]}' }] } }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch
+    try {
+      const sent = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model,
+        questions: shapeQuestions,
+        scrub: [],
+        timeoutMs: 1_000,
+      })
+      assert.equal(sent.miss, undefined)
+      assert.equal(shapeCalls.length, 1)
+      assert.equal(shapeCalls[0]?.url, documentedUrl)
+      assert.equal(shapeCalls[0]?.key, GEMINI_KEY)
+      assert.equal(shapeCalls[0]?.url.includes(GEMINI_KEY), false)
+      assert.equal(shapeCalls[0]?.body.includes(GEMINI_KEY), false)
+      assert.deepEqual(JSON.parse(shapeCalls[0]?.body || '{}'), documented)
+      const blankKey = await geminiReplies({
+        apiKey: '   ',
+        model,
+        questions: shapeQuestions,
+        scrub: [],
+        timeoutMs: 1_000,
+      })
+      assert.deepEqual(blankKey, { replies: [''], miss: { class: 'missing_key' } })
+      assert.equal(shapeCalls.length, 1)
+      const viteOnly = await geminiReplies({
+        apiKey: geminiApiKeyFromEnv({ VITE_GEMINI_API_KEY: GEMINI_KEY }),
+        model: geminiModelFromEnv({ VITE_GEMINI_MODEL: 'gemini-2.0-flash', GEMINI_MODEL: 'gemini-2.5-pro' }),
+        questions: shapeQuestions,
+        scrub: [],
+      })
+      assert.deepEqual(viteOnly.miss, { class: 'missing_key' })
+      assert.equal(shapeCalls.length, 1)
+    } finally {
+      globalThis.fetch = prevFetch
+    }
 
     const filled = geminiTextMiss(JSON.stringify({ answers: ['Monday is a common pick.', ''] }), 2)
     assert.equal(filled.miss, undefined)
