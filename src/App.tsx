@@ -1211,6 +1211,7 @@ export default function App() {
     if (questions.length < 1) return
     setBusy(true)
     setQuestionsNote('')
+    setReportMessage('')
     if (savedId) {
       const saved = await updateCheckQuestions(session.accessToken, savedId, questions)
       if (!saved.ok) {
@@ -1623,6 +1624,7 @@ export default function App() {
                 </button>
               </div>
             ) : null}
+            {reportPhase === 'error' && reportMessage ? <p className="err">{reportMessage}</p> : null}
             {questionsNote ? <p className={questionsNote === 'Questions saved.' ? 'status' : 'err'}>{questionsNote}</p> : null}
           </article>
         </main>

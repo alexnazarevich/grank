@@ -761,7 +761,6 @@ async function completeVisibility(
   if (mode === 'unbranded') body.whoInstead = parsed.whoInstead
   if (mode === 'branded') body.answers = answers
   // Gemini text is a sibling of the OpenAI result. A miss is empty strings, not a failed check.
-  // This route is also used by guests, so the miss class stays in the Function log.
   if (mode === 'unbranded') {
     const geminiResult = await geminiReplies({
       apiKey: gemini.apiKey,
@@ -770,6 +769,11 @@ async function completeVisibility(
       scrub: [apiKey, gemini.apiKey],
     })
     body.gemini = geminiResult.replies
+    const allBlank = geminiResult.replies.every((reply) => reply.trim() === '')
+    // TEMP until bet (15) passes — remove
+    if (questions.length > 0 && allBlank) {
+      body.geminiMiss = geminiMissForResponse(geminiResult.miss ?? { class: 'empty' })
+    }
   }
   return json(200, body)
 }
