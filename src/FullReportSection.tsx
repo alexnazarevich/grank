@@ -89,6 +89,7 @@ function ReportQuestion({
   chipId,
   startOpen = false,
   besideNames,
+  openaiPaused = false,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
@@ -97,12 +98,13 @@ function ReportQuestion({
   startOpen?: boolean
   /** Names already listed on the competitors expand, so the answer panel does not repeat them. */
   besideNames?: string[]
+  openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
   const text = item.answer.trim()
-  const label = item.mention ? mentionStatusLabel(item.mention, copy) : ''
+  const label = openaiPaused ? STORY.openaiPausedMark : item.mention ? mentionStatusLabel(item.mention, copy) : ''
   const names =
-    open && !besideNames && item.mention && item.mention !== 'mentioned'
+    !openaiPaused && open && !besideNames && item.mention && item.mention !== 'mentioned'
       ? whoInsteadNames(item.whoInstead, item.framing)
       : []
   return (
@@ -122,13 +124,14 @@ function ReportQuestion({
         {label ? (
           <span
             id={chipId}
-            className={`tag plain mention report-mention${item.mention === 'mentioned' ? ' mentioned' : ''}`}
+            className={`tag plain mention report-mention${item.mention === 'mentioned' && !openaiPaused ? ' mentioned' : ''}`}
           >
             {label}
           </span>
         ) : null}
       </div>
-      {besideNames && besideNames.length > 0 ? (
+      {openaiPaused ? <p className="who-instead-under">{STORY.openaiPausedMark}</p> : null}
+      {!openaiPaused && besideNames && besideNames.length > 0 ? (
         <>
           <p className="who-instead-under">{copy.mentionWhoInstead}</p>
           <NameList names={besideNames} />
@@ -137,11 +140,11 @@ function ReportQuestion({
       {open ? (
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? <NameList names={names} /> : null}
-          <div className={text ? 'answer' : 'answer miss'}>
+          <div className={openaiPaused || text ? 'answer' : 'answer miss'}>
             <div className="answer-meta">
               <span className="tag plain live">{GENERATED}</span>
             </div>
-            <p className="answer-body">{text || STORY.answerMiss}</p>
+            <p className="answer-body">{openaiPaused ? STORY.openaiPausedAnswer : text || STORY.answerMiss}</p>
           </div>
           {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
         </div>
@@ -157,17 +160,21 @@ function ThemeGridRow({
   runs,
   panelId,
   startOpen = false,
+  openaiPaused = false,
 }: {
   item: FullReportQuestion
   copy: ProductCopy
   runs: CheckRun[]
   panelId: string
   startOpen?: boolean
+  openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
   const text = item.answer.trim()
   const names =
-    open && item.mention && item.mention !== 'mentioned' ? whoInsteadNames(item.whoInstead, item.framing) : []
+    !openaiPaused && open && item.mention && item.mention !== 'mentioned'
+      ? whoInsteadNames(item.whoInstead, item.framing)
+      : []
   const cells = cellsForQuestion(item.question, runs)
   return (
     <>
@@ -200,7 +207,8 @@ function ThemeGridRow({
         <tr className="theme-answer-row">
           <td colSpan={runs.length + 1}>
             <div id={panelId} className="report-q-panel">
-              {names.length > 0 ? (
+              {openaiPaused ? <p className="who-instead-under">{STORY.openaiPausedMark}</p> : null}
+              {!openaiPaused && names.length > 0 ? (
                 <ul className="mention-names report-who">
                   {names.map((name) => (
                     <li key={name}>
@@ -209,11 +217,11 @@ function ThemeGridRow({
                   ))}
                 </ul>
               ) : null}
-              <div className={text ? 'answer' : 'answer miss'}>
+              <div className={openaiPaused || text ? 'answer' : 'answer miss'}>
                 <div className="answer-meta">
                   <span className="tag plain live">{GENERATED}</span>
                 </div>
-                <p className="answer-body">{text || STORY.answerMiss}</p>
+                <p className="answer-body">{openaiPaused ? STORY.openaiPausedAnswer : text || STORY.answerMiss}</p>
               </div>
               {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
             </div>
@@ -224,7 +232,16 @@ function ThemeGridRow({
   )
 }
 
-function PercentCell({ template, pct }: { template: string; pct: number | null | undefined }) {
+function PercentCell({
+  template,
+  pct,
+  paused = false,
+}: {
+  template: string
+  pct: number | null | undefined
+  paused?: boolean
+}) {
+  if (paused) return <span className="paused-mark">{STORY.openaiPausedMark}</span>
   if (typeof pct !== 'number') return <span className="muted">—</span>
   return themeRateLabel(template, pct)
 }
@@ -238,6 +255,7 @@ function TopicOverTimeRow({
   columnCount,
   startOpen,
   answersOpen,
+  openaiPaused = false,
 }: {
   theme: FullReportTheme
   copy: ProductCopy
@@ -246,6 +264,7 @@ function TopicOverTimeRow({
   columnCount: number
   startOpen: boolean
   answersOpen: boolean
+  openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
   const framing = themeFramingOf(theme)
@@ -268,7 +287,7 @@ function TopicOverTimeRow({
         </th>
         {Array.from({ length: columnCount }, (_, index) => (
           <td key={`${theme.id}:${theme.framing}:${index}`}>
-            <PercentCell template={copy.themeMentionCell} pct={percents[index]} />
+            <PercentCell template={copy.themeMentionCell} pct={percents[index]} paused={openaiPaused} />
           </td>
         ))}
       </tr>
@@ -298,6 +317,7 @@ function TopicOverTimeRow({
                           runs={runs}
                           panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                           startOpen={answersOpen}
+                          openaiPaused={openaiPaused}
                         />
                       ))}
                     </tbody>
@@ -313,6 +333,7 @@ function TopicOverTimeRow({
                       panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                       chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
                       startOpen={answersOpen}
+                      openaiPaused={openaiPaused}
                     />
                   ))}
                 </ul>
@@ -332,12 +353,14 @@ function CompetitorTopicBlock({
   copy,
   startOpen,
   answersOpen,
+  openaiPaused = false,
 }: {
   theme: FullReportTheme
   row: CompetitorTopic
   copy: ProductCopy
   startOpen: boolean
   answersOpen: boolean
+  openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
   const framing = themeFramingOf(theme)
@@ -374,11 +397,11 @@ function CompetitorTopicBlock({
                 </button>
               </th>
               <td>
-                <PercentCell template={copy.themeMentionCell} pct={row.you} />
+                <PercentCell template={copy.themeMentionCell} pct={row.you} paused={openaiPaused} />
               </td>
               {row.names.map((name) => (
                 <td key={name.name}>
-                  <PercentCell template={copy.themeMentionCell} pct={name.pct} />
+                  <PercentCell template={copy.themeMentionCell} pct={name.pct} paused={openaiPaused} />
                 </td>
               ))}
             </tr>
@@ -397,6 +420,7 @@ function CompetitorTopicBlock({
                 chipId={`competitors-m-${theme.id}-${theme.framing}-${index}`}
                 startOpen={answersOpen}
                 besideNames={namesByQuestion[index] ?? []}
+                openaiPaused={openaiPaused}
               />
             ))}
           </ul>
@@ -565,6 +589,7 @@ export function FullReportSection({
   initialEngine = 'openai',
   topicsOpen = false,
   geminiMiss = null,
+  openaiPaused = false,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -586,6 +611,8 @@ export function FullReportSection({
   topicsOpen?: boolean
   /** Class from this Run again response. Omitted for a stored check. */
   geminiMiss?: SignedGeminiMiss | null
+  /** This Run again skipped OpenAI. Stored checks leave this false. */
+  openaiPaused?: boolean
 }) {
   const [tab, setTab] = useState<ReportTab>(initialTab)
   const [engine, setEngine] = useState<ReportEngine>(initialEngine)
@@ -687,6 +714,7 @@ export function FullReportSection({
                         columnCount={columnCount}
                         startOpen={topicsStartOpen}
                         answersOpen={answersOpen}
+                        openaiPaused={openaiPaused}
                       />
                     )
                   })}
@@ -707,6 +735,7 @@ export function FullReportSection({
               copy={copy}
               startOpen={topicsStartOpen}
               answersOpen={answersOpen}
+              openaiPaused={openaiPaused}
             />
           ))}
         </div>
@@ -732,4 +761,9 @@ function GeminiBlock({ text }: { text: string }) {
       <p className="answer-body">{row.miss ? geminiMissLine(miss) : row.body}</p>
     </div>
   )
+}
+
+/** One line next to Run again after a paused response. Not the Gemini miss line. */
+export function OpenAIPausedNote() {
+  return <p className="why">{STORY.openaiPausedHistory}</p>
 }

@@ -79,6 +79,16 @@ const FULL_REPORT_KIND = 'full_report'
 
 export const FULL_REPORT_LIMIT_CODE = 'full_report_limit'
 export const SIGN_IN_FOR_REPORT = 'Sign in to unlock your full report.'
+export const FULL_REPORT_PAUSED_ERROR = 'Full reports are paused while we test engines.'
+
+/**
+ * OpenAI stays on for signed-in full reports unless this is exactly `off`.
+ * Unset, `on`, and every other value keep today's behavior. Guest visibility does not read this.
+ */
+export function fullReportOpenAIPaused(env: { FULL_REPORT_OPENAI?: string } | undefined): boolean {
+  const raw = typeof env?.FULL_REPORT_OPENAI === 'string' ? env.FULL_REPORT_OPENAI : ''
+  return raw.trim().toLowerCase() === 'off'
+}
 
 type ReportEnv = Record<string, string | undefined>
 
@@ -720,6 +730,54 @@ async function answerOwnedReport(opts: {
   })
 }
 
+/**
+ * Run again while OpenAI is off. Gemini only, on the unbranded questions.
+ * No homepage fetch, no OpenAI, no saved run, no quota.
+ */
+async function answerOwnedPaused(opts: {
+  domain: string
+  owned: OwnedQuestion[]
+  config: ProductConfig
+  env?: ReportEnv
+  scrub: string[]
+}): Promise<Response> {
+  const includesBranded =
+    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
+  const preview = mergeOwnedAnswers(opts.owned, { themes: [] }, { domain: opts.domain, includesBranded })
+  if (!preview) return json(502, { error: 'Couldn’t answer this question set — try again.' })
+  const asked = unbrandedQuestionTexts(preview)
+  const startedAt = Date.now()
+  const waitMs = geminiWaitMs({
+    capMs: geminiTimeoutFromEnv(opts.env),
+    budgetMs: GEMINI_REPORT_BUDGET_MS,
+    startedAt,
+    now: startedAt,
+  })
+  const gemini = themesWithGemini(preview, await softGemini(asked, opts.env, opts.scrub, waitMs), asked)
+  const body = withGeminiMiss(
+    {
+      ok: true,
+      report: 'full',
+      domain: opts.domain,
+      model: MODEL,
+      includesBranded,
+      themes: gemini.themes,
+      openaiPaused: true,
+    },
+    gemini.geminiMiss,
+  )
+  const text = JSON.stringify(body)
+  const geminiKey = typeof opts.env?.GEMINI_API_KEY === 'string' ? opts.env.GEMINI_API_KEY.trim() : ''
+  const secrets = geminiKey ? [...opts.scrub, geminiKey] : opts.scrub
+  if (secrets.some((secret) => secret !== '' && text.includes(secret))) {
+    return json(500, { error: 'Could not build the full report.' })
+  }
+  return new Response(text, {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+  })
+}
+
 export async function onRequest(context: { request: Request; env?: ReportEnv }): Promise<Response> {
   const { request } = context
   if (request.method !== 'POST') return json(405, { error: 'Use POST' })
@@ -740,7 +798,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
   if (!authed.ok) return json(authed.status, { error: scrubSecret(authed.error, sb.serviceRole).slice(0, 240) })
 
   const apiKey = typeof context.env?.OPENAI_API_KEY === 'string' ? context.env.OPENAI_API_KEY.trim() : ''
-  if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
+  const paused = fullReportOpenAIPaused(context.env)
 
   if (incoming.owned !== undefined) {
     if (countOwnedQuestions(incoming.owned) > OWNED_QUESTION_MAX) {
@@ -748,9 +806,19 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     }
     const owned = cleanOwnedQuestions(incoming.owned, domain, OWNED_QUESTION_MAX).map((item) => ({
       ...item,
-      question: scrubSecret(item.question, apiKey),
+      question: apiKey ? scrubSecret(item.question, apiKey) : item.question,
     }))
     if (owned.length < 1) return json(400, { error: 'Keep at least one question.' })
+    if (paused) {
+      return answerOwnedPaused({
+        domain,
+        owned,
+        config,
+        env: context.env,
+        scrub: [sb.serviceRole, apiKey].filter((secret) => secret !== ''),
+      })
+    }
+    if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
     return answerOwnedReport({
       sb,
       userId: authed.user.id,
@@ -763,6 +831,9 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       env: context.env,
     })
   }
+
+  if (paused) return json(503, { error: FULL_REPORT_PAUSED_ERROR, openaiPaused: true })
+  if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
 
   await ensureProfile(sb, authed.user.id).catch(() => {})
   const planName = await readPlan(sb, authed.user.id, config)

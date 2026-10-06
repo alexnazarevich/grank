@@ -253,6 +253,32 @@ export function cleanGeminiText(value: unknown): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, GEMINI_MAX)
 }
 
+/**
+ * Keep the saved OpenAI read. Copy Gemini text from a paused run onto matching unbranded questions.
+ * Mention, who-instead, and branded answers stay as they were.
+ */
+export function overlayUnbrandedGemini(current: FullReport, incoming: FullReport): FullReport {
+  const gemini = new Map<string, string>()
+  for (const theme of incoming.themes) {
+    for (const item of theme.questions) {
+      if (item.framing !== 'unbranded') continue
+      gemini.set(item.question.toLowerCase(), item.gemini ?? '')
+    }
+  }
+  return {
+    ...current,
+    themes: current.themes.map((theme) => ({
+      ...theme,
+      questions: theme.questions.map((item) => {
+        if (item.framing !== 'unbranded') return item
+        const key = item.question.toLowerCase()
+        if (!gemini.has(key)) return item
+        return { ...item, gemini: gemini.get(key) ?? '' }
+      }),
+    })),
+  }
+}
+
 /** Unbranded question strings, in report order. Branded rows are skipped. */
 export function unbrandedQuestionTexts(themes: readonly FullReportTheme[]): string[] {
   const questions: string[] = []
