@@ -26,7 +26,7 @@ export { parseWhoInstead }
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 /** Default flash model. Override with GEMINI_MODEL. Not a Vertex host. */
-export const GEMINI_MODEL_DEFAULT = 'gemini-2.5-flash'
+export const GEMINI_MODEL_DEFAULT = 'gemini-3.5-flash-lite'
 const GEMINI_API_ORIGIN = 'https://generativelanguage.googleapis.com'
 const TIMEOUT_MS = 20_000
 const EXCERPT_TIMEOUT_MS = 4_000
