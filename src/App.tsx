@@ -34,6 +34,7 @@ import {
   fullReportOpensPayGate,
   type FullReportFail,
   type FullReportOk,
+  type SignedGeminiMiss,
 } from './fullReportClient'
 import { THEME_CATALOG, fullReportFromStored, type FullReport, type RunPin } from './fullReport'
 import {
@@ -335,6 +336,7 @@ export default function App() {
   const [reportPhase, setReportPhase] = useState<ReportPhase>('idle')
   const [reportMessage, setReportMessage] = useState('')
   const [fullReport, setFullReport] = useState<FullReport | null>(null)
+  const [geminiMiss, setGeminiMiss] = useState<SignedGeminiMiss | null>(null)
   const [emailPurpose, setEmailPurpose] = useState<EmailPurpose>('save')
   const [pins, setPins] = useState<PinItem[]>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -386,6 +388,7 @@ export default function App() {
     }
     setQuotaWall(false)
     setFullReport(result.report)
+    setGeminiMiss(result.geminiMiss ?? null)
     setReportPhase('ready')
     setReportMessage('')
   }
@@ -528,6 +531,7 @@ export default function App() {
     setEditingKey(null)
     setRanPins(null)
     setFullReport(null)
+    setGeminiMiss(null)
     setReportPhase('idle')
     setReportMessage('')
   }
@@ -571,6 +575,7 @@ export default function App() {
     setRuns([])
     setCheckedAt('')
     setFullReport(null)
+    setGeminiMiss(null)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -711,6 +716,7 @@ export default function App() {
     setPageText(null)
     setUpgradeEmail(false)
     setFullReport(null)
+    setGeminiMiss(null)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -894,6 +900,7 @@ export default function App() {
         omittedWhoInstead: true,
       })
       setFullReport(report)
+      setGeminiMiss(null)
       setReportPhase('ready')
       setReportMessage('')
       setActiveMode('unbranded')
@@ -918,6 +925,7 @@ export default function App() {
       return
     }
     setFullReport(null)
+    setGeminiMiss(null)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -995,6 +1003,7 @@ export default function App() {
     setQuestionsDirty(false)
     if (report) {
       setFullReport(report)
+      setGeminiMiss(null)
       return
     }
     const reopened = screenFromSaved(check)
@@ -1590,6 +1599,7 @@ export default function App() {
               editor={reportEditor}
               runs={runs}
               preview={runPreview}
+              geminiMiss={geminiMiss}
             />
             {owning ? (
               <div className="save-row">
@@ -1954,7 +1964,9 @@ export default function App() {
                 />
               ) : null}
             </div>
-            {fullReport && !reportOnly ? <FullReportSection report={fullReport} copy={config.copy} /> : null}
+            {fullReport && !reportOnly ? (
+              <FullReportSection report={fullReport} copy={config.copy} geminiMiss={geminiMiss} />
+            ) : null}
             {quotaWall ? (
               <UpgradeWall
                 config={config}

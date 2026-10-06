@@ -22,6 +22,33 @@ export type FullReportOk = {
   report: FullReport
   checkId: string | null
   runs: CheckRun[]
+  /** In memory for this response only. Never part of the stored report. */
+  geminiMiss?: SignedGeminiMiss
+}
+
+/** The five locked classes. http_reject may carry a numeric status and nothing else. */
+export type SignedGeminiMiss =
+  | { class: 'missing_key' | 'timeout' | 'bad_json' | 'empty' }
+  | { class: 'http_reject'; status?: number }
+
+const SIGNED_GEMINI_MISS = new Set(['missing_key', 'http_reject', 'timeout', 'bad_json', 'empty'])
+
+function missStatus(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 100 || value > 599) return undefined
+  return value
+}
+
+/** Drop anything that is not a locked class. A status is kept only for http_reject. */
+export function geminiMissFromPayload(value: unknown): SignedGeminiMiss | undefined {
+  if (!isRecord(value) || typeof value.class !== 'string' || !SIGNED_GEMINI_MISS.has(value.class)) return undefined
+  if (value.class === 'http_reject') {
+    const status = missStatus(value.status)
+    return status === undefined ? { class: 'http_reject' } : { class: 'http_reject', status }
+  }
+  if (value.class === 'missing_key' || value.class === 'timeout' || value.class === 'bad_json' || value.class === 'empty') {
+    return { class: value.class }
+  }
+  return undefined
 }
 
 function scrubPublic(value: string): string {
@@ -86,7 +113,10 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
     return { ok: false, error: serverError || `Full report failed (HTTP ${status}).` }
   }
   const check = isRecord(rec.check) && typeof rec.check.id === 'string' ? rec.check.id : null
-  return { ok: true, report, checkId: check, runs: cleanRuns(rec.runs) }
+  const geminiMiss = geminiMissFromPayload(rec.geminiMiss)
+  return geminiMiss
+    ? { ok: true, report, checkId: check, runs: cleanRuns(rec.runs), geminiMiss }
+    : { ok: true, report, checkId: check, runs: cleanRuns(rec.runs) }
 }
 
 export async function fetchFullReport(

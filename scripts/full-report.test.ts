@@ -17,7 +17,7 @@ import {
   type PlannedTheme,
 } from '../src/fullReport.ts'
 import { MENTION_FACT_RULES, SHARPER_Q_RULES, mentionFromAnswer } from '../src/mentionFacts.ts'
-import { fullReportOpensPayGate, interpretFullReportResponse } from '../src/fullReportClient.ts'
+import { fullReportOpensPayGate, geminiMissFromPayload, interpretFullReportResponse } from '../src/fullReportClient.ts'
 import { mentionStatusLabel, whoInsteadByTopic, whoInsteadCountLabel, whoInsteadNames } from '../src/mentionLabel.ts'
 import { STORY } from '../src/story.ts'
 
@@ -913,6 +913,40 @@ describe('full report client', () => {
     if (down.ok) return
     assert.match(down.error, /\/api\/full-report/)
   })
+
+  it('keeps a locked geminiMiss on the response and off the stored report', () => {
+    const payload = {
+      ok: true,
+      report: 'full',
+      domain: 'linear.app',
+      model: 'gpt-4o-mini',
+      includesBranded: false,
+      themes: [
+        {
+          id: 'problems',
+          questions: [{ question: 'What should a team use to track issues?', answer: 'Jira shows up.', gemini: '' }],
+        },
+      ],
+      geminiMiss: { class: 'http_reject', status: 404, body: 'secret prompt', key: KEY },
+    }
+    const read = interpretFullReportResponse(200, payload, false)
+    assert.equal(read.ok, true)
+    if (!read.ok) return
+    assert.deepEqual(read.geminiMiss, { class: 'http_reject', status: 404 })
+    assert.equal(JSON.stringify(read.report).includes('geminiMiss'), false)
+    assert.equal(JSON.stringify(read.report).includes('secret'), false)
+    assert.equal(JSON.stringify(read).includes(KEY), false)
+    assert.equal(JSON.stringify(read).includes('secret'), false)
+    assert.deepEqual(geminiMissFromPayload({ class: 'timeout', status: 500, error: 'body' }), { class: 'timeout' })
+    assert.deepEqual(geminiMissFromPayload({ class: 'timeout', status: 500 }), { class: 'timeout' })
+    assert.deepEqual(geminiMissFromPayload({ class: 'http_reject', status: '404 leaked' }), { class: 'http_reject' })
+    assert.equal(geminiMissFromPayload({ class: 'nope' }), undefined)
+    assert.equal(geminiMissFromPayload('timeout'), undefined)
+    const plain = interpretFullReportResponse(200, { ...payload, geminiMiss: undefined }, false)
+    assert.equal(plain.ok, true)
+    if (!plain.ok) return
+    assert.equal(plain.geminiMiss, undefined)
+  })
 })
 
 describe('guest aha copy stays put', () => {
@@ -1287,6 +1321,8 @@ describe('full-report question accordion', () => {
       assert.equal(readProblems?.gemini, '')
       assert.equal(readProblems?.answer, 'Jira shows up for that job.')
       assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
+      assert.deepEqual(read.geminiMiss, { class: 'missing_key' })
+      assert.equal(JSON.stringify(read.report).includes('geminiMiss'), false)
     } finally {
       mock.restore()
     }
@@ -1483,8 +1519,10 @@ describe('full-report question accordion', () => {
         assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
         assert.equal(readProblems?.mention, 'not_mentioned')
         assert.equal(readDescribed?.gemini, undefined)
-        assert.equal(JSON.stringify(read).includes('geminiMiss'), false)
-        assert.equal(JSON.stringify(read).includes('http_reject'), false)
+        assert.equal(JSON.stringify(read.report).includes('geminiMiss'), false)
+        assert.equal(JSON.stringify(read.report).includes('http_reject'), false)
+        if (item.miss) assert.deepEqual(read.geminiMiss, item.miss)
+        else assert.equal(read.geminiMiss, undefined)
         const names = whoInsteadByTopic(read.report.themes).flatMap((topic) => topic.names.map((row) => row.name))
         assert.deepEqual(names.sort(), ['Asana', 'Jira'])
         assert.equal(names.includes('Monday'), false)

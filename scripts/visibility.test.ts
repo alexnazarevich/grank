@@ -1198,8 +1198,9 @@ describe('gemini on unbranded questions', () => {
     const answers = readFileSync(new URL('../src/UnbrandedAnswers.tsx', import.meta.url), 'utf8')
     const section = readFileSync(new URL('../src/FullReportSection.tsx', import.meta.url), 'utf8')
     assert.equal(answers.includes('geminiMiss'), false)
-    assert.equal(section.includes('geminiMiss'), false)
     assert.equal(answers.includes('missing_key'), false)
+    assert.equal(answers.includes('http_reject'), false)
+    assert.equal(section.includes('missing_key'), false)
     assert.equal(section.includes('http_reject'), false)
     const flash = geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 3)
     assert.equal(flash.thinkingConfig?.thinkingBudget, 0)
@@ -1237,6 +1238,17 @@ describe('gemini on unbranded questions', () => {
     assert.deepEqual(geminiTextMiss(JSON.stringify({ answers: ['', ''] }), 2).miss, { class: 'empty' })
     assert.deepEqual(geminiTextMiss('here is some prose', 2).miss, { class: 'bad_json' })
     assert.deepEqual(geminiTextMiss('{"answers":', 1).miss, { class: 'bad_json' })
+    assert.deepEqual(geminiTextMiss('', 2, 'MAX_TOKENS').miss, { class: 'bad_json' })
+    assert.deepEqual(
+      geminiTextMiss(JSON.stringify({ answers: ['', ''] }), 2, 'MAX_TOKENS').miss,
+      { class: 'bad_json' },
+    )
+    assert.deepEqual(geminiTextMiss('{"answers":["cut', 2, 'MAX_TOKENS').miss, { class: 'bad_json' })
+    assert.equal(
+      geminiTextMiss(JSON.stringify({ answers: ['Monday is a common pick.'] }), 1, 'MAX_TOKENS').miss,
+      undefined,
+    )
+    assert.deepEqual(geminiTextMiss('', 2, 'STOP').miss, { class: 'empty' })
 
     const questions = ['What should a team use for issue tracking?']
     const leak = `bad ${GEMINI_KEY} prompt should not leak`
@@ -1306,12 +1318,51 @@ describe('gemini on unbranded questions', () => {
         run: async () =>
           new Response(
             JSON.stringify({
-              candidates: [{ content: { parts: [{ text: JSON.stringify({ answers: [''] }) }] } }],
+              candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ answers: [''] }) }] } }],
             }),
             { status: 200 },
           ),
         log: 'gemini miss empty',
         miss: { class: 'empty' },
+      },
+      {
+        name: 'max_tokens',
+        run: async () =>
+          new Response(
+            JSON.stringify({
+              candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: '' }] } }],
+            }),
+            { status: 200 },
+          ),
+        log: 'gemini miss bad_json',
+        miss: { class: 'bad_json' },
+      },
+      {
+        name: 'truncated_json',
+        run: async () =>
+          new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  finishReason: 'MAX_TOKENS',
+                  content: { parts: [{ text: '{"answers":["cut' }] },
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        log: 'gemini miss bad_json',
+        miss: { class: 'bad_json' },
+      },
+      {
+        name: 'abort',
+        run: async () => {
+          const err = new Error('The operation was aborted')
+          err.name = 'AbortError'
+          throw err
+        },
+        log: 'gemini miss timeout',
+        miss: { class: 'timeout' },
       },
     ]
 
