@@ -3,7 +3,7 @@
  * unbranded question, then Run again. This is App state, not a detached render.
  * A stored check has no class. A failed Run again must not look like that.
  * A 200 with geminiMiss must still be on the opened row after the response,
- * including after the engine filter remounts the grid.
+ * The top filter hides the Gemini block and leaves the Over time grid in place.
  */
 import assert from 'node:assert/strict'
 import { Window } from 'happy-dom'
@@ -228,11 +228,14 @@ describe('owned Run again client state', () => {
       assert.equal(text().includes('gemini-secret-key'), false)
       assert.equal(reportPosts, 2)
 
+      assert.equal(text().includes('Which engines show under each question.'), true)
+      assert.equal(text().includes('No Gemini mentions on this check yet.'), false)
       await clickNamed('Gemini')
-      await waitFor('gemini filter', () => text().includes('No Gemini mentions on this check yet.'))
-      assert.equal(text().includes("Gemini didn't answer. (missing_key)"), false)
-      await clickNamed('OpenAI')
-      await openQuestion()
+      await waitFor('gemini hidden', () => !text().includes("Gemini didn't answer."))
+      assert.equal(text().includes(FRESH_ANSWER), true)
+      assert.equal(text().includes('Problems you solve'), true)
+      assert.equal(text().includes('No Gemini mentions on this check yet.'), false)
+      await clickNamed('Gemini')
       await waitFor('class after filter', () => text().includes("Gemini didn't answer. (missing_key)"))
       assert.equal(text().includes(FRESH_ANSWER), true)
     } finally {

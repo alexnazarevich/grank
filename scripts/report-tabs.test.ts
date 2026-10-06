@@ -72,7 +72,7 @@ describe('competitor topics from who-instead', () => {
 })
 
 describe('full report tabs', () => {
-  it('opens Over time first, keeps Gemini empty, and leaves cron off', async () => {
+  it('opens Over time first, filters answer blocks, and leaves cron off', async () => {
     assert.equal(STORY.competitorsTab, 'Competitors')
     assert.equal(STORY.competitorsHelper, HELPER)
     assert.equal(STORY.geminiMentionsEmpty, 'No Gemini mentions on this check yet.')
@@ -141,31 +141,54 @@ describe('full report tabs', () => {
       assert.equal(html.includes('>Overview<'), false)
       assert.equal(html.includes('ChatGPT'), false)
       assert.equal(html.includes('>LLM<'), false)
-      assert.match(html, /aria-pressed="true"/)
+      assert.equal((html.match(/aria-pressed="true"/g) || []).length, 2)
+      assert.match(html, /Which engines show under each question\./)
       assert.match(html, />OpenAI</)
       assert.match(html, />Gemini</)
+      assert.match(html, /over-time-grid/)
+      assert.equal(html.includes('No Gemini mentions on this check yet.'), false)
+      assert.equal(html.includes('Claude'), false)
       assert.match(html, /<td>0%<\/td><td>100%<\/td>/)
       assert.equal(html.includes(HELPER), false)
       assert.equal(html.includes('What should a team use to track issues?'), false)
       assert.equal(html.includes('This OpenAI reply must stay inside the expand.'), false)
 
-      const gemini = renderToStaticMarkup(
+      const geminiOff = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
           report,
           runs,
-          initialEngine: 'gemini',
+          answersOpen: true,
+          initialEngines: { gemini: false },
         }),
       )
-      assert.match(gemini, /No Gemini mentions on this check yet\./)
-      assert.match(gemini, /aria-pressed="true"/)
-      assert.equal(gemini.includes('over-time-grid'), false)
-      assert.equal(gemini.includes('>0%<'), false)
-      assert.equal(gemini.includes('>100%<'), false)
-      assert.equal(gemini.includes('Sep 1, 12:00 AM'), false)
-      assert.equal(gemini.includes('Monday'), false)
-      assert.match(gemini, />OpenAI</)
-      assert.equal((gemini.match(/role="tab"/g) || []).length, 2)
+      assert.match(geminiOff, /over-time-grid/)
+      assert.match(geminiOff, /<td>0%<\/td><td>100%<\/td>/)
+      assert.match(geminiOff, /Generated · OpenAI/)
+      assert.match(geminiOff, /This OpenAI reply must stay inside the expand\./)
+      assert.match(geminiOff, /<strong>Jira<\/strong>/)
+      assert.equal(geminiOff.includes('Generated · Gemini'), false)
+      assert.equal(geminiOff.includes('Monday is named only in the Gemini reply.'), false)
+      assert.equal(geminiOff.includes('No Gemini mentions on this check yet.'), false)
+      assert.match(geminiOff, /aria-pressed="false"/)
+      assert.equal((geminiOff.match(/role="tab"/g) || []).length, 2)
+
+      const openaiOff = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          report,
+          runs,
+          answersOpen: true,
+          initialEngines: { openai: false },
+        }),
+      )
+      assert.match(openaiOff, /over-time-grid/)
+      assert.match(openaiOff, /<td>0%<\/td><td>100%<\/td>/)
+      assert.match(openaiOff, /Generated · Gemini/)
+      assert.match(openaiOff, /Monday is named only in the Gemini reply\./)
+      assert.match(openaiOff, /<strong>Jira<\/strong>/)
+      assert.equal(openaiOff.includes('Generated · OpenAI'), false)
+      assert.equal(openaiOff.includes('This OpenAI reply must stay inside the expand.'), false)
 
       const opened = renderToStaticMarkup(
         React.createElement(FullReportSection, {

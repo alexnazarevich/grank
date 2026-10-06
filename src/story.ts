@@ -71,6 +71,7 @@ export const STORY = {
   geminiMentionsEmpty: 'No Gemini mentions on this check yet.',
   engineOpenAI: 'OpenAI',
   engineGemini: 'Gemini',
+  engineFilterHelper: 'Which engines show under each question.',
   reportTopicColumn: 'Topic',
   reportThisCheck: 'This check',
 } as const

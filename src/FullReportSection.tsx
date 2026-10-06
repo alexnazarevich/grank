@@ -23,6 +23,11 @@ const GENERATED = 'Generated · OpenAI'
 /** Present only for the signed-in response that just ran. Stored checks leave this null. */
 const GeminiMissContext = createContext<SignedGeminiMiss | null>(null)
 
+/** Which labeled answer blocks are visible. The Over time grid does not read this. */
+type ShownEngines = { openai: boolean; gemini: boolean }
+
+const ShownEnginesContext = createContext<ShownEngines>({ openai: true, gemini: true })
+
 function themeFramingOf(theme: { framing?: Framing; questions: { framing: Framing }[] }): Framing | null {
   const first = theme.questions[0]?.framing
   if (!first || theme.questions.some((item) => item.framing !== first)) return null
@@ -140,12 +145,7 @@ function ReportQuestion({
       {open ? (
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? <NameList names={names} /> : null}
-          <div className={openaiPaused || text ? 'answer' : 'answer miss'}>
-            <div className="answer-meta">
-              <span className="tag plain live">{GENERATED}</span>
-            </div>
-            <p className="answer-body">{openaiPaused ? STORY.openaiPausedAnswer : text || STORY.answerMiss}</p>
-          </div>
+          <OpenAIAnswer text={text} paused={openaiPaused} />
           {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
         </div>
       ) : null}
@@ -217,12 +217,7 @@ function ThemeGridRow({
                   ))}
                 </ul>
               ) : null}
-              <div className={openaiPaused || text ? 'answer' : 'answer miss'}>
-                <div className="answer-meta">
-                  <span className="tag plain live">{GENERATED}</span>
-                </div>
-                <p className="answer-body">{openaiPaused ? STORY.openaiPausedAnswer : text || STORY.answerMiss}</p>
-              </div>
+              <OpenAIAnswer text={text} paused={openaiPaused} />
               {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
             </div>
           </td>
@@ -431,7 +426,6 @@ function CompetitorTopicBlock({
 }
 
 type ReportTab = 'over-time' | 'competitors'
-type ReportEngine = 'openai' | 'gemini'
 
 function ratePercents(rate: ThemeMentionRate | undefined, runCount: number): Array<number | null | undefined> {
   if (runCount > 0) return rate?.byRun ?? []
@@ -586,7 +580,7 @@ export function FullReportSection({
   whoInsteadOpen = false,
   answersOpen = false,
   initialTab = 'over-time',
-  initialEngine = 'openai',
+  initialEngines,
   topicsOpen = false,
   geminiMiss = null,
   openaiPaused = false,
@@ -605,8 +599,8 @@ export function FullReportSection({
   answersOpen?: boolean
   /** In-page tab. Over time is first. No URL change. */
   initialTab?: ReportTab
-  /** Engine filter on Over time. Gemini has no stored mentions. */
-  initialEngine?: ReportEngine
+  /** Which answer blocks start visible. Both on unless a test turns one off. */
+  initialEngines?: { openai?: boolean; gemini?: boolean }
   /** Opens topic expands on the active tab. */
   topicsOpen?: boolean
   /** Class from this Run again response. Omitted for a stored check. */
@@ -615,7 +609,13 @@ export function FullReportSection({
   openaiPaused?: boolean
 }) {
   const [tab, setTab] = useState<ReportTab>(initialTab)
-  const [engine, setEngine] = useState<ReportEngine>(initialEngine)
+  const [engines, setEngines] = useState<ShownEngines>({
+    openai: initialEngines?.openai !== false,
+    gemini: initialEngines?.gemini !== false,
+  })
+  function toggleEngine(which: keyof ShownEngines) {
+    setEngines((current) => ({ ...current, [which]: !current[which] }))
+  }
   const shown = gridRuns(runs, preview)
   const rates = themeMentionRates(
     report.themes.map((theme) => ({
@@ -632,6 +632,7 @@ export function FullReportSection({
   const topicsStartOpen = topicsOpen || whoInsteadOpen || answersOpen
   return (
     <GeminiMissContext.Provider value={geminiMiss}>
+    <ShownEnginesContext.Provider value={engines}>
     <section className="full-report" aria-label={copy.fullReportTitle}>
       {themesOnly ? null : (
         <>
@@ -639,6 +640,17 @@ export function FullReportSection({
           <p className="why">{copy.fullReportSub}</p>
         </>
       )}
+      <div className="engine-filter">
+        <div className="segments" role="group" aria-label={copy.engineFilterHelper}>
+          <button type="button" aria-pressed={engines.openai} onClick={() => toggleEngine('openai')}>
+            {copy.engineOpenAI}
+          </button>
+          <button type="button" aria-pressed={engines.gemini} onClick={() => toggleEngine('gemini')}>
+            {copy.engineGemini}
+          </button>
+        </div>
+        <p className="why">{copy.engineFilterHelper}</p>
+      </div>
       <div className="segments report-tabs" role="tablist" aria-label="Full report">
         <button
           type="button"
@@ -663,25 +675,7 @@ export function FullReportSection({
       </div>
       {tab === 'over-time' ? (
         <div role="tabpanel" id="report-panel-over-time" aria-labelledby="report-tab-over-time">
-          <div className="segments engine-filter" role="group" aria-label="Engine">
-            <button
-              type="button"
-              aria-pressed={engine === 'openai'}
-              onClick={() => setEngine('openai')}
-            >
-              {copy.engineOpenAI}
-            </button>
-            <button
-              type="button"
-              aria-pressed={engine === 'gemini'}
-              onClick={() => setEngine('gemini')}
-            >
-              {copy.engineGemini}
-            </button>
-          </div>
-          {engine === 'gemini' ? (
-            <p className="why">{copy.geminiMentionsEmpty}</p>
-          ) : report.themes.length === 0 ? (
+          {report.themes.length === 0 ? (
             <p className="why">{copy.fullReportEmptyThemes}</p>
           ) : (
             <div className="run-grid-wrap">
@@ -744,13 +738,30 @@ export function FullReportSection({
         <ManageQuestions editor={editor} report={report} copy={copy} initialOpen={manageOpen} />
       ) : null}
     </section>
+    </ShownEnginesContext.Provider>
     </GeminiMissContext.Provider>
+  )
+}
+
+/** OpenAI reply under an opened question. The top filter hides this block only. */
+function OpenAIAnswer({ text, paused }: { text: string; paused: boolean }) {
+  const shown = useContext(ShownEnginesContext)
+  if (!shown.openai) return null
+  return (
+    <div className={paused || text ? 'answer' : 'answer miss'}>
+      <div className="answer-meta">
+        <span className="tag plain live">{GENERATED}</span>
+      </div>
+      <p className="answer-body">{paused ? STORY.openaiPausedAnswer : text || STORY.answerMiss}</p>
+    </div>
   )
 }
 
 /** Second block on an unbranded row. Empty text is the miss line. */
 function GeminiBlock({ text }: { text: string }) {
+  const shown = useContext(ShownEnginesContext)
   const miss = useContext(GeminiMissContext)
+  if (!shown.gemini) return null
   const row = geminiRow([text], 0)
   if (!row) return null
   return (
