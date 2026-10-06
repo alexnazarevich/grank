@@ -30,7 +30,7 @@ const OLDER = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 const CHECK = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const CHECK_USAGE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 
-type Call = { url: string; method: string; body: string; headers: Headers }
+type Call = { url: string; method: string; body: string; headers: Headers; signal?: AbortSignal | null }
 
 function urlOf(input: RequestInfo | URL): string {
   return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -45,6 +45,7 @@ function install(handler: (call: Call) => Response | Promise<Response>) {
       method: init?.method || 'GET',
       body: typeof init?.body === 'string' ? init.body : '',
       headers: new Headers(init?.headers),
+      signal: init?.signal,
     }
     calls.push(call)
     return handler(call)
@@ -1499,6 +1500,155 @@ describe('full-report question accordion', () => {
     }
   })
 })
+
+  it('returns 200 with the OpenAI answers when Gemini throws, rejects, or times out', async () => {
+    const kept = 'What should a team use for issue tracking?'
+    const added = 'How do teams describe Linear?'
+    const geminiKey = 'gemini-report-key-should-not-leak'
+    const openaiAnswer = 'Jira and Asana show up for that job.'
+    const cases: { kind: 'throw' | 'reject' | 'hang'; miss: { class: string; status?: number }; log: string }[] = [
+      { kind: 'throw', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
+      { kind: 'reject', miss: { class: 'http_reject', status: 429 }, log: 'gemini miss http_reject 429' },
+      { kind: 'hang', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
+    ]
+    for (const item of cases) {
+      let geminiInFlight = false
+      let openaiInFlight = false
+      let overlapped = false
+      const logs: string[] = []
+      const prevInfo = console.info
+      console.info = (...args: unknown[]) => {
+        logs.push(args.map((part) => String(part)).join(' '))
+      }
+      const started = Date.now()
+      const mock = install(async (call) => {
+        if (call.url.includes('/auth/v1/user')) {
+          return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+        }
+        if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+        if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+        if (call.url.includes('api.openai.com')) {
+          openaiInFlight = true
+          if (geminiInFlight) overlapped = true
+          if (item.kind === 'hang') await new Promise((resolve) => setTimeout(resolve, 150))
+          openaiInFlight = false
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      themes: [
+                        {
+                          id: 'problems',
+                          questions: [
+                            {
+                              question: kept,
+                              answer: openaiAnswer,
+                              mention: 'not_mentioned',
+                              whoInstead: ['Jira'],
+                            },
+                          ],
+                        },
+                        {
+                          id: 'described',
+                          questions: [
+                            {
+                              question: added,
+                              answer: 'Linear is a fast issue tracker for software teams.',
+                              mention: 'mentioned',
+                              whoInstead: [],
+                            },
+                          ],
+                        },
+                      ],
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        if (call.url.includes('generativelanguage.googleapis.com')) {
+          geminiInFlight = true
+          if (openaiInFlight) overlapped = true
+          try {
+            assert.equal(call.url.includes(geminiKey), false)
+            assert.equal(call.body.includes(geminiKey), false)
+            if (item.kind === 'throw') throw new Error(`network ${geminiKey}`)
+            if (item.kind === 'reject') {
+              return new Response(JSON.stringify({ error: { message: `bad ${geminiKey} prompt should not leak` } }), {
+                status: 429,
+              })
+            }
+            await new Promise((_resolve, reject) => {
+              const signal = call.signal
+              const fail = () => reject(Object.assign(new Error(`aborted ${geminiKey}`), { name: 'AbortError' }))
+              if (!signal) {
+                fail()
+                return
+              }
+              if (signal.aborted) {
+                fail()
+                return
+              }
+              signal.addEventListener('abort', fail, { once: true })
+            })
+            throw new Error('hang should abort')
+          } finally {
+            geminiInFlight = false
+          }
+        }
+        if (call.url.includes('/rest/v1/usage_events')) {
+          throw new Error('owned re-run must not spend a full-report allotment')
+        }
+        if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+        }
+        if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+        }
+        return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+      })
+      try {
+        const res = await onRequest({
+          request: authedRequest({
+            owned: [
+              { question: kept, themeId: 'problems' },
+              { question: added, themeId: 'described' },
+            ],
+          }),
+          env: env({ GEMINI_API_KEY: geminiKey, GEMINI_TIMEOUT_MS: '250' }),
+        })
+        const text = await res.text()
+        assert.equal(res.status, 200, text)
+        assert.equal(text.includes(geminiKey), false)
+        assert.equal(text.includes(KEY), false)
+        assert.equal(text.includes('prompt should not leak'), false)
+        assert.equal(text.includes('aborted'), false)
+        const body = JSON.parse(text) as {
+          geminiMiss?: { class: string; status?: number }
+          themes: { id: string; questions: { answer: string; gemini?: string }[] }[]
+        }
+        const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
+        assert.equal(problems?.answer, openaiAnswer)
+        assert.equal(problems?.gemini, '')
+        assert.deepEqual(body.geminiMiss, item.miss)
+        assert.deepEqual(logs, [item.log])
+        assert.equal(logs.some((line) => line.includes(geminiKey)), false)
+        if (item.kind === 'hang') {
+          assert.equal(overlapped, true)
+          assert.equal(Date.now() - started < 1_000, true)
+        }
+        const savedCheck = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
+        assert.equal(savedCheck?.body.includes('geminiMiss'), false)
+      } finally {
+        console.info = prevInfo
+        mock.restore()
+      }
+    }
+  })
 
 describe('unbranded gemini field', () => {
   it('zips Gemini text onto unbranded rows and leaves the OpenAI answer alone', () => {

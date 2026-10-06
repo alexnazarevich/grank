@@ -271,7 +271,16 @@ export function unbrandedQuestionTexts(themes: readonly FullReportTheme[]): stri
 export function attachUnbrandedGemini(
   themes: readonly FullReportTheme[],
   replies: readonly string[],
+  /** When set, replies line up with these strings instead of report order. */
+  asked?: readonly string[],
 ): FullReportTheme[] {
+  const byText = asked ? new Map<string, string>() : null
+  if (byText && asked) {
+    asked.forEach((question, index) => {
+      const key = question.toLowerCase()
+      if (!byText.has(key)) byText.set(key, cleanGeminiText(replies[index]))
+    })
+  }
   let cursor = 0
   return themes.map((theme) => ({
     ...theme,
@@ -281,8 +290,9 @@ export function attachUnbrandedGemini(
         const { gemini: _drop, ...rest } = item
         return rest
       }
-      const gemini = cleanGeminiText(replies[cursor])
-      cursor += 1
+      const gemini = byText
+        ? (byText.get(item.question.toLowerCase()) ?? '')
+        : cleanGeminiText(replies[cursor++])
       return { ...item, gemini }
     }),
   }))

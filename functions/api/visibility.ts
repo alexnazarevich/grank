@@ -428,9 +428,59 @@ export function geminiMissLogLine(miss: GeminiMiss): string {
   return `gemini miss ${safe.class}`
 }
 
+/**
+ * Answer tokens only. Kept small so a 2.5 Flash reply can finish inside
+ * GEMINI_TIMEOUT_CAP_MS. The previous 8192 cap ran long enough that Pages
+ * dropped the whole report.
+ */
 export function geminiMaxOutputTokens(questionCount: number): number {
   const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
-  return Math.min(8192, 600 + count * 280)
+  return Math.min(1_200, 400 + count * 160)
+}
+
+/** Hard ceiling. Callers cannot wait longer than this. */
+export const GEMINI_TIMEOUT_CAP_MS = 8_000
+
+/**
+ * OpenAI batches may use 22s after a short homepage fetch.
+ * Leave slack so Gemini plus that work still returns before Pages
+ * drops an invocation that has run too long.
+ */
+export const GEMINI_REPORT_BUDGET_MS = 26_000
+const GEMINI_BUDGET_SLACK_MS = 2_000
+
+/** A lower GEMINI_TIMEOUT_MS is honored. Anything above the cap is ignored. */
+export function geminiTimeoutFromEnv(env: { GEMINI_TIMEOUT_MS?: string } | undefined): number {
+  const raw = typeof env?.GEMINI_TIMEOUT_MS === 'string' ? Number(env.GEMINI_TIMEOUT_MS.trim()) : NaN
+  if (Number.isInteger(raw) && raw >= 50 && raw <= GEMINI_TIMEOUT_CAP_MS) return raw
+  return GEMINI_TIMEOUT_CAP_MS
+}
+
+/** How long this report can still wait on Gemini. Zero means do not call. */
+export function geminiWaitMs(opts: { capMs: number; budgetMs: number; startedAt: number; now: number }): number {
+  const left = opts.budgetMs - (opts.now - opts.startedAt) - GEMINI_BUDGET_SLACK_MS
+  if (!Number.isFinite(left) || left < 250) return 0
+  const cap = Number.isFinite(opts.capMs) ? Math.max(0, Math.floor(opts.capMs)) : 0
+  return Math.min(cap, Math.floor(left))
+}
+
+function geminiSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortSignal; done: () => void } {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let settled = false
+  const fromParent = () => controller.abort()
+  const done = () => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    parent?.removeEventListener('abort', fromParent)
+  }
+  controller.signal.addEventListener('abort', done, { once: true })
+  if (parent) {
+    if (parent.aborted) controller.abort()
+    else parent.addEventListener('abort', fromParent, { once: true })
+  }
+  return { signal: controller.signal, done }
 }
 
 /**
@@ -500,12 +550,21 @@ export async function geminiReplies(opts: {
   model: string
   questions: string[]
   scrub: string[]
+  /** Clamped to GEMINI_TIMEOUT_CAP_MS. Zero skips the call and reports timeout. */
+  timeoutMs?: number
+  signal?: AbortSignal
 }): Promise<GeminiReplySet> {
   const blank = () => opts.questions.map(() => '')
   if (opts.questions.length === 0) return { replies: [] }
   if (!opts.apiKey.trim()) return noteGeminiMiss(blank(), { class: 'missing_key' })
+  const rawTimeout = opts.timeoutMs
+  const requested =
+    typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) ? Math.floor(rawTimeout) : GEMINI_TIMEOUT_CAP_MS
+  const timeoutMs = Math.min(GEMINI_TIMEOUT_CAP_MS, Math.max(0, requested))
+  if (timeoutMs === 0 || opts.signal?.aborted) return noteGeminiMiss(blank(), { class: 'timeout' })
   const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
   let res: Response
+  const timed = geminiSignal(timeoutMs, opts.signal)
   try {
     res = await fetch(geminiGenerateUrl(opts.model), {
       method: 'POST',
@@ -513,20 +572,23 @@ export async function geminiReplies(opts: {
         'content-type': 'application/json',
         'x-goog-api-key': opts.apiKey,
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: timed.signal,
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: geminiGenerationConfig(opts.model, opts.questions.length),
       }),
     })
   } catch {
-    // No HTTP status: AbortSignal timeout or another transport failure.
+    // No HTTP status: the timer, a parent abort, or another transport failure.
     // The error message is not logged; it can contain the API key.
     return noteGeminiMiss(blank(), { class: 'timeout' })
+  } finally {
+    timed.done()
   }
   if (!res.ok) {
+    // Do not await cancel(). A stuck error body must not hold the report open.
     try {
-      await res.body?.cancel()
+      void res.body?.cancel()?.catch(() => {})
     } catch {
       // Status only. Never read the body.
     }

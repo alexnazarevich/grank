@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { BRANDED_SYSTEM_PROMPT, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissLogLine, geminiModelFromEnv, geminiReplies, geminiTextMiss, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { BRANDED_SYSTEM_PROMPT, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, GEMINI_REPORT_BUDGET_MS, GEMINI_TIMEOUT_CAP_MS, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissLogLine, geminiModelFromEnv, geminiReplies, geminiTextMiss, geminiTimeoutFromEnv, geminiWaitMs, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
 import { geminiRow } from '../src/engineBlock.ts'
 import { whoInsteadByTopic } from '../src/mentionLabel.ts'
 import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
@@ -1203,8 +1203,20 @@ describe('gemini on unbranded questions', () => {
     assert.equal(section.includes('http_reject'), false)
     const flash = geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 3)
     assert.equal(flash.thinkingConfig?.thinkingBudget, 0)
-    assert.equal(flash.maxOutputTokens, 1440)
-    assert.equal(geminiMaxOutputTokens(100), 8192)
+    assert.equal(flash.maxOutputTokens, 880)
+    assert.equal(geminiMaxOutputTokens(100), 1_200)
+    assert.equal(GEMINI_TIMEOUT_CAP_MS, 8_000)
+    assert.equal(geminiTimeoutFromEnv(undefined), 8_000)
+    assert.equal(geminiTimeoutFromEnv({ GEMINI_TIMEOUT_MS: '60000' }), 8_000)
+    assert.equal(geminiTimeoutFromEnv({ GEMINI_TIMEOUT_MS: '250' }), 250)
+    assert.equal(
+      geminiWaitMs({ capMs: 8_000, budgetMs: GEMINI_REPORT_BUDGET_MS, startedAt: 0, now: 0 }),
+      8_000,
+    )
+    assert.equal(
+      geminiWaitMs({ capMs: 8_000, budgetMs: GEMINI_REPORT_BUDGET_MS, startedAt: 0, now: 24_000 }),
+      0,
+    )
     const older = geminiGenerationConfig('gemini-2.0-flash', 2)
     assert.equal('thinkingConfig' in older, false)
     assert.equal(geminiGenerateUrl(GEMINI_MODEL_DEFAULT).includes('generativelanguage.googleapis.com'), true)

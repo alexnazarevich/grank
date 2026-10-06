@@ -5,6 +5,8 @@
  * When every unbranded reply is blank, the response also has `geminiMiss`
  * (`missing_key`, `http_reject` plus status, `timeout`, `bad_json`, or `empty`).
  * That field is not stored on the check. This route requires sign-in.
+ * Gemini cannot fail the report. Run again overlaps it with OpenAI, and the
+ * wait is capped so a slow call ends as `timeout` instead of an empty 502.
  * Branded rows stay OpenAI only. Mention and who-instead stay on the OpenAI answer.
  * The first freeFullReports runs are complimentary. A further run needs a paid
  * plan, then uses that plan's check quota. Free check quota cannot buy another
@@ -28,7 +30,17 @@ import {
   type PlannedTheme,
   type RunPin,
 } from '../../src/fullReport.ts'
-import { geminiMissForResponse, geminiModelFromEnv, geminiReplies, type GeminiMiss } from './visibility.ts'
+import {
+  GEMINI_REPORT_BUDGET_MS,
+  geminiMissForResponse,
+  geminiMissLogLine,
+  geminiModelFromEnv,
+  geminiReplies,
+  geminiTimeoutFromEnv,
+  geminiWaitMs,
+  type GeminiMiss,
+  type GeminiReplySet,
+} from './visibility.ts'
 import { mentionsBrand } from '../../src/mentionFacts.ts'
 import {
   cleanOwnedQuestions,
@@ -74,21 +86,42 @@ type Reserved =
   | { ok: true; release: () => Promise<void> }
   | { ok: false; response: Response }
 
-/** Gemini text for unbranded rows. A missing key or a failed call is empty strings and one miss class. */
-async function withUnbrandedGemini(
-  themes: FullReportTheme[],
+/**
+ * Gemini never fails the report. A throw, a timeout, or a reject becomes empty
+ * replies plus one miss class. The wait cannot be raised past the cap.
+ */
+async function softGemini(
+  questions: string[],
   env: ReportEnv | undefined,
   scrub: string[],
-): Promise<{ themes: FullReportTheme[]; geminiMiss?: GeminiMiss }> {
-  const secret = typeof env?.GEMINI_API_KEY === 'string' ? env.GEMINI_API_KEY.trim() : ''
-  const result = await geminiReplies({
-    apiKey: secret,
-    model: geminiModelFromEnv(env),
-    questions: unbrandedQuestionTexts(themes),
-    scrub: secret ? [...scrub, secret] : scrub,
-  })
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<GeminiReplySet> {
+  const blank = () => questions.map(() => '')
+  try {
+    if (questions.length === 0) return { replies: [] }
+    const secret = typeof env?.GEMINI_API_KEY === 'string' ? env.GEMINI_API_KEY.trim() : ''
+    return await geminiReplies({
+      apiKey: secret,
+      model: geminiModelFromEnv(env),
+      questions,
+      scrub: secret ? [...scrub, secret] : scrub,
+      timeoutMs,
+      signal,
+    })
+  } catch {
+    console.info(geminiMissLogLine({ class: 'timeout' }))
+    return { replies: blank(), miss: { class: 'timeout' } }
+  }
+}
+
+function themesWithGemini(
+  themes: FullReportTheme[],
+  result: GeminiReplySet,
+  asked?: readonly string[],
+): { themes: FullReportTheme[]; geminiMiss?: GeminiMiss } {
   return {
-    themes: attachUnbrandedGemini(themes, result.replies),
+    themes: attachUnbrandedGemini(themes, result.replies, asked),
     ...(result.miss ? { geminiMiss: result.miss } : {}),
   }
 }
@@ -592,6 +625,20 @@ async function answerOwnedReport(opts: {
   })
   if (!admitted.ok) return admitted.response
 
+  const includesBranded =
+    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
+  const preview = mergeOwnedAnswers(opts.owned, { themes: [] }, { domain: opts.domain, includesBranded })
+  const asked = preview ? unbrandedQuestionTexts(preview) : []
+  const startedAt = Date.now()
+  const waitMs = geminiWaitMs({
+    capMs: geminiTimeoutFromEnv(opts.env),
+    budgetMs: GEMINI_REPORT_BUDGET_MS,
+    startedAt,
+    now: startedAt,
+  })
+  const stopGemini = new AbortController()
+  const geminiTask = softGemini(asked, opts.env, [opts.apiKey, opts.sb.serviceRole], waitMs, stopGemini.signal)
+
   const excerpt = await homepageExcerpt(opts.domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, opts.apiKey) : null
   const parts = await Promise.all(
@@ -599,21 +646,23 @@ async function answerOwnedReport(opts: {
   )
   const failed = parts.find((part) => !part.ok)
   if (failed && !failed.ok) {
+    stopGemini.abort()
+    await geminiTask
     await admitted.release()
     return json(502, { error: failed.error })
   }
-  const includesBranded =
-    opts.config.fullReportIncludesBranded || opts.owned.some((item) => mentionsBrand(item.question, opts.domain))
   const merged = mergeOwnedAnswers(
     opts.owned,
     mergeThemePayloads(parts.map((part) => (part.ok ? part.json : null))),
     { domain: opts.domain, includesBranded },
   )
   if (!merged) {
+    stopGemini.abort()
+    await geminiTask
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
-  const gemini = await withUnbrandedGemini(merged, opts.env, [opts.apiKey, opts.sb.serviceRole])
+  const gemini = themesWithGemini(merged, await geminiTask, asked)
   const themes = gemini.themes
   const saved = opts.checkId
     ? await updateOwnedReport(
@@ -736,6 +785,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     ...pin,
     question: scrubSecret(pin.question, apiKey),
   }))
+  const startedAt = Date.now()
   const excerpt = await homepageExcerpt(domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
   const parts = await Promise.all(
@@ -760,7 +810,16 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     await reserved.release()
     return json(502, { error: 'Couldn’t build the full report — try again.' })
   }
-  const gemini = await withUnbrandedGemini(shapedThemes, context.env, [apiKey, sb.serviceRole])
+  const waitMs = geminiWaitMs({
+    capMs: geminiTimeoutFromEnv(context.env),
+    budgetMs: GEMINI_REPORT_BUDGET_MS,
+    startedAt,
+    now: Date.now(),
+  })
+  const gemini = themesWithGemini(
+    shapedThemes,
+    await softGemini(unbrandedQuestionTexts(shapedThemes), context.env, [apiKey, sb.serviceRole], waitMs),
+  )
   const themes = gemini.themes
 
   const saved = await saveReport(
