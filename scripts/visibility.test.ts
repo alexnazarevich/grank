@@ -1064,6 +1064,7 @@ describe('gemini on unbranded questions', () => {
       assert.match(body.gemini?.[0] || '', /\[redacted\]/)
       assert.match(body.gemini?.[1] || '', /Asana/)
       assert.equal(body.gemini?.[2], '')
+      assert.equal('geminiMiss' in body, false)
       assert.equal(body.facts?.every((fact) => fact.mention === 'not_mentioned'), true)
       assert.equal(body.facts?.every((fact) => fact.framing === 'unbranded'), true)
       assert.deepEqual(body.facts?.[0]?.whoInstead, ['Jira', 'Asana'])
@@ -1127,20 +1128,31 @@ describe('gemini on unbranded questions', () => {
         const text = await res.text()
         assert.equal(text.includes(KEY), false)
         assert.equal(text.includes(GEMINI_KEY), false)
-        assert.equal(text.includes('geminiMiss'), false)
+        assert.equal(text.includes('prompt should not leak') || text.includes('network'), false)
         const body = JSON.parse(text) as {
           answered?: string
           why?: string
           questions?: string[]
           whoInstead?: string[]
           gemini?: string[]
+          geminiMiss?: { class?: string; status?: number; message?: string; body?: string }
         }
         assert.equal(body.answered, 'partial')
         assert.equal(body.why, GOOD.why)
         assert.deepEqual(body.questions, GOOD.questions)
         assert.deepEqual(body.whoInstead, ['Jira', 'Asana'])
         assert.deepEqual(body.gemini, ['', '', ''])
-        assert.equal('geminiMiss' in body, false)
+        const expectMiss =
+          item.log === 'gemini miss missing_key'
+            ? { class: 'missing_key' }
+            : item.log === 'gemini miss http_reject 500'
+              ? { class: 'http_reject', status: 500 }
+              : { class: 'timeout' }
+        assert.deepEqual(body.geminiMiss, expectMiss)
+        assert.equal(body.geminiMiss?.message, undefined)
+        assert.equal(body.geminiMiss?.body, undefined)
+        assert.equal(JSON.stringify(body.geminiMiss).includes(GEMINI_KEY), false)
+        assert.equal(JSON.stringify(body.geminiMiss).includes(KEY), false)
         const calledGemini = urls.some((url) => url.includes('generativelanguage.googleapis.com'))
         assert.equal(calledGemini, Boolean(item.env.GEMINI_API_KEY))
         assert.deepEqual(logs, [item.log])
@@ -1180,6 +1192,56 @@ describe('gemini on unbranded questions', () => {
       assert.equal(body.answers?.length, 3)
       assert.equal('gemini' in body, false)
       assert.equal(urls.some((url) => url.includes('generativelanguage.googleapis.com')), false)
+      assert.equal('geminiMiss' in body, false)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
+  it('adds a temporary guest geminiMiss when every reply is blank and never the key', async () => {
+    const src = readFileSync(new URL('../functions/api/visibility.ts', import.meta.url), 'utf8')
+    assert.match(src, /TEMP until bet \(15\) passes — remove/)
+    const answers = readFileSync(new URL('../src/UnbrandedAnswers.tsx', import.meta.url), 'utf8')
+    assert.equal(answers.includes('geminiMiss'), false)
+    const leaked = `bad ${GEMINI_KEY} prompt should not leak`
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return new Response(JSON.stringify({ error: { message: leaked, body: leaked } }), { status: 400 })
+      }
+      if (url.includes('api.openai.com')) {
+        return new Response(modelPayload(GOOD), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response('nope', { status: 404 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-grank-anon': 'anon-guest' },
+          body: JSON.stringify({ domain: 'linear.app', mode: 'unbranded' }),
+        }),
+        env: { OPENAI_API_KEY: KEY, GEMINI_API_KEY: GEMINI_KEY },
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200)
+      assert.equal(text.includes(GEMINI_KEY), false)
+      assert.equal(text.includes(KEY), false)
+      assert.equal(text.includes('prompt should not leak'), false)
+      const body = JSON.parse(text) as {
+        gemini?: string[]
+        geminiMiss?: { class?: string; status?: number; message?: string; body?: string; key?: string }
+      }
+      assert.deepEqual(body.gemini, ['', '', ''])
+      assert.deepEqual(body.geminiMiss, { class: 'http_reject', status: 400 })
+      assert.equal(Object.keys(body.geminiMiss ?? {}).sort().join(','), 'class,status')
+      const read = interpretVisibilityResponse(200, JSON.parse(text), false, 'linear.app', 'unbranded')
+      assert.equal(read.ok, true)
+      if (!read.ok) return
+      assert.equal('geminiMiss' in read, false)
+      assert.equal(JSON.stringify(read).includes('http_reject'), false)
+      assert.equal(JSON.stringify(read).includes(GEMINI_KEY), false)
     } finally {
       globalThis.fetch = prev
     }
