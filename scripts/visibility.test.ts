@@ -746,6 +746,29 @@ describe('onRequest mode', () => {
     }
   })
 
+  it('still calls OpenAI for a guest check when full-report OpenAI is off', async () => {
+    let openai = false
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('api.openai.com')) {
+        openai = true
+        return new Response(modelPayload(GOOD), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response('nope', { status: 404 })
+    }) as typeof fetch
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/visibility?domain=linear.app&mode=unbranded'),
+        env: { OPENAI_API_KEY: KEY, FULL_REPORT_OPENAI: 'off' },
+      })
+      assert.equal(res.status, 200)
+      assert.equal(openai, true)
+    } finally {
+      globalThis.fetch = prev
+    }
+  })
+
   it('answers owned questions instead of returning a generated roster', async () => {
     const owned = [
       'What should a team use for issue tracking?',

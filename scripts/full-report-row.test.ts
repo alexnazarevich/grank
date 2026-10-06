@@ -899,6 +899,110 @@ describe('unbranded engine blocks', () => {
       await server.close()
     }
   })
+
+  it('shows the paused OpenAI lines and leaves the Gemini miss line alone', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection, OpenAIPausedNote } = (await server.ssrLoadModule(
+        '/src/FullReportSection.tsx',
+      )) as typeof import('../src/FullReportSection.tsx')
+      const { fullReportFromStored } = (await server.ssrLoadModule('/src/fullReport.ts')) as typeof import('../src/fullReport.ts')
+      const { STORY } = (await server.ssrLoadModule('/src/story.ts')) as typeof import('../src/story.ts')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const copy = PRODUCT_DEFAULTS.copy
+      const question = 'What should a team use to track issues?'
+      const stored = fullReportFromStored({
+        report: 'full',
+        fullReport: {
+          domain: 'linear.app',
+          model: 'gpt-4o-mini',
+          includesBranded: true,
+          themes: [
+            {
+              id: 'problems',
+              questions: [
+                {
+                  question,
+                  answer: 'Jira shows up for that job.',
+                  mention: 'mentioned',
+                  whoInstead: ['Jira'],
+                  gemini: '',
+                },
+              ],
+            },
+          ],
+        },
+      })
+      assert.ok(stored)
+      if (!stored) return
+      const runs = [
+        {
+          at: '2026-09-01T00:00:00.000Z',
+          mode: 'full' as const,
+          mentions: [{ question, mention: 'mentioned' as const, whoInstead: ['Jira'] }],
+        },
+      ]
+      const overTime = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy,
+          report: stored,
+          answersOpen: true,
+          openaiPaused: true,
+          geminiMiss: { class: 'timeout' },
+          runs,
+        }),
+      )
+      assert.match(overTime, /OpenAI is paused for this run\./)
+      assert.match(overTime, /Paused while OpenAI is off\./)
+      assert.match(overTime, /Gemini didn&#x27;t answer\. \(timeout\)/)
+      assert.equal(overTime.includes('Jira shows up for that job.'), false)
+      assert.equal(overTime.includes('Not mentioned'), false)
+      assert.equal(overTime.includes('0%'), false)
+      assert.match(overTime, /Mentioned/)
+      const competitors = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy,
+          report: stored,
+          answersOpen: true,
+          initialTab: 'competitors',
+          openaiPaused: true,
+        }),
+      )
+      assert.match(competitors, /OpenAI is paused for this run\./)
+      assert.match(competitors, /Paused while OpenAI is off\./)
+      assert.equal(competitors.includes('<strong>Jira</strong>'), false)
+      assert.equal(competitors.includes('0%'), false)
+      assert.equal(competitors.includes('Not mentioned'), false)
+      const storedView = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy,
+          report: stored,
+          answersOpen: true,
+          initialTab: 'competitors',
+        }),
+      )
+      assert.equal(storedView.includes(STORY.openaiPausedAnswer), false)
+      assert.equal(storedView.includes(STORY.openaiPausedMark), false)
+      assert.match(storedView, /Jira shows up for that job\./)
+      assert.match(storedView, /<strong>Jira<\/strong>/)
+      const note = renderToStaticMarkup(React.createElement(OpenAIPausedNote))
+      assert.match(note, /OpenAI is paused, so this run isn&#x27;t saved to Over time\./)
+      assert.equal(note.includes(STORY.geminiMiss), false)
+      assert.equal(overTime.includes('100%'), false)
+      assert.equal(STORY.openaiPausedAnswer, 'OpenAI is paused for this run.')
+      assert.equal(STORY.openaiPausedMark, 'Paused while OpenAI is off.')
+      assert.equal(STORY.openaiPausedHistory, "OpenAI is paused, so this run isn't saved to Over time.")
+    } finally {
+      await server.close()
+    }
+  })
 })
 
 describe('land and dig mention mark', () => {

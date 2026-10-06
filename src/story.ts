@@ -18,6 +18,12 @@ export const STORY = {
   answerHelper:
     "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
   answerMiss: 'Couldn’t get an answer.',
+  /** Shown in the OpenAI answer spot while FULL_REPORT_OPENAI is off. Not a Gemini miss. */
+  openaiPausedAnswer: 'OpenAI is paused for this run.',
+  /** Mention chip, who-instead, and the theme row while OpenAI is paused. */
+  openaiPausedMark: 'Paused while OpenAI is off.',
+  /** Near Run again after a paused response. This run is not written to history. */
+  openaiPausedHistory: "OpenAI is paused, so this run isn't saved to Over time.",
   documentTitle: 'Grank — See if you show up in AI answers',
   headerBadge: 'SIMPLE AEO · LABELED MODEL CHECKS',
   homeH1: 'What does AI say about your brand?',

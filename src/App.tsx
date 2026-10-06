@@ -27,7 +27,7 @@ import {
   supabasePublicConfig,
   type AuthSession,
 } from './authClient'
-import { FullReportSection } from './FullReportSection'
+import { FullReportSection, OpenAIPausedNote } from './FullReportSection'
 import {
   fetchFullReport,
   fetchOwnedReport,
@@ -36,7 +36,7 @@ import {
   type FullReportOk,
   type SignedGeminiMiss,
 } from './fullReportClient'
-import { THEME_CATALOG, fullReportFromStored, type FullReport, type RunPin } from './fullReport'
+import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, type FullReport, type RunPin } from './fullReport'
 import {
   OWNED_QUESTION_MAX,
   SHORT_OWNED_MAX,
@@ -337,6 +337,7 @@ export default function App() {
   const [reportMessage, setReportMessage] = useState('')
   const [fullReport, setFullReport] = useState<FullReport | null>(null)
   const [geminiMiss, setGeminiMiss] = useState<SignedGeminiMiss | null>(null)
+  const [openaiPaused, setOpenaiPaused] = useState(false)
   const [emailPurpose, setEmailPurpose] = useState<EmailPurpose>('save')
   const [pins, setPins] = useState<PinItem[]>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -387,8 +388,13 @@ export default function App() {
       return
     }
     setQuotaWall(false)
-    setFullReport(result.report)
     setGeminiMiss(result.geminiMiss ?? null)
+    setOpenaiPaused(result.openaiPaused === true)
+    if (result.openaiPaused) {
+      setFullReport((current) => (current ? overlayUnbrandedGemini(current, result.report) : result.report))
+    } else {
+      setFullReport(result.report)
+    }
     setReportPhase('ready')
     setReportMessage('')
   }
@@ -532,6 +538,7 @@ export default function App() {
     setRanPins(null)
     setFullReport(null)
     setGeminiMiss(null)
+    setOpenaiPaused(false)
     setReportPhase('idle')
     setReportMessage('')
   }
@@ -576,6 +583,7 @@ export default function App() {
     setCheckedAt('')
     setFullReport(null)
     setGeminiMiss(null)
+    setOpenaiPaused(false)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -717,6 +725,7 @@ export default function App() {
     setUpgradeEmail(false)
     setFullReport(null)
     setGeminiMiss(null)
+    setOpenaiPaused(false)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -901,6 +910,7 @@ export default function App() {
       })
       setFullReport(report)
       setGeminiMiss(null)
+    setOpenaiPaused(false)
       setReportPhase('ready')
       setReportMessage('')
       setActiveMode('unbranded')
@@ -926,6 +936,7 @@ export default function App() {
     }
     setFullReport(null)
     setGeminiMiss(null)
+    setOpenaiPaused(false)
     setReportPhase('idle')
     setReportMessage('')
     setPins([])
@@ -1004,6 +1015,7 @@ export default function App() {
     if (report) {
       setFullReport(report)
       setGeminiMiss(null)
+    setOpenaiPaused(false)
       return
     }
     const reopened = screenFromSaved(check)
@@ -1215,7 +1227,7 @@ export default function App() {
       setOwnedSet(true)
       setQuestionsDirty(false)
       if (result.checkId) setSavedId(result.checkId)
-      if (result.runs.length > 0) setRuns(result.runs)
+      if (!result.openaiPaused && result.runs.length > 0) setRuns(result.runs)
     }
     applyReportResult(result)
   }
@@ -1600,9 +1612,11 @@ export default function App() {
               runs={runs}
               preview={runPreview}
               geminiMiss={geminiMiss}
+              openaiPaused={openaiPaused}
             />
             {owning ? (
               <div className="save-row">
+                {openaiPaused ? <OpenAIPausedNote /> : null}
                 <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                   {busy ? 'Generating…' : config.copy.runAgainCta}
                 </button>
@@ -1878,6 +1892,7 @@ export default function App() {
             ) : null}
 
             <div className={`save-row${emphasizeSave && !savedId ? ' nudge' : ''}`}>
+              {openaiPaused ? <OpenAIPausedNote /> : null}
               <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                 {busy ? 'Generating…' : config.copy.runAgainCta}
               </button>
@@ -1965,7 +1980,12 @@ export default function App() {
               ) : null}
             </div>
             {fullReport && !reportOnly ? (
-              <FullReportSection report={fullReport} copy={config.copy} geminiMiss={geminiMiss} />
+              <FullReportSection
+                report={fullReport}
+                copy={config.copy}
+                geminiMiss={geminiMiss}
+                openaiPaused={openaiPaused}
+              />
             ) : null}
             {quotaWall ? (
               <UpgradeWall

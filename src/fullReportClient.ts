@@ -24,6 +24,8 @@ export type FullReportOk = {
   runs: CheckRun[]
   /** In memory for this response only. Never part of the stored report. */
   geminiMiss?: SignedGeminiMiss
+  /** This Run again skipped OpenAI and was not saved. */
+  openaiPaused?: boolean
 }
 
 /** The five locked classes. http_reject may carry a numeric status and nothing else. */
@@ -114,9 +116,15 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
   }
   const check = isRecord(rec.check) && typeof rec.check.id === 'string' ? rec.check.id : null
   const geminiMiss = geminiMissFromPayload(rec.geminiMiss)
-  return geminiMiss
-    ? { ok: true, report, checkId: check, runs: cleanRuns(rec.runs), geminiMiss }
-    : { ok: true, report, checkId: check, runs: cleanRuns(rec.runs) }
+  const openaiPaused = rec.openaiPaused === true
+  return {
+    ok: true,
+    report,
+    checkId: check,
+    runs: cleanRuns(rec.runs),
+    ...(geminiMiss ? { geminiMiss } : {}),
+    ...(openaiPaused ? { openaiPaused: true as const } : {}),
+  }
 }
 
 export async function fetchFullReport(

@@ -40,6 +40,7 @@ Privileged values stay on Cloudflare Pages (Production and Preview). Never creat
 | `OPENAI_MODEL` | optional; visibility still defaults to `gpt-4o-mini` |
 | `GEMINI_API_KEY` | `/api/visibility` unbranded replies and signed-in full reports. Not a `VITE_*` variable. A missing key or a Gemini failure does not fail the OpenAI result. The wait is capped and, on Run again, overlaps OpenAI. The Function logs `gemini miss missing_key` (or `http_reject` plus status, `timeout`, `bad_json`, `empty`). A signed-in full report includes that as `geminiMiss` and still returns 200. Guest visibility responses do not. The on-screen line stays “Gemini didn't answer.” |
 | `GEMINI_MODEL` | optional flash model id. Default `gemini-2.5-flash`. |
+| `FULL_REPORT_OPENAI` | Not a secret and not a `VITE_*` variable. Signed-in `/api/full-report` only. Unset, `on`, or any value other than `off` keeps OpenAI on. `off` (trim, case-insensitive) pauses OpenAI on that route: Run again calls Gemini only, does not save a run, and spends no quota. A new full report returns 503 `Full reports are paused while we test engines.` Guest `/api/visibility` still calls OpenAI. |
 | `SUPABASE_URL` | `/api/checks` (server writes) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `/api/checks` only. Never ship to the browser. |
 | `PRODUCT_CONFIG_JSON` | optional knob blob. Single env aliases (`MAX_SAVED_CHECKS_PER_USER`, `STORE_QUESTIONS`, `PAYWALL_ENABLED`, …) override one field. |

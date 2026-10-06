@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { onRequest } from '../functions/api/full-report.ts'
+import { FULL_REPORT_PAUSED_ERROR, fullReportOpenAIPaused, onRequest } from '../functions/api/full-report.ts'
 import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT } from '../functions/api/visibility.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
@@ -10,6 +10,7 @@ import {
   attachUnbrandedGemini,
   fullReportFromStored,
   fullReportPrompt,
+  overlayUnbrandedGemini,
   mentionsBrand,
   selectThemePlan,
   shapeFullReport,
@@ -1176,7 +1177,7 @@ describe('full-report question accordion', () => {
     assert.equal(app.includes('who-instead-land'), false)
     assert.match(
       section,
-      /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' \? ' mentioned' : ''\}`\}/,
+      /className=\{`tag plain mention report-mention\$\{item\.mention === 'mentioned' && !openaiPaused \? ' mentioned' : ''\}`\}/,
     )
     assert.match(section, /item\.answer/)
     assert.match(section, /STORY\.answerMiss/)
@@ -1766,5 +1767,307 @@ describe('unbranded gemini field', () => {
     const names = whoInsteadByTopic(stored?.themes ?? []).flatMap((topic) => topic.names.map((row) => row.name))
     assert.equal(names.includes('Monday'), false)
     assert.equal(names.includes('Jira'), true)
+  })
+})
+
+describe('full report OpenAI pause', () => {
+  it('pauses only when FULL_REPORT_OPENAI is exactly off', () => {
+    assert.equal(fullReportOpenAIPaused(undefined), false)
+    assert.equal(fullReportOpenAIPaused({}), false)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: '' }), false)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: 'on' }), false)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: 'ON' }), false)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: 'false' }), false)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: ' off ' }), true)
+    assert.equal(fullReportOpenAIPaused({ FULL_REPORT_OPENAI: 'OFF' }), true)
+  })
+
+  it('keeps a saved OpenAI read and only overlays Gemini when a run is paused', () => {
+    const current = fullReportFromStored({
+      report: 'full',
+      fullReport: {
+        domain: 'linear.app',
+        model: 'gpt-4o-mini',
+        includesBranded: true,
+        themes: [
+          {
+            id: 'problems',
+            questions: [
+              {
+                question: 'What should a team use to track issues?',
+                answer: 'Jira shows up for that job.',
+                mention: 'not_mentioned',
+                whoInstead: ['Jira'],
+                gemini: '',
+              },
+            ],
+          },
+          {
+            id: 'described',
+            questions: [
+              {
+                question: 'How do people describe Linear?',
+                answer: 'Linear is a fast issue tracker.',
+                mention: 'mentioned',
+                whoInstead: [],
+              },
+            ],
+          },
+        ],
+      },
+    })
+    const incoming = fullReportFromStored({
+      report: 'full',
+      fullReport: {
+        domain: 'linear.app',
+        model: 'gpt-4o-mini',
+        includesBranded: true,
+        themes: [
+          {
+            id: 'problems',
+            questions: [
+              {
+                question: 'What should a team use to track issues?',
+                answer: '',
+                gemini: 'Monday is a common pick.',
+              },
+            ],
+          },
+          {
+            id: 'described',
+            questions: [
+              {
+                question: 'How do people describe Linear?',
+                answer: '',
+              },
+            ],
+          },
+        ],
+      },
+    })
+    assert.ok(current && incoming)
+    if (!current || !incoming) return
+    const next = overlayUnbrandedGemini(current, incoming)
+    const problems = next.themes.find((theme) => theme.id === 'problems')?.questions[0]
+    const described = next.themes.find((theme) => theme.id === 'described')?.questions[0]
+    assert.equal(problems?.gemini, 'Monday is a common pick.')
+    assert.equal(problems?.answer, 'Jira shows up for that job.')
+    assert.equal(problems?.mention, 'not_mentioned')
+    assert.deepEqual(problems?.whoInstead, ['Jira'])
+    assert.equal(described?.answer, 'Linear is a fast issue tracker.')
+    assert.equal(described?.mention, 'mentioned')
+    assert.equal(described?.gemini, undefined)
+  })
+
+  it('runs Gemini only on a paused Run again and spends nothing', async () => {
+    const kept = 'What should a team use for issue tracking?'
+    const added = 'How do teams describe Linear?'
+    const geminiKey = 'gemini-pause-key-should-not-leak'
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('api.openai.com') || call.url.startsWith('https://linear.app')) {
+        throw new Error('paused run must not call OpenAI or fetch a homepage excerpt')
+      }
+      if (call.url.includes('/rest/v1/checks') || call.url.includes('/rest/v1/usage_events') || call.url.includes('/rest/v1/profiles')) {
+        throw new Error('paused run must not save or spend ' + call.method + ' ' + call.url)
+      }
+      if (call.url.includes('generativelanguage.googleapis.com')) {
+        assert.equal(call.url.includes(geminiKey), false)
+        assert.equal(call.body.includes(geminiKey), false)
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: { parts: [{ text: JSON.stringify({ answers: ['Monday is a common pick.'] }) }] },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: [
+            { question: kept, themeId: 'problems' },
+            { question: added, themeId: 'described' },
+          ],
+          checkId: CHECK,
+        }),
+        env: env({
+          FULL_REPORT_OPENAI: ' off ',
+          PAYWALL_ENABLED: 'true',
+          GEMINI_API_KEY: geminiKey,
+        }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.equal(text.includes(geminiKey), false)
+      assert.equal(text.includes(KEY), false)
+      assert.equal(text.includes(SERVICE), false)
+      const body = JSON.parse(text) as {
+        openaiPaused?: boolean
+        geminiMiss?: unknown
+        check?: unknown
+        runs?: unknown
+        themes: { id: string; questions: { question: string; answer: string; gemini?: string; mention?: string }[] }[]
+      }
+      assert.equal(body.openaiPaused, true)
+      assert.equal(body.geminiMiss, undefined)
+      assert.equal(body.check, undefined)
+      assert.equal(body.runs, undefined)
+      const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
+      const described = body.themes.find((theme) => theme.id === 'described')?.questions[0]
+      assert.equal(problems?.question, kept)
+      assert.equal(problems?.answer, '')
+      assert.equal(problems?.mention, undefined)
+      assert.equal(problems?.gemini, 'Monday is a common pick.')
+      assert.equal(described?.question, added)
+      assert.equal(described?.answer, '')
+      assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('/rest/v1/checks')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('/rest/v1/usage_events')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('generativelanguage.googleapis.com')), true)
+      const read = interpretFullReportResponse(200, JSON.parse(text), false)
+      assert.equal(read.ok, true)
+      if (!read.ok) return
+      assert.equal(read.openaiPaused, true)
+      assert.equal(read.runs.length, 0)
+      assert.equal(JSON.stringify(read.report).includes('openaiPaused'), false)
+      const overlaid = overlayUnbrandedGemini(
+        fullReportFromStored({
+          report: 'full',
+          fullReport: {
+            domain: 'linear.app',
+            model: 'gpt-4o-mini',
+            includesBranded: true,
+            themes: [
+              {
+                id: 'problems',
+                questions: [
+                  {
+                    question: kept,
+                    answer: 'Jira shows up.',
+                    mention: 'not_mentioned',
+                    whoInstead: ['Jira'],
+                    gemini: '',
+                  },
+                ],
+              },
+            ],
+          },
+        })!,
+        read.report,
+      )
+      assert.equal(overlaid.themes[0]?.questions[0]?.answer, 'Jira shows up.')
+      assert.equal(overlaid.themes[0]?.questions[0]?.gemini, 'Monday is a common pick.')
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('returns geminiMiss on a paused Run again without calling OpenAI', async () => {
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('api.openai.com') || call.url.includes('/rest/v1/')) {
+        throw new Error('paused miss must not call OpenAI or the database ' + call.url)
+      }
+      if (call.url.includes('generativelanguage.googleapis.com')) {
+        throw new Error('missing key must not call Gemini')
+      }
+      return new Response('unexpected ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: [{ question: 'What should a team use for issue tracking?', themeId: 'problems' }],
+          checkId: CHECK,
+        }),
+        env: env({ FULL_REPORT_OPENAI: 'OFF' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      const body = JSON.parse(text) as {
+        openaiPaused?: boolean
+        geminiMiss?: { class: string }
+        themes: { questions: { gemini?: string; answer: string }[] }[]
+      }
+      assert.equal(body.openaiPaused, true)
+      assert.deepEqual(body.geminiMiss, { class: 'missing_key' })
+      assert.equal(body.themes[0]?.questions[0]?.answer, '')
+      assert.equal(body.themes[0]?.questions[0]?.gemini, '')
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('refuses a new full report while paused and spends nothing', async () => {
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      throw new Error('paused new report must not spend or call ' + call.method + ' ' + call.url)
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest(),
+        env: env({ FULL_REPORT_OPENAI: 'off', PAYWALL_ENABLED: 'true' }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 503, text)
+      const body = JSON.parse(text) as { error?: string; openaiPaused?: boolean }
+      assert.equal(body.error, FULL_REPORT_PAUSED_ERROR)
+      assert.equal(body.openaiPaused, true)
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('/rest/v1/')), false)
+      const read = interpretFullReportResponse(503, body, false)
+      assert.equal(read.ok, false)
+      if (read.ok) return
+      assert.equal(read.error, FULL_REPORT_PAUSED_ERROR)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('still calls OpenAI when FULL_REPORT_OPENAI is on', async () => {
+    let openai = false
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (call.url.includes('api.openai.com')) {
+        openai = true
+        return new Response('no', { status: 503 })
+      }
+      if (call.url.includes('generativelanguage.googleapis.com')) {
+        return new Response(JSON.stringify({ candidates: [] }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/usage_events')) return new Response('[]', { status: 200 })
+      return new Response('unexpected ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: [{ question: 'What should a team use for issue tracking?', themeId: 'problems' }],
+        }),
+        env: env({ FULL_REPORT_OPENAI: 'on' }),
+      })
+      assert.notEqual(res.status, 503)
+      assert.equal(openai, true)
+      const text = await res.text()
+      assert.equal(text.includes('openaiPaused'), false)
+    } finally {
+      mock.restore()
+    }
   })
 })
