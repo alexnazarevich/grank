@@ -319,8 +319,32 @@ export function geminiModelFromEnv(env: VisibilityEnv | undefined): string {
   return GEMINI_MODEL_DEFAULT
 }
 
+/** Pages binding `GEMINI_API_KEY` only. Whitespace is missing. A client-prefixed name is not read. */
+export function geminiApiKeyFromEnv(env: VisibilityEnv | undefined): string {
+  const raw = env?.GEMINI_API_KEY
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
 export function geminiGenerateUrl(model: string): string {
   return `${GEMINI_API_ORIGIN}/v1beta/models/${encodeURIComponent(model)}:generateContent`
+}
+
+/**
+ * Body for `models/{model}:generateContent` on v1beta.
+ * `thinkingConfig` sits inside `generationConfig`. There is no `responseSchema`.
+ */
+export function geminiGenerateBody(
+  model: string,
+  prompt: string,
+  questionCount: number,
+): {
+  contents: [{ role: 'user'; parts: [{ text: string }] }]
+  generationConfig: ReturnType<typeof geminiGenerationConfig>
+} {
+  return {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: geminiGenerationConfig(model, questionCount),
+  }
 }
 
 /** Ask Gemini to answer the questions OpenAI already wrote. No mention and no who-instead. */
@@ -578,6 +602,7 @@ export async function geminiReplies(opts: {
   const timeoutMs = Math.min(GEMINI_TIMEOUT_CAP_MS, Math.max(0, requested))
   if (timeoutMs === 0 || opts.signal?.aborted) return noteGeminiMiss(blank(), { class: 'timeout' })
   const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
+  const requestBody = geminiGenerateBody(opts.model, prompt, opts.questions.length)
   let res: Response
   const timed = geminiSignal(timeoutMs, opts.signal)
   try {
@@ -588,10 +613,7 @@ export async function geminiReplies(opts: {
         'x-goog-api-key': opts.apiKey,
       },
       signal: timed.signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: geminiGenerationConfig(opts.model, opts.questions.length),
-      }),
+      body: JSON.stringify(requestBody),
     })
   } catch {
     // Our timer, a parent abort, or any other transport throw (network, DNS).
@@ -770,8 +792,7 @@ export async function onRequest(context: {
   const secret = context.env?.OPENAI_API_KEY
   const apiKey = typeof secret === 'string' ? secret.trim() : ''
   if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
-  const geminiSecret = context.env?.GEMINI_API_KEY
-  const geminiKey = typeof geminiSecret === 'string' ? geminiSecret.trim() : ''
+  const geminiKey = geminiApiKeyFromEnv(context.env)
 
   const gate = await gateModelCall({
     request,

@@ -291,22 +291,22 @@ export function unbrandedQuestionTexts(themes: readonly FullReportTheme[]): stri
 }
 
 /**
- * Zip Gemini replies onto unbranded questions only.
+ * Zip Gemini replies onto unbranded questions only, by position in report order.
+ * That is the same order as `unbrandedQuestionTexts`. Question text is not a join key:
+ * a reworded or punctuated echo must not drop a reply that Gemini did return.
  * Does not change `answer`, mention, or whoInstead. A short reply list leaves a miss.
  */
 export function attachUnbrandedGemini(
   themes: readonly FullReportTheme[],
   replies: readonly string[],
-  /** When set, replies line up with these strings instead of report order. */
+  /**
+   * Questions Gemini was asked, in report order. Length only.
+   * The strings are not used to match rows.
+   */
   asked?: readonly string[],
 ): FullReportTheme[] {
-  const byText = asked ? new Map<string, string>() : null
-  if (byText && asked) {
-    asked.forEach((question, index) => {
-      const key = question.toLowerCase()
-      if (!byText.has(key)) byText.set(key, cleanGeminiText(replies[index]))
-    })
-  }
+  const slots = asked ? asked.length : replies.length
+  const lined = Array.from({ length: slots }, (_, index) => cleanGeminiText(replies[index]))
   let cursor = 0
   return themes.map((theme) => ({
     ...theme,
@@ -316,9 +316,8 @@ export function attachUnbrandedGemini(
         const { gemini: _drop, ...rest } = item
         return rest
       }
-      const gemini = byText
-        ? (byText.get(item.question.toLowerCase()) ?? '')
-        : cleanGeminiText(replies[cursor++])
+      const gemini = lined[cursor] ?? ''
+      cursor += 1
       return { ...item, gemini }
     }),
   }))

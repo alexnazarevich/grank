@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
-import { FULL_REPORT_PAUSED_ERROR, fullReportOpenAIPaused, onRequest } from '../functions/api/full-report.ts'
+import { FULL_REPORT_PAUSED_ERROR, fullReportOpenAIPaused, missWhenUnbrandedBlank, onRequest } from '../functions/api/full-report.ts'
 import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT } from '../functions/api/visibility.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
@@ -1689,6 +1689,199 @@ describe('full-report question accordion', () => {
     }
   })
 
+describe('owned Run again attaches Gemini by position', () => {
+  it('keeps a Gemini reply when OpenAI echoes different question text', async () => {
+    const kept = 'What should a team use?'
+    const added = 'How do teams describe Linear?'
+    const geminiKey = 'gemini-report-key-should-not-leak'
+    const mock = install((call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (call.url.includes('api.openai.com')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    themes: [
+                      {
+                        id: 'problems',
+                        questions: [
+                          {
+                            question: 'What should a team use??',
+                            answer: 'Jira shows up for that job.',
+                            mention: 'not_mentioned',
+                            whoInstead: ['Jira'],
+                          },
+                        ],
+                      },
+                      {
+                        id: 'described',
+                        questions: [
+                          {
+                            question: 'How do people describe Linear??',
+                            answer: 'Linear is a fast issue tracker.',
+                            mention: 'mentioned',
+                            whoInstead: ['Monday'],
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (call.url.includes('generativelanguage.googleapis.com')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: JSON.stringify({ answers: ['Monday is a common pick.'] }) }],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (call.url.includes('/rest/v1/usage_events')) {
+        throw new Error('owned re-run must not spend a full-report allotment')
+      }
+      if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+      }
+      return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: [
+            { question: kept, themeId: 'problems' },
+            { question: added, themeId: 'described' },
+          ],
+        }),
+        env: env({ GEMINI_API_KEY: geminiKey }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.equal(text.includes(geminiKey), false)
+      const body = JSON.parse(text) as {
+        geminiMiss?: unknown
+        themes: { id: string; questions: { question: string; answer: string; gemini?: string }[] }[]
+      }
+      const problems = body.themes.find((theme) => theme.id === 'problems')?.questions[0]
+      const described = body.themes.find((theme) => theme.id === 'described')?.questions[0]
+      assert.equal(problems?.question, kept)
+      assert.equal(problems?.answer, 'Jira shows up for that job.')
+      assert.equal(problems?.gemini, 'Monday is a common pick.')
+      assert.equal(body.geminiMiss, undefined)
+      assert.equal(described?.question, added)
+      assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+      const saved = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
+      assert.equal(saved?.body.includes('geminiMiss'), false)
+      assert.match(saved?.body || '', /Monday is a common pick/)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('puts a class on an owned Run again when every unbranded Gemini reply is blank', async () => {
+    const kept = 'What should a team use?'
+    const geminiKey = 'gemini-report-key-should-not-leak'
+    const cases: { payload: unknown; miss: { class: string; status?: number }; log: string }[] = [
+      { payload: { candidates: [] }, miss: { class: 'empty' }, log: 'gemini miss empty' },
+      { payload: 'not-json', miss: { class: 'bad_json' }, log: 'gemini miss bad_json' },
+    ]
+    for (const item of cases) {
+      const logs: string[] = []
+      const prevInfo = console.info
+      console.info = (...args: unknown[]) => {
+        logs.push(args.map((part) => String(part)).join(' '))
+      }
+      const mock = install((call) => {
+        if (call.url.includes('/auth/v1/user')) {
+          return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+        }
+        if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+        if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+        if (call.url.includes('api.openai.com')) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      themes: [
+                        {
+                          id: 'problems',
+                          questions: [
+                            {
+                              question: 'What should a team use??',
+                              answer: 'Jira shows up for that job.',
+                              mention: 'not_mentioned',
+                              whoInstead: ['Jira'],
+                            },
+                          ],
+                        },
+                      ],
+                    }),
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        if (call.url.includes('generativelanguage.googleapis.com')) {
+          const body = typeof item.payload === 'string' ? item.payload : JSON.stringify(item.payload)
+          return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+        }
+        if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+          return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+        }
+        return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+      })
+      try {
+        const res = await onRequest({
+          request: authedRequest({ owned: [{ question: kept, themeId: 'problems' }] }),
+          env: env({ GEMINI_API_KEY: geminiKey }),
+        })
+        const text = await res.text()
+        assert.equal(res.status, 200, text)
+        const body = JSON.parse(text) as {
+          geminiMiss?: { class: string; status?: number }
+          themes: { questions: { question: string; answer: string; gemini?: string }[] }[]
+        }
+        assert.equal(body.themes[0]?.questions[0]?.question, kept)
+        assert.equal(body.themes[0]?.questions[0]?.answer, 'Jira shows up for that job.')
+        assert.equal(body.themes[0]?.questions[0]?.gemini, '')
+        assert.deepEqual(body.geminiMiss, item.miss)
+        assert.deepEqual(logs, [item.log])
+        const saved = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
+        assert.equal(saved?.body.includes('geminiMiss'), false)
+      } finally {
+        console.info = prevInfo
+        mock.restore()
+      }
+    }
+  })
+})
+
 describe('unbranded gemini field', () => {
   it('zips Gemini text onto unbranded rows and leaves the OpenAI answer alone', () => {
     const themes: FullReportTheme[] = [
@@ -1737,6 +1930,11 @@ describe('unbranded gemini field', () => {
       },
     ]
     const attached = attachUnbrandedGemini(themes, ['Monday is a common pick.', ''])
+    const mismatched = attachUnbrandedGemini(
+      themes,
+      ['Monday is a common pick.', 'Asana sometimes shows up.'],
+      ['What should a team use??', 'Who else, really?'],
+    )
     const problems = attached[0]?.questions[0]
     const described = attached[1]?.questions[0]
     const alternatives = attached[2]?.questions[0]
@@ -1767,6 +1965,42 @@ describe('unbranded gemini field', () => {
     const names = whoInsteadByTopic(stored?.themes ?? []).flatMap((topic) => topic.names.map((row) => row.name))
     assert.equal(names.includes('Monday'), false)
     assert.equal(names.includes('Jira'), true)
+    const mismatchedProblems = mismatched[0]?.questions[0]
+    const mismatchedAlternatives = mismatched[2]?.questions[0]
+    assert.equal(mismatchedProblems?.question, 'What should a team use for issue tracking?')
+    assert.equal(mismatchedProblems?.gemini, 'Monday is a common pick.')
+    assert.equal(mismatchedAlternatives?.gemini, 'Asana sometimes shows up.')
+    assert.equal(mismatched[1]?.questions[0] ? Object.hasOwn(mismatched[1].questions[0], 'gemini') : false, false)
+  })
+
+  it('keeps a miss class when every unbranded row is blank', () => {
+    const blank: FullReportTheme[] = [
+      {
+        id: 'problems',
+        title: 'Problems you solve',
+        framing: 'unbranded',
+        questions: [
+          {
+            question: 'What should a team use?',
+            answer: 'Jira shows up.',
+            framing: 'unbranded',
+            mention: 'not_mentioned',
+            whoInstead: ['Jira'],
+            gemini: '',
+          },
+        ],
+      },
+    ]
+    assert.deepEqual(missWhenUnbrandedBlank(blank, 1), { class: 'empty' })
+    assert.deepEqual(missWhenUnbrandedBlank(blank, 1, { class: 'bad_json' }), { class: 'bad_json' })
+    assert.deepEqual(missWhenUnbrandedBlank(blank, 1, { class: 'missing_key' }), { class: 'missing_key' })
+    assert.equal(missWhenUnbrandedBlank(blank, 0), undefined)
+    const filled = attachUnbrandedGemini(blank, ['Monday is a common pick.'], ['What should a team use??'])
+    assert.equal(filled[0]?.questions[0]?.gemini, 'Monday is a common pick.')
+    assert.equal(missWhenUnbrandedBlank(filled, 1), undefined)
+    const stillBlank = attachUnbrandedGemini(blank, [''], ['What should a team use??'])
+    assert.equal(stillBlank[0]?.questions[0]?.gemini, '')
+    assert.deepEqual(missWhenUnbrandedBlank(stillBlank, 1), { class: 'empty' })
   })
 })
 

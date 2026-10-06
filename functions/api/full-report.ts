@@ -32,6 +32,7 @@ import {
 } from '../../src/fullReport.ts'
 import {
   GEMINI_REPORT_BUDGET_MS,
+  geminiApiKeyFromEnv,
   geminiMissForResponse,
   geminiMissLogLine,
   geminiModelFromEnv,
@@ -110,7 +111,7 @@ async function softGemini(
   const blank = () => questions.map(() => '')
   try {
     if (questions.length === 0) return { replies: [] }
-    const secret = typeof env?.GEMINI_API_KEY === 'string' ? env.GEMINI_API_KEY.trim() : ''
+    const secret = geminiApiKeyFromEnv(env)
     return await geminiReplies({
       apiKey: secret,
       model: geminiModelFromEnv(env),
@@ -125,14 +126,40 @@ async function softGemini(
   }
 }
 
+/**
+ * Gemini was asked and every unbranded row is still blank: the response needs a class.
+ * Keep the class from the call. A dropped or unusable reply, with no earlier class, is `empty`.
+ */
+export function missWhenUnbrandedBlank(
+  themes: readonly FullReportTheme[],
+  askedCount: number,
+  miss?: GeminiMiss,
+): GeminiMiss | undefined {
+  if (miss) return miss
+  if (askedCount <= 0) return undefined
+  let saw = false
+  for (const theme of themes) {
+    for (const item of theme.questions) {
+      if (item.framing !== 'unbranded') continue
+      saw = true
+      if (typeof item.gemini === 'string' && item.gemini.trim() !== '') return undefined
+    }
+  }
+  return saw ? { class: 'empty' } : undefined
+}
+
 function themesWithGemini(
   themes: FullReportTheme[],
   result: GeminiReplySet,
   asked?: readonly string[],
 ): { themes: FullReportTheme[]; geminiMiss?: GeminiMiss } {
+  const attached = attachUnbrandedGemini(themes, result.replies, asked)
+  const askedCount = asked ? asked.length : unbrandedQuestionTexts(themes).length
+  const miss = missWhenUnbrandedBlank(attached, askedCount, result.miss)
+  if (!result.miss && miss) console.info(geminiMissLogLine(miss))
   return {
-    themes: attachUnbrandedGemini(themes, result.replies, asked),
-    ...(result.miss ? { geminiMiss: result.miss } : {}),
+    themes: attached,
+    ...(miss ? { geminiMiss: miss } : {}),
   }
 }
 
@@ -716,7 +743,7 @@ async function answerOwnedReport(opts: {
     gemini.geminiMiss,
   )
   const text = JSON.stringify(body)
-  const geminiKey = typeof opts.env?.GEMINI_API_KEY === 'string' ? opts.env.GEMINI_API_KEY.trim() : ''
+  const geminiKey = geminiApiKeyFromEnv(opts.env)
   if (
     text.includes(opts.apiKey) ||
     text.includes(opts.sb.serviceRole) ||
@@ -767,7 +794,7 @@ async function answerOwnedPaused(opts: {
     gemini.geminiMiss,
   )
   const text = JSON.stringify(body)
-  const geminiKey = typeof opts.env?.GEMINI_API_KEY === 'string' ? opts.env.GEMINI_API_KEY.trim() : ''
+  const geminiKey = geminiApiKeyFromEnv(opts.env)
   const secrets = geminiKey ? [...opts.scrub, geminiKey] : opts.scrub
   if (secrets.some((secret) => secret !== '' && text.includes(secret))) {
     return json(500, { error: 'Could not build the full report.' })
@@ -924,7 +951,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     gemini.geminiMiss,
   )
   const text = JSON.stringify(body)
-  const geminiKey = typeof context.env?.GEMINI_API_KEY === 'string' ? context.env.GEMINI_API_KEY.trim() : ''
+  const geminiKey = geminiApiKeyFromEnv(context.env)
   if (text.includes(apiKey) || text.includes(sb.serviceRole) || (geminiKey !== '' && text.includes(geminiKey))) {
     return json(500, { error: 'Could not build the full report.' })
   }

@@ -3,6 +3,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer, type ViteDevServer } from 'vite'
 import { describe, it } from 'node:test'
+import { onRequest } from '../functions/api/full-report.ts'
+import { interpretFullReportResponse } from '../src/fullReportClient.ts'
 
 describe('full-report row markup', () => {
   it('skims question and mention chip, and leaves the answer off the closed row', async () => {
@@ -1064,6 +1066,152 @@ describe('land and dig mention mark', () => {
       assert.equal(branded.includes('<strong>Jira</strong>'), false)
       assert.match(branded, /This answer doesn’t name you\./)
     } finally {
+      await server.close()
+    }
+  })
+})
+
+describe('owned Run again miss line', () => {
+  it('renders the miss class from the server response under the opened answer', async () => {
+    const kept = 'What should a team use?'
+    const user = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const check = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method || 'GET'
+      if (url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: user, email: 'a@b.co' }), { status: 200 })
+      }
+      if (url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (url.includes('api.openai.com')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    themes: [
+                      {
+                        id: 'problems',
+                        questions: [
+                          {
+                            question: 'What should a team use??',
+                            answer: 'Jira shows up for that job.',
+                            mention: 'not_mentioned',
+                            whoInstead: ['Jira'],
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return new Response(JSON.stringify({ candidates: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (method === 'GET' && url.includes('/rest/v1/checks')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: check,
+              created_at: '2026-09-27T00:00:00.000Z',
+              domain: 'linear.app',
+              mode: 'full',
+              result: {
+                report: 'full',
+                fullReport: {
+                  domain: 'linear.app',
+                  themes: [
+                    {
+                      id: 'problems',
+                      questions: [
+                        {
+                          question: kept,
+                          answer: 'An older answer.',
+                          framing: 'unbranded',
+                          mention: 'not_mentioned',
+                          whoInstead: [],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (method === 'PATCH' && url.includes('/rest/v1/checks')) return new Response(null, { status: 204 })
+      return new Response('unexpected ' + method + ' ' + url, { status: 500 })
+    }) as typeof fetch
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const res = await onRequest({
+        request: new Request('https://grank.pages.dev/api/full-report', {
+          method: 'POST',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            domain: 'linear.app',
+            checkId: check,
+            owned: [{ question: kept, themeId: 'problems' }],
+          }),
+        }),
+        env: {
+          OPENAI_API_KEY: 'sk-openai-full-report-secret',
+          SUPABASE_URL: 'https://example.supabase.co',
+          SUPABASE_SERVICE_ROLE_KEY: 'service-role-test-secret',
+          GEMINI_API_KEY: 'gemini-report-key-should-not-leak',
+          FULL_REPORT_QUESTION_TARGET: '6',
+          FULL_REPORT_THEME_MIN: '3',
+          FULL_REPORT_THEME_MAX: '3',
+          FREE_FULL_REPORTS: '1',
+        },
+      })
+      const payload = await res.json()
+      const read = interpretFullReportResponse(res.status, payload, false)
+      assert.equal(read.ok, true)
+      if (!read.ok) return
+      assert.deepEqual(read.geminiMiss, { class: 'empty' })
+      assert.equal(read.report.themes[0]?.questions[0]?.gemini, '')
+      assert.equal(read.report.themes[0]?.questions[0]?.answer, 'Jira shows up for that job.')
+      assert.equal(read.runs.length > 0, true)
+      const { FullReportSection } = (await server.ssrLoadModule(
+        '/src/FullReportSection.tsx',
+      )) as typeof import('../src/FullReportSection.tsx')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const html = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy: PRODUCT_DEFAULTS.copy,
+          report: read.report,
+          answersOpen: true,
+          geminiMiss: read.geminiMiss,
+          runs: read.runs,
+        }),
+      )
+      assert.match(html, /Jira shows up for that job\./)
+      assert.match(html, /Gemini didn&#x27;t answer\. \(empty\)/)
+      assert.equal(html.includes('No Gemini mentions'), false)
+      assert.equal(html.includes('gemini-report-key'), false)
+    } finally {
+      globalThis.fetch = prev
       await server.close()
     }
   })
