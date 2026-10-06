@@ -523,15 +523,30 @@ function answersArrayPresent(raw: string): boolean {
 
 /**
  * Blank replies from one payload.
- * Text with no answers array is bad_json. An answers array of blanks, or no text, is empty.
+ * MAX_TOKENS, or text that is not a complete answers array, is bad_json (truncation).
+ * No text, or a complete answers array of blanks, is empty.
  * Any non-blank reply means the call is not a miss.
  */
-export function geminiTextMiss(raw: string, count: number): { replies: string[]; miss?: GeminiMiss } {
+export function geminiTextMiss(
+  raw: string,
+  count: number,
+  finishReason?: string,
+): { replies: string[]; miss?: GeminiMiss } {
   if (count <= 0) return { replies: [] }
   const replies = parseGeminiAnswers(raw, count)
   if (replies.some((item) => item !== '')) return { replies }
-  if (!raw.trim() || answersArrayPresent(raw)) return { replies, miss: { class: 'empty' } }
-  return { replies, miss: { class: 'bad_json' } }
+  if (finishReason === 'MAX_TOKENS' || (raw.trim() !== '' && !answersArrayPresent(raw))) {
+    return { replies, miss: { class: 'bad_json' } }
+  }
+  return { replies, miss: { class: 'empty' } }
+}
+
+function geminiFinishReason(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const candidates = (payload as { candidates?: unknown }).candidates
+  if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== 'object') return ''
+  const reason = (candidates[0] as { finishReason?: unknown }).finishReason
+  return typeof reason === 'string' ? reason : ''
 }
 
 function noteGeminiMiss(replies: string[], miss: GeminiMiss): GeminiReplySet {
@@ -579,8 +594,8 @@ export async function geminiReplies(opts: {
       }),
     })
   } catch {
-    // No HTTP status: the timer, a parent abort, or another transport failure.
-    // The error message is not logged; it can contain the API key.
+    // Our timer, a parent abort, or any other transport throw (network, DNS).
+    // All of those stay timeout. The error message is not logged; it can contain the API key.
     return noteGeminiMiss(blank(), { class: 'timeout' })
   } finally {
     timed.done()
@@ -595,8 +610,9 @@ export async function geminiReplies(opts: {
     return noteGeminiMiss(blank(), { class: 'http_reject', status: res.status })
   }
   try {
-    const text = geminiPayloadText(await res.json())
-    const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length)
+    const payload = await res.json()
+    const text = geminiPayloadText(payload)
+    const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length, geminiFinishReason(payload))
     const replies = outcome.replies.map((answer) => scrubKeys(answer, opts.scrub))
     if (!outcome.miss) return { replies }
     return noteGeminiMiss(replies, outcome.miss)

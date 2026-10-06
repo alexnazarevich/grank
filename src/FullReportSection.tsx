@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import { THEME_CATALOG, type FullReport, type FullReportQuestion, type FullReportTheme } from './fullReport.ts'
@@ -14,10 +14,14 @@ import {
   type MentionGridCell,
   type ThemeMentionRate,
 } from './runHistory.ts'
-import { geminiRow } from './engineBlock.ts'
+import { geminiMissLine, geminiRow } from './engineBlock.ts'
+import type { SignedGeminiMiss } from './fullReportClient.ts'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
+
+/** Present only for the signed-in response that just ran. Stored checks leave this null. */
+const GeminiMissContext = createContext<SignedGeminiMiss | null>(null)
 
 function themeFramingOf(theme: { framing?: Framing; questions: { framing: Framing }[] }): Framing | null {
   const first = theme.questions[0]?.framing
@@ -560,6 +564,7 @@ export function FullReportSection({
   initialTab = 'over-time',
   initialEngine = 'openai',
   topicsOpen = false,
+  geminiMiss = null,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -579,6 +584,8 @@ export function FullReportSection({
   initialEngine?: ReportEngine
   /** Opens topic expands on the active tab. */
   topicsOpen?: boolean
+  /** Class from this Run again response. Omitted for a stored check. */
+  geminiMiss?: SignedGeminiMiss | null
 }) {
   const [tab, setTab] = useState<ReportTab>(initialTab)
   const [engine, setEngine] = useState<ReportEngine>(initialEngine)
@@ -597,6 +604,7 @@ export function FullReportSection({
   const columnCount = shown.length > 0 ? shown.length : 1
   const topicsStartOpen = topicsOpen || whoInsteadOpen || answersOpen
   return (
+    <GeminiMissContext.Provider value={geminiMiss}>
     <section className="full-report" aria-label={copy.fullReportTitle}>
       {themesOnly ? null : (
         <>
@@ -707,11 +715,13 @@ export function FullReportSection({
         <ManageQuestions editor={editor} report={report} copy={copy} initialOpen={manageOpen} />
       ) : null}
     </section>
+    </GeminiMissContext.Provider>
   )
 }
 
 /** Second block on an unbranded row. Empty text is the miss line. */
 function GeminiBlock({ text }: { text: string }) {
+  const miss = useContext(GeminiMissContext)
   const row = geminiRow([text], 0)
   if (!row) return null
   return (
@@ -719,7 +729,7 @@ function GeminiBlock({ text }: { text: string }) {
       <div className="answer-meta">
         <span className="tag plain live">{row.label}</span>
       </div>
-      <p className="answer-body">{row.body}</p>
+      <p className="answer-body">{row.miss ? geminiMissLine(miss) : row.body}</p>
     </div>
   )
 }

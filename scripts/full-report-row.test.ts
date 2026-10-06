@@ -798,6 +798,103 @@ describe('unbranded engine blocks', () => {
       assert.match(missed, new RegExp(openai.replace(/[.]/g, '\\.')))
       assert.match(missed, /<strong>Jira<\/strong>/)
       assert.equal(missed.includes('Monday'), false)
+      assert.equal(missed.includes('(empty)'), false)
+      assert.equal(missed.includes('(timeout)'), false)
+      assert.equal(missed.includes('http_reject'), false)
+      assert.equal(missed.includes('missing_key'), false)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('appends the miss class on a signed-in response and leaves a guest line plain', async () => {
+    const server: ViteDevServer = await createServer({
+      server: { middlewareMode: true },
+      appType: 'custom',
+      logLevel: 'error',
+      ssr: { external: ['react', 'react-dom'] },
+    })
+    try {
+      const { FullReportSection } = (await server.ssrLoadModule(
+        '/src/FullReportSection.tsx',
+      )) as typeof import('../src/FullReportSection.tsx')
+      const { UnbrandedAnswers } = (await server.ssrLoadModule(
+        '/src/UnbrandedAnswers.tsx',
+      )) as typeof import('../src/UnbrandedAnswers.tsx')
+      const { fullReportFromStored } = (await server.ssrLoadModule(
+        '/src/fullReport.ts',
+      )) as typeof import('../src/fullReport.ts')
+      const { PRODUCT_DEFAULTS } = (await server.ssrLoadModule(
+        '/src/config/productConfig.ts',
+      )) as typeof import('../src/config/productConfig.ts')
+      const copy = PRODUCT_DEFAULTS.copy
+      const stored = fullReportFromStored({
+        report: 'full',
+        fullReport: {
+          domain: 'linear.app',
+          model: 'gpt-4o-mini',
+          includesBranded: false,
+          themes: [
+            {
+              id: 'problems',
+              questions: [
+                {
+                  question: 'What should a team use to track issues?',
+                  answer: 'Jira shows up for that job.',
+                  gemini: '',
+                },
+              ],
+            },
+          ],
+        },
+      })
+      assert.ok(stored)
+      if (!stored) return
+      const classes: { geminiMiss: { class: string; status?: number }; suffix: string }[] = [
+        { geminiMiss: { class: 'missing_key' }, suffix: '(missing_key)' },
+        { geminiMiss: { class: 'http_reject', status: 404 }, suffix: '(http_reject 404)' },
+        { geminiMiss: { class: 'timeout' }, suffix: '(timeout)' },
+        { geminiMiss: { class: 'bad_json' }, suffix: '(bad_json)' },
+        { geminiMiss: { class: 'empty' }, suffix: '(empty)' },
+      ]
+      for (const item of classes) {
+        const html = renderToStaticMarkup(
+          React.createElement(FullReportSection, {
+            copy,
+            report: stored,
+            answersOpen: true,
+            geminiMiss: item.geminiMiss,
+          }),
+        )
+        assert.match(html, new RegExp(`Gemini didn&#x27;t answer\\. ${item.suffix.replace(/[()]/g, '\\$&')}`))
+        assert.equal(html.includes('secret'), false)
+      }
+      const leaked = renderToStaticMarkup(
+        React.createElement(FullReportSection, {
+          copy,
+          report: stored,
+          answersOpen: true,
+          geminiMiss: { class: 'http_reject', status: '404 leaked body' as unknown as number },
+        }),
+      )
+      assert.match(leaked, /Gemini didn&#x27;t answer\. \(http_reject\)/)
+      assert.equal(leaked.includes('leaked'), false)
+      assert.equal(leaked.includes('404'), false)
+      const guest = renderToStaticMarkup(
+        React.createElement(UnbrandedAnswers, {
+          mention: 'not_mentioned',
+          whoInstead: ['Jira'],
+          gemini: [''],
+          index: 0,
+          copy,
+        }),
+      )
+      assert.match(guest, /Gemini didn&#x27;t answer\./)
+      assert.equal(guest.includes('(timeout)'), false)
+      assert.equal(guest.includes('(empty)'), false)
+      assert.equal(guest.includes('http_reject'), false)
+      assert.equal(guest.includes('missing_key'), false)
+      assert.equal(guest.includes('bad_json'), false)
     } finally {
       await server.close()
     }
