@@ -117,6 +117,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.geminiMentionsEmpty, 'No Gemini mentions on this check yet.')
     assert.equal(config.copy.engineOpenAI, 'OpenAI')
     assert.equal(config.copy.engineGemini, 'Gemini')
+    assert.equal(config.copy.engineFilterHelper, 'Which engines show under each question.')
     assert.equal(config.copy.reportTopicColumn, 'Topic')
     assert.equal(config.copy.reportThisCheck, 'This check')
     for (const text of Object.values(config.copy)) {

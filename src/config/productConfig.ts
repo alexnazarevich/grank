@@ -79,6 +79,7 @@ export type ProductCopy = {
   geminiMentionsEmpty: string
   engineOpenAI: string
   engineGemini: string
+  engineFilterHelper: string
   reportTopicColumn: string
   reportThisCheck: string
 }
@@ -211,6 +212,7 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     geminiMentionsEmpty: STORY.geminiMentionsEmpty,
     engineOpenAI: STORY.engineOpenAI,
     engineGemini: STORY.engineGemini,
+    engineFilterHelper: STORY.engineFilterHelper,
     reportTopicColumn: STORY.reportTopicColumn,
     reportThisCheck: STORY.reportThisCheck,
   },
@@ -306,6 +308,7 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'geminiMentionsEmpty',
   'engineOpenAI',
   'engineGemini',
+  'engineFilterHelper',
   'reportTopicColumn',
   'reportThisCheck',
 ]
