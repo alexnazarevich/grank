@@ -1403,13 +1403,13 @@ describe('full-report question accordion', () => {
           assert.equal(call.url.includes('aiplatform.googleapis.com'), false)
           assert.equal(call.url.includes(geminiKey), false)
           assert.equal(call.headers.get('x-goog-api-key'), geminiKey)
-          assert.match(call.url, /\/models\/gemini-2\.5-flash:generateContent$/)
+          assert.match(call.url, /\/models\/gemini-3\.5-flash-lite:generateContent$/)
           assert.equal(call.body.includes('whoInstead'), false)
           assert.equal(call.body.includes(geminiKey), false)
           const sent = JSON.parse(call.body) as {
             generationConfig?: { thinkingConfig?: { thinkingBudget?: number }; responseMimeType?: string }
           }
-          assert.equal(sent.generationConfig?.thinkingConfig?.thinkingBudget, 0)
+          assert.equal('thinkingConfig' in (sent.generationConfig ?? {}), false)
           assert.equal(sent.generationConfig?.responseMimeType, 'application/json')
           if (item.geminiStatus === 'timeout') {
             const err = new Error(`timed out ${geminiKey}`)

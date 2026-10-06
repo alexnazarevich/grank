@@ -971,7 +971,7 @@ describe('gemini on unbranded questions', () => {
   })
 
   it('keeps the flash model as a knob and does not call Vertex', () => {
-    assert.equal(GEMINI_MODEL_DEFAULT, 'gemini-2.5-flash')
+    assert.equal(GEMINI_MODEL_DEFAULT, 'gemini-3.5-flash-lite')
     assert.equal(geminiModelFromEnv(undefined), GEMINI_MODEL_DEFAULT)
     assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.0-flash' }), 'gemini-2.0-flash')
     assert.equal(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), GEMINI_MODEL_DEFAULT)
@@ -1012,7 +1012,7 @@ describe('gemini on unbranded questions', () => {
           { status: 200, headers: { 'content-type': 'application/json' } },
         )
       }
-      assert.match(url, /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-2\.5-flash:generateContent$/)
+      assert.match(url, /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.5-flash-lite:generateContent$/)
       assert.equal(url.includes(GEMINI_KEY), false)
       const headers = new Headers(init?.headers)
       assert.equal(headers.get('x-goog-api-key'), GEMINI_KEY)
@@ -1023,7 +1023,7 @@ describe('gemini on unbranded questions', () => {
         generationConfig?: { thinkingConfig?: { thinkingBudget?: number }; maxOutputTokens?: number; responseMimeType?: string }
       }
       assert.equal(sentBody.generationConfig?.responseMimeType, 'application/json')
-      assert.equal(sentBody.generationConfig?.thinkingConfig?.thinkingBudget, 0)
+      assert.equal('thinkingConfig' in (sentBody.generationConfig ?? {}), false)
       assert.equal(sentBody.generationConfig?.maxOutputTokens, geminiMaxOutputTokens(3))
       return new Response(
         geminiPayload([
@@ -1287,9 +1287,11 @@ describe('gemini on unbranded questions', () => {
     assert.equal(answers.includes('http_reject'), false)
     assert.equal(section.includes('missing_key'), false)
     assert.equal(section.includes('http_reject'), false)
-    const flash = geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 3)
+    const flash = geminiGenerationConfig('gemini-2.5-flash', 3)
     assert.equal(flash.thinkingConfig?.thinkingBudget, 0)
-    assert.equal(flash.maxOutputTokens, 880)
+    const lite = geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 3)
+    assert.equal('thinkingConfig' in lite, false)
+    assert.equal(lite.maxOutputTokens, 880)
     assert.equal(geminiMaxOutputTokens(100), 1_200)
     assert.equal(GEMINI_TIMEOUT_CAP_MS, 8_000)
     assert.equal(geminiTimeoutFromEnv(undefined), 8_000)
@@ -1316,19 +1318,22 @@ describe('gemini on unbranded questions', () => {
     assert.equal(geminiMissLogLine({ class: 'missing_key', status: 500 }).includes('500'), false)
 
     const shapeQuestions = ['What should a team use for issue tracking?']
-    const model = geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-flash' })
+    const model = geminiModelFromEnv(undefined)
     const prompt = geminiAnswerPrompt(shapeQuestions)
     const documented = geminiGenerateBody(model, prompt, shapeQuestions.length)
     const documentedUrl = geminiGenerateUrl(model)
+    assert.equal(model, 'gemini-3.5-flash-lite')
     assert.equal(
       documentedUrl,
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent',
     )
     assert.equal(documentedUrl.includes('key='), false)
     assert.equal(documented.contents[0].role, 'user')
     assert.equal(documented.contents[0].parts.length, 1)
     assert.equal(documented.contents[0].parts[0].text, prompt)
-    assert.deepEqual(documented.generationConfig.thinkingConfig, { thinkingBudget: 0 })
+    assert.equal('thinkingConfig' in documented.generationConfig, false)
+    const legacy = geminiGenerateBody('gemini-2.5-flash', prompt, 1)
+    assert.deepEqual(legacy.generationConfig.thinkingConfig, { thinkingBudget: 0 })
     assert.equal(documented.generationConfig.responseMimeType, 'application/json')
     assert.equal(documented.generationConfig.temperature, 0.2)
     assert.equal(documented.generationConfig.maxOutputTokens, 560)
@@ -1348,7 +1353,7 @@ describe('gemini on unbranded questions', () => {
     const proUrl = geminiGenerateUrl(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }))
     assert.equal(proUrl, geminiGenerateUrl(GEMINI_MODEL_DEFAULT))
     const proBody = geminiGenerateBody(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), prompt, 1)
-    assert.deepEqual(proBody.generationConfig.thinkingConfig, { thinkingBudget: 0 })
+    assert.equal('thinkingConfig' in proBody.generationConfig, false)
 
     const shapeCalls: { url: string; body: string; key: string | null }[] = []
     const prevFetch = globalThis.fetch
