@@ -1,5 +1,5 @@
 import { createContext, useContext, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import { THEME_CATALOG, type FullReport, type FullReportQuestion, type FullReportTheme } from './fullReport.ts'
 import type { Framing, ThemeId } from './mentionFacts.ts'
@@ -177,53 +177,51 @@ function ThemeGridRow({
       : []
   const cells = cellsForQuestion(item.question, runs)
   return (
-    <>
-      <tr>
-        <th scope="row">
-          <button
-            type="button"
-            className="report-q-toggle"
-            aria-expanded={open}
-            aria-controls={panelId}
-            aria-label={item.question}
-            onClick={() => setOpen((value) => !value)}
-          >
-            <span className="report-q-text">{item.question}</span>
-          </button>
-        </th>
-        {cells.map((cell, index) => (
-          <td key={`${runQuestionKey(item.question)}:${index}`}>
-            {cell?.mention ? (
-              <span className={`tag plain mention${cell.mention === 'mentioned' ? ' mentioned' : ''}`}>
-                {mentionStatusLabel(cell.mention, copy)}
-              </span>
-            ) : (
-              <span className="muted">—</span>
-            )}
-          </td>
-        ))}
-      </tr>
-      {open ? (
-        <tr className="theme-answer-row">
-          <td colSpan={runs.length + 1}>
-            <div id={panelId} className="report-q-panel">
-              {openaiPaused ? <p className="who-instead-under">{STORY.openaiPausedMark}</p> : null}
-              {!openaiPaused && names.length > 0 ? (
-                <ul className="mention-names report-who">
-                  {names.map((name) => (
-                    <li key={name}>
-                      <strong>{name}</strong>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <OpenAIAnswer text={text} paused={openaiPaused} />
-              {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+    <tr className="report-q-row">
+      <td colSpan={runs.length + 1}>
+        <div className="question-metrics">
+          <div className="question-metrics-name">
+            <button
+              type="button"
+              className="report-q-toggle"
+              aria-expanded={open}
+              aria-controls={panelId}
+              aria-label={item.question}
+              onClick={() => setOpen((value) => !value)}
+            >
+              <span className="report-q-text">{item.question}</span>
+            </button>
+          </div>
+          {cells.map((cell, index) => (
+            <div key={`${runQuestionKey(item.question)}:${index}`} className="question-metrics-cell">
+              {cell?.mention ? (
+                <span className={`tag plain mention${cell.mention === 'mentioned' ? ' mentioned' : ''}`}>
+                  {mentionStatusLabel(cell.mention, copy)}
+                </span>
+              ) : (
+                <span className="muted">—</span>
+              )}
             </div>
-          </td>
-        </tr>
-      ) : null}
-    </>
+          ))}
+        </div>
+        {open ? (
+          <div id={panelId} className="report-q-panel">
+            {openaiPaused ? <p className="who-instead-under">{STORY.openaiPausedMark}</p> : null}
+            {!openaiPaused && names.length > 0 ? (
+              <ul className="mention-names report-who">
+                {names.map((name) => (
+                  <li key={name}>
+                    <strong>{name}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <OpenAIAnswer text={text} paused={openaiPaused} />
+            {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+          </div>
+        ) : null}
+      </td>
+    </tr>
   )
 }
 
@@ -292,7 +290,7 @@ function TopicOverTimeRow({
             <div id={panelId} className="topic-questions">
               {runs.length > 0 ? (
                 <div className="run-grid-wrap">
-                  <table className="run-grid">
+                  <table className="run-grid question-grid" style={{ '--q-cols': runs.length } as CSSProperties}>
                     <thead>
                       <tr>
                         <th scope="col">{copy.overTimeQuestion}</th>

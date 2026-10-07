@@ -214,6 +214,27 @@ describe('full report tabs', () => {
       assert.match(answered, /Generated · Gemini/)
       assert.match(answered, /Monday is named only in the Gemini reply\./)
       assert.match(answered, /This OpenAI reply must stay inside the expand\./)
+      const rowOf = (source: string, question: string) => {
+        const at = source.indexOf(`aria-label="${question}"`)
+        const start = source.lastIndexOf('<tr', at)
+        const end = source.indexOf('</tr>', at)
+        return source.slice(start, end + '</tr>'.length)
+      }
+      const tapped = 'What should a team use to track issues?'
+      const nextQuestion = 'How do teams plan a week?'
+      const tappedRow = rowOf(answered, tapped)
+      const nextRow = rowOf(answered, nextQuestion)
+      assert.equal(tappedRow.includes('id="report-a-problems-unbranded-0"'), true)
+      assert.equal(tappedRow.includes('This OpenAI reply must stay inside the expand.'), true)
+      assert.equal(tappedRow.includes('Monday is named only in the Gemini reply.'), true)
+      assert.equal(tappedRow.includes(nextQuestion), false)
+      assert.equal(nextRow.includes('id="report-a-problems-unbranded-1"'), true)
+      assert.equal(nextRow.includes('This OpenAI reply must stay inside the expand.'), false)
+      assert.equal(nextRow.includes('Monday is named only in the Gemini reply.'), false)
+      assert.equal(nextRow.includes('id="report-a-problems-unbranded-0"'), false)
+      const panelBeforeNext =
+        answered.indexOf('id="report-a-problems-unbranded-0"') < answered.indexOf(`aria-label="${nextQuestion}"`)
+      assert.equal(panelBeforeNext, true)
 
       const competitorsHtml = renderToStaticMarkup(
         React.createElement(FullReportSection, {

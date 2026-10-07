@@ -222,6 +222,52 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   min-width: 9rem; max-width: 16rem; font-weight: 650;
 }
 .run-grid thead th:first-child { z-index: 2; }
+/* Open panel stays inside the tapped question row, under that question's line. */
+.question-grid,
+.question-grid thead,
+.question-grid tbody,
+.question-grid > tbody > tr,
+.question-grid > tbody > tr > td {
+  display: block;
+  width: 100%;
+}
+.question-grid > thead > tr,
+.question-metrics {
+  display: grid;
+  grid-template-columns: minmax(9rem, 16rem) repeat(var(--q-cols), minmax(4.75rem, 1fr));
+  width: 100%;
+  align-items: start;
+}
+.question-grid > tbody > tr > td {
+  padding: 0;
+  border-bottom: 0;
+  max-width: none;
+}
+.run-grid.question-grid thead th,
+.run-grid.question-grid thead th:first-child {
+  position: static;
+  min-width: 0;
+  max-width: none;
+  z-index: auto;
+  width: auto;
+}
+.question-grid thead th,
+.question-metrics > * {
+  border-bottom: 1px solid var(--line);
+  padding: 0.4rem 0.45rem;
+  text-align: left;
+}
+.question-metrics-name {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--card);
+  min-width: 0;
+}
+.question-grid .report-q-panel {
+  padding: 0.15rem 0.45rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+}
 .run-grid tr.theme-pct-row th,
 .run-grid tr.theme-pct-row td {
   color: var(--accent); font-weight: 750; white-space: nowrap;
