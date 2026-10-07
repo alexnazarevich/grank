@@ -72,6 +72,9 @@ export const STORY = {
   engineOpenAI: 'OpenAI',
   engineGemini: 'Gemini',
   engineFilterHelper: 'Which engines show under each question.',
+  runTestQuestion: 'Run test question',
+  runTestHelper: 'Only this question, one engine. Not a full report.',
+  runTestBusy: 'Running…',
   reportTopicColumn: 'Topic',
   reportThisCheck: 'This check',
 } as const
