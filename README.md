@@ -40,7 +40,7 @@ Privileged values stay on Cloudflare Pages (Production and Preview). Never creat
 | `OPENAI_MODEL` | optional; visibility still defaults to `gpt-4o-mini` |
 | `GEMINI_API_KEY` | `/api/visibility` unbranded replies and signed-in full reports. Not a `VITE_*` variable. A missing key or a Gemini failure does not fail the OpenAI result. The wait is capped and, on Run again, overlaps OpenAI. The Function logs `gemini miss missing_key` (or `http_reject` plus status, `timeout`, `bad_json`, `empty`). A signed-in full report includes that as `geminiMiss` and still returns 200. Guest visibility responses do not. The on-screen line stays “Gemini didn't answer.” |
 | `GEMINI_MODEL` | optional flash model id. Default `gemini-3.5-flash-lite`. |
-| `FULL_REPORT_OPENAI` | Not a secret and not a `VITE_*` variable. Signed-in `/api/full-report` only. Unset, `on`, or any value other than `off` keeps OpenAI on. `off` (trim, case-insensitive) pauses OpenAI on that route: Run again calls Gemini only, does not save a run, and spends no quota. A new full report returns 503 `Full reports are paused while we test engines.` Guest `/api/visibility` still calls OpenAI. |
+| `FULL_REPORT_OPENAI` | Not a secret and not a `VITE_*` variable. Signed-in `/api/full-report` and `/api/test-question`. Unset, `on`, or any value other than `off` keeps OpenAI on. `off` (trim, case-insensitive) pauses OpenAI on those routes: Run again calls Gemini only, does not save a run, and spends no quota. A new full report returns 503 `Full reports are paused while we test engines.` An OpenAI **Run test question** does not call OpenAI and returns `openaiPaused` so that question’s OpenAI block shows “OpenAI is paused for this run.” It does not rewrite mention, who-instead, Over time, or Competitors. Gemini test runs still run. Guest `/api/visibility` still calls OpenAI. |
 | `SUPABASE_URL` | `/api/checks` (server writes) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `/api/checks` only. Never ship to the browser. |
 | `PRODUCT_CONFIG_JSON` | optional knob blob. Single env aliases (`MAX_SAVED_CHECKS_PER_USER`, `STORE_QUESTIONS`, `PAYWALL_ENABLED`, …) override one field. |
@@ -121,6 +121,8 @@ The first `freeFullReports` (default 1 per account) do not use the check quota. 
 
 Knobs: `FULL_REPORT_QUESTION_TARGET` (default 55), `FULL_REPORT_THEME_MIN` / `FULL_REPORT_THEME_MAX` (3–6), `FREE_FULL_REPORTS` (default 1), `FULL_REPORT_INCLUDES_BRANDED` (default true). The server enforces the allotment with a `usage_events.kind` of `full_report`. Apply `supabase/migrations/20260926203000_full_report.sql` before the first full report. The saved row reuses `checks` (`result.report = full`); `checks.mode` stays `unbranded` or `branded` so the existing constraint holds. **Your checks** shows a Full report badge.
 
+On an open question in a signed-in full report, **Run test question** offers **OpenAI** or **Gemini** with the line “Only this question, one engine. Not a full report.” `POST /api/test-question` runs that one question on that one engine and returns the answer text. The screen replaces only that question’s block (`Generated · OpenAI`, `Generated · Gemini`, or “Gemini didn't answer.”). It does not write `usage_events`, checks, or run history, and it does not move Over time, Competitors, mention %, or who-instead. It is not a full report for the pay gate or Save. Guests do not get the control. While the call is in flight the row can say “Running…”.
+
 ## Run
 
 ```bash
@@ -135,6 +137,7 @@ Cloudflare Pages: build `npm run build`, output `dist`. Pages Functions:
 
 - `functions/api/visibility.ts` → `/api/visibility` (`mode=unbranded|branded`; unbranded includes who-instead)
 - `functions/api/full-report.ts` → `/api/full-report` (signed-in themed report; service role + OpenAI stay server-side)
+- `functions/api/test-question.ts` → `/api/test-question` (signed-in one question, one engine; no usage or run history)
 - `functions/api/homepage.ts` → `/api/homepage` (supporting page-content line)
 - `functions/api/checks.ts` → `/api/checks` (save and list; service role)
 - `functions/api/product-config.ts` → `/api/product-config` (non-secret knobs)

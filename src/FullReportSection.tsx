@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import type { ProductCopy } from './config/productConfig.ts'
 import { THEME_CATALOG, type FullReport, type FullReportQuestion, type FullReportTheme } from './fullReport.ts'
@@ -16,12 +16,87 @@ import {
 } from './runHistory.ts'
 import { geminiMissLine, geminiRow } from './engineBlock.ts'
 import type { SignedGeminiMiss } from './fullReportClient.ts'
+import type { TestQuestionInput, TestQuestionOutcome } from './testQuestionClient.ts'
 import { STORY } from './story.ts'
 
 const GENERATED = 'Generated · OpenAI'
 
 /** Present only for the signed-in response that just ran. Stored checks leave this null. */
 const GeminiMissContext = createContext<SignedGeminiMiss | null>(null)
+
+type TestQuestionApi = {
+  run: ((input: TestQuestionInput) => Promise<TestQuestionOutcome>) | null
+  disabled: boolean
+  paused: ReadonlySet<string>
+  markPaused: (question: string, paused: boolean) => void
+}
+
+const TestQuestionContext = createContext<TestQuestionApi>({
+  run: null,
+  disabled: false,
+  paused: new Set(),
+  markPaused: () => {},
+})
+
+const EMPTY_PAUSE: ReadonlySet<string> = new Set()
+
+function questionPauseKey(question: string): string {
+  return question.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+/** One engine, this question only. Hidden unless a signed-in runner is wired. */
+function TestQuestionControl({
+  question,
+  themeId,
+  framing,
+}: {
+  question: string
+  themeId: ThemeId
+  framing: Framing
+}) {
+  const api = useContext(TestQuestionContext)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const pending = useRef(false)
+  if (!api.run) return null
+  async function run(engine: 'openai' | 'gemini') {
+    if (!api.run || pending.current || api.disabled) return
+    pending.current = true
+    setBusy(true)
+    setError('')
+    const result = await api.run({ question, engine, themeId })
+    pending.current = false
+    setBusy(false)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+    if (engine === 'openai') api.markPaused(question, result.openaiPaused === true)
+  }
+  const locked = busy || api.disabled
+  return (
+    <div className="test-question">
+      <p className="test-question-label">{STORY.runTestQuestion}</p>
+      <div className="q-tools" role="group" aria-label={STORY.runTestQuestion} aria-busy={busy}>
+        <button type="button" data-engine="openai" disabled={locked} onClick={() => void run('openai')}>
+          {STORY.engineOpenAI}
+        </button>
+        {framing === 'unbranded' ? (
+          <button type="button" data-engine="gemini" disabled={locked} onClick={() => void run('gemini')}>
+            {STORY.engineGemini}
+          </button>
+        ) : null}
+      </div>
+      {busy ? (
+        <p className="status" role="status">
+          {STORY.runTestBusy}
+        </p>
+      ) : null}
+      <p className="why">{STORY.runTestHelper}</p>
+      {error ? <p className="err">{error}</p> : null}
+    </div>
+  )
+}
 
 /** Which labeled answer blocks are visible. The Over time grid does not read this. */
 type ShownEngines = { openai: boolean; gemini: boolean }
@@ -90,6 +165,7 @@ function NameList({ names }: { names: string[] }) {
 function ReportQuestion({
   item,
   copy,
+  themeId,
   panelId,
   chipId,
   startOpen = false,
@@ -98,6 +174,7 @@ function ReportQuestion({
 }: {
   item: FullReportQuestion
   copy: ProductCopy
+  themeId: ThemeId
   panelId: string
   chipId: string
   startOpen?: boolean
@@ -106,6 +183,8 @@ function ReportQuestion({
   openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
+  const testApi = useContext(TestQuestionContext)
+  const answerPaused = openaiPaused || testApi.paused.has(questionPauseKey(item.question))
   const text = item.answer.trim()
   const label = openaiPaused ? STORY.openaiPausedMark : item.mention ? mentionStatusLabel(item.mention, copy) : ''
   const names =
@@ -145,8 +224,9 @@ function ReportQuestion({
       {open ? (
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? <NameList names={names} /> : null}
-          <OpenAIAnswer text={text} paused={openaiPaused} />
+          <OpenAIAnswer text={text} paused={answerPaused} />
           {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+          <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
         </div>
       ) : null}
     </li>
@@ -157,6 +237,7 @@ function ReportQuestion({
 function ThemeGridRow({
   item,
   copy,
+  themeId,
   runs,
   panelId,
   startOpen = false,
@@ -164,12 +245,15 @@ function ThemeGridRow({
 }: {
   item: FullReportQuestion
   copy: ProductCopy
+  themeId: ThemeId
   runs: CheckRun[]
   panelId: string
   startOpen?: boolean
   openaiPaused?: boolean
 }) {
   const [open, setOpen] = useState(startOpen)
+  const testApi = useContext(TestQuestionContext)
+  const answerPaused = openaiPaused || testApi.paused.has(questionPauseKey(item.question))
   const text = item.answer.trim()
   const names =
     !openaiPaused && open && item.mention && item.mention !== 'mentioned'
@@ -216,8 +300,9 @@ function ThemeGridRow({
                 ))}
               </ul>
             ) : null}
-            <OpenAIAnswer text={text} paused={openaiPaused} />
+            <OpenAIAnswer text={text} paused={answerPaused} />
             {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+            <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
           </div>
         ) : null}
       </td>
@@ -307,6 +392,7 @@ function TopicOverTimeRow({
                           key={`${theme.id}-${theme.framing}-${index}`}
                           item={item}
                           copy={copy}
+                          themeId={theme.id}
                           runs={runs}
                           panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                           startOpen={answersOpen}
@@ -323,6 +409,7 @@ function TopicOverTimeRow({
                       key={`${theme.id}-${theme.framing}-${index}`}
                       item={item}
                       copy={copy}
+                      themeId={theme.id}
                       panelId={`report-a-${theme.id}-${theme.framing}-${index}`}
                       chipId={`report-m-${theme.id}-${theme.framing}-${index}`}
                       startOpen={answersOpen}
@@ -409,6 +496,7 @@ function CompetitorTopicBlock({
                 key={`${theme.id}-${theme.framing}-${index}`}
                 item={item}
                 copy={copy}
+                themeId={theme.id}
                 panelId={`competitors-a-${theme.id}-${theme.framing}-${index}`}
                 chipId={`competitors-m-${theme.id}-${theme.framing}-${index}`}
                 startOpen={answersOpen}
@@ -582,6 +670,8 @@ export function FullReportSection({
   topicsOpen = false,
   geminiMiss = null,
   openaiPaused = false,
+  onRunTestQuestion,
+  testQuestionDisabled = false,
 }: {
   report: FullReport
   copy: ProductCopy
@@ -605,8 +695,23 @@ export function FullReportSection({
   geminiMiss?: SignedGeminiMiss | null
   /** This Run again skipped OpenAI. Stored checks leave this false. */
   openaiPaused?: boolean
+  /** Signed-in only. Absent for guests and for renders that are not a full report. */
+  onRunTestQuestion?: (input: TestQuestionInput) => Promise<TestQuestionOutcome>
+  testQuestionDisabled?: boolean
 }) {
   const [tab, setTab] = useState<ReportTab>(initialTab)
+  const [testPause, setTestPause] = useState<{ report: FullReport; keys: ReadonlySet<string> } | null>(null)
+  const testPaused = testPause && testPause.report === report ? testPause.keys : EMPTY_PAUSE
+  function markPaused(question: string, paused: boolean) {
+    const key = questionPauseKey(question)
+    setTestPause((current) => {
+      if (current && current.report !== report) return current
+      const keys = new Set(current ? current.keys : [])
+      if (paused) keys.add(key)
+      else keys.delete(key)
+      return keys.size === 0 ? null : { report, keys }
+    })
+  }
   const [engines, setEngines] = useState<ShownEngines>({
     openai: initialEngines?.openai !== false,
     gemini: initialEngines?.gemini !== false,
@@ -631,6 +736,14 @@ export function FullReportSection({
   return (
     <GeminiMissContext.Provider value={geminiMiss}>
     <ShownEnginesContext.Provider value={engines}>
+    <TestQuestionContext.Provider
+      value={{
+        run: onRunTestQuestion ?? null,
+        disabled: testQuestionDisabled,
+        paused: testPaused,
+        markPaused,
+      }}
+    >
     <section className="full-report" aria-label={copy.fullReportTitle}>
       {themesOnly ? null : (
         <>
@@ -736,6 +849,7 @@ export function FullReportSection({
         <ManageQuestions editor={editor} report={report} copy={copy} initialOpen={manageOpen} />
       ) : null}
     </section>
+    </TestQuestionContext.Provider>
     </ShownEnginesContext.Provider>
     </GeminiMissContext.Provider>
   )

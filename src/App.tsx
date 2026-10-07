@@ -38,6 +38,12 @@ import {
 } from './fullReportClient'
 import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, type FullReport, type RunPin } from './fullReport'
 import {
+  fetchTestQuestion,
+  patchTestAnswer,
+  type TestQuestionInput,
+  type TestQuestionOutcome,
+} from './testQuestionClient'
+import {
   OWNED_QUESTION_MAX,
   SHORT_OWNED_MAX,
   applyOwnedToBeat,
@@ -354,6 +360,7 @@ export default function App() {
   const [checkedAt, setCheckedAt] = useState('')
   const digReq = useRef(0)
   const digState = useRef<DigStatus>('idle')
+  const testEpoch = useRef(0)
 
   useEffect(() => {
     void loadProductConfig().then(setConfig)
@@ -390,6 +397,7 @@ export default function App() {
     setQuotaWall(false)
     setGeminiMiss(result.geminiMiss ?? null)
     setOpenaiPaused(result.openaiPaused === true)
+    testEpoch.current += 1
     if (result.openaiPaused) {
       setFullReport((current) => (current ? overlayUnbrandedGemini(current, result.report) : result.report))
     } else {
@@ -908,6 +916,7 @@ export default function App() {
         omittedAnswers: true,
         omittedWhoInstead: true,
       })
+      testEpoch.current += 1
       setFullReport(report)
       setGeminiMiss(null)
     setOpenaiPaused(false)
@@ -1013,6 +1022,7 @@ export default function App() {
     setOwnedSet(true)
     setQuestionsDirty(false)
     if (report) {
+      testEpoch.current += 1
       setFullReport(report)
       setGeminiMiss(null)
     setOpenaiPaused(false)
@@ -1199,6 +1209,27 @@ export default function App() {
       })
       setAddText('')
     })
+  }
+
+  async function onRunTestQuestion(input: TestQuestionInput): Promise<TestQuestionOutcome> {
+    if (!session || !fullReport) return { ok: false, error: 'Sign in to run a test question.' }
+    const epoch = testEpoch.current
+    const result = await fetchTestQuestion(fullReport.domain, session.accessToken, input)
+    if (epoch !== testEpoch.current) return { ok: true }
+    if (!result.ok) return { ok: false, error: result.error }
+    if (result.engine === 'gemini') {
+      const gemini = result.gemini
+      setFullReport((current) =>
+        current ? patchTestAnswer(current, input.question, { engine: 'gemini', gemini }) : current,
+      )
+      return { ok: true }
+    }
+    if ('openaiPaused' in result) return { ok: true, openaiPaused: true }
+    const answer = result.answer
+    setFullReport((current) =>
+      current ? patchTestAnswer(current, input.question, { engine: 'openai', answer }) : current,
+    )
+    return { ok: true }
   }
 
   async function runOwnedReport() {
@@ -1615,6 +1646,8 @@ export default function App() {
               preview={runPreview}
               geminiMiss={geminiMiss}
               openaiPaused={openaiPaused}
+              onRunTestQuestion={session ? onRunTestQuestion : undefined}
+              testQuestionDisabled={questionToolsBusy}
             />
             {owning ? (
               <div className="save-row">
@@ -1988,6 +2021,8 @@ export default function App() {
                 copy={config.copy}
                 geminiMiss={geminiMiss}
                 openaiPaused={openaiPaused}
+                onRunTestQuestion={session ? onRunTestQuestion : undefined}
+                testQuestionDisabled={questionToolsBusy}
               />
             ) : null}
             {quotaWall ? (
