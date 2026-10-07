@@ -622,7 +622,7 @@ describe('full-report row markup', () => {
       assert.equal(html.includes('Appeared on'), false)
       assert.equal(html.includes('who-instead-name'), false)
       assert.equal((html.match(/class="run-grid over-time-grid"/g) || []).length, 1)
-      assert.equal((html.match(/<table class="run-grid">/g) || []).length, 2)
+      assert.equal((html.match(/<table class="run-grid question-grid"/g) || []).length, 2)
     } finally {
       await server.close()
     }
