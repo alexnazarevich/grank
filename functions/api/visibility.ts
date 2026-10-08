@@ -697,7 +697,7 @@ async function completeVisibility(
       }),
     })
   } catch (err) {
-    return json(502, { error: `OpenAI request failed: ${failureDetail(err)}` })
+    return json(502, { error: `ChatGPT request failed: ${failureDetail(err)}` })
   }
 
   if (!res.ok) {
@@ -710,7 +710,7 @@ async function completeVisibility(
       // Keep the status. Do not forward a raw body.
     }
     const safe = scrubSecret(detail, apiKey).slice(0, 180)
-    return json(502, { error: `OpenAI request failed: ${safe || 'HTTP ' + res.status}` })
+    return json(502, { error: `ChatGPT request failed: ${safe || 'HTTP ' + res.status}` })
   }
 
   let content = ''
@@ -721,12 +721,12 @@ async function completeVisibility(
     const raw = payload.choices?.[0]?.message?.content
     content = typeof raw === 'string' ? raw : ''
   } catch {
-    return json(502, { error: 'OpenAI request failed: unreadable response' })
+    return json(502, { error: 'ChatGPT request failed: unreadable response' })
   }
 
   const parsed = parseVisibilityContent(scrubSecret(content, apiKey), domain, owned && owned.length > 0 ? 1 : 3)
   if (!parsed) {
-    return json(502, { error: 'OpenAI request failed: model output was not usable JSON' })
+    return json(502, { error: 'ChatGPT request failed: model output was not usable JSON' })
   }
 
   const useOwned = Boolean(owned && owned.length > 0)

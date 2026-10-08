@@ -1,23 +1,26 @@
 /**
  * POST /api/full-report { domain }
  * One signed-in full report. OpenAI writes the questions and the answer on each row.
- * Unbranded rows also carry a Gemini reply in `gemini`. A miss is an empty string.
- * When every unbranded reply is blank, the response also has `geminiMiss`
+ * Unbranded rows also carry a Gemini reply in `gemini` and a Claude reply in `claude`.
+ * A miss is an empty string. When every unbranded reply for that engine is blank,
+ * the response also has `geminiMiss` or `claudeMiss`
  * (`missing_key`, `http_reject` plus status, `timeout`, `bad_json`, or `empty`).
- * That field is not stored on the check. This route requires sign-in.
- * Gemini cannot fail the report. Run again overlaps it with OpenAI, and the
- * wait is capped so a slow call ends as `timeout` instead of an empty 502.
- * Branded rows stay OpenAI only. Mention and who-instead stay on the OpenAI answer.
+ * Those fields are not stored on the check. This route requires sign-in.
+ * Gemini and Claude cannot fail the report. Run again overlaps them with the
+ * ChatGPT call, and the wait is capped so a slow call ends as `timeout`.
+ * Claude asks unbranded questions in at most four parallel chunks.
+ * Branded rows stay ChatGPT only. Mention and who-instead stay on the ChatGPT answer.
  * The first freeFullReports runs are complimentary. A further run needs a paid
  * plan, then uses that plan's check quota. Free check quota cannot buy another
  * full report. No second report SKU.
- * OPENAI_API_KEY, GEMINI_API_KEY, and SUPABASE_SERVICE_ROLE_KEY stay on the server.
+ * OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, and SUPABASE_SERVICE_ROLE_KEY stay on the server.
  */
 
 import { historyCapForPlan, productConfigFromEnv, type ProductConfig } from '../../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
   applyRunPins,
+  attachUnbrandedClaude,
   attachUnbrandedGemini,
   cleanRunPins,
   fullReportPrompt,
@@ -42,6 +45,16 @@ import {
   type GeminiMiss,
   type GeminiReplySet,
 } from './visibility.ts'
+import {
+  CLAUDE_TIMEOUT_CAP_MS,
+  claudeApiKeyFromEnv,
+  claudeMissForResponse,
+  claudeMissLogLine,
+  claudeModelFromEnv,
+  claudeReplies,
+  type ClaudeMiss,
+  type ClaudeReplySet,
+} from './claude.ts'
 import { mentionsBrand } from '../../src/mentionFacts.ts'
 import {
   cleanOwnedQuestions,
@@ -148,6 +161,35 @@ export function missWhenUnbrandedBlank(
   return saw ? { class: 'empty' } : undefined
 }
 
+/**
+ * Claude never fails the report. A throw, a timeout, or a reject becomes empty
+ * replies plus one miss class. The wait cannot be raised past the cap.
+ */
+async function softClaude(
+  questions: string[],
+  env: ReportEnv | undefined,
+  scrub: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ClaudeReplySet> {
+  const blank = () => questions.map(() => '')
+  try {
+    if (questions.length === 0) return { replies: [] }
+    const secret = claudeApiKeyFromEnv(env)
+    return await claudeReplies({
+      apiKey: secret,
+      model: claudeModelFromEnv(env),
+      questions,
+      scrub: secret ? [...scrub, secret] : scrub,
+      timeoutMs,
+      signal,
+    })
+  } catch {
+    console.info(claudeMissLogLine({ class: 'timeout' }))
+    return { replies: blank(), miss: { class: 'timeout' } }
+  }
+}
+
 function themesWithGemini(
   themes: FullReportTheme[],
   result: GeminiReplySet,
@@ -163,9 +205,58 @@ function themesWithGemini(
   }
 }
 
-function withGeminiMiss(body: Record<string, unknown>, miss?: GeminiMiss): Record<string, unknown> {
-  if (!miss) return body
-  return { ...body, geminiMiss: geminiMissForResponse(miss) }
+function missWhenClaudeBlank(
+  themes: readonly FullReportTheme[],
+  askedCount: number,
+  miss?: ClaudeMiss,
+): ClaudeMiss | undefined {
+  if (miss) return miss
+  if (askedCount <= 0) return undefined
+  let saw = false
+  for (const theme of themes) {
+    for (const item of theme.questions) {
+      if (item.framing !== 'unbranded') continue
+      saw = true
+      if (typeof item.claude === 'string' && item.claude.trim() !== '') return undefined
+    }
+  }
+  return saw ? { class: 'empty' } : undefined
+}
+
+function themesWithClaude(
+  themes: FullReportTheme[],
+  result: ClaudeReplySet,
+  asked?: readonly string[],
+): { themes: FullReportTheme[]; claudeMiss?: ClaudeMiss } {
+  const attached = attachUnbrandedClaude(themes, result.replies, asked)
+  const askedCount = asked ? asked.length : unbrandedQuestionTexts(themes).length
+  const miss = missWhenClaudeBlank(attached, askedCount, result.miss)
+  if (!result.miss && miss) console.info(claudeMissLogLine(miss))
+  return {
+    themes: attached,
+    ...(miss ? { claudeMiss: miss } : {}),
+  }
+}
+
+function withEngineMisses(
+  body: Record<string, unknown>,
+  geminiMiss?: GeminiMiss,
+  claudeMiss?: ClaudeMiss,
+): Record<string, unknown> {
+  return {
+    ...body,
+    ...(geminiMiss ? { geminiMiss: geminiMissForResponse(geminiMiss) } : {}),
+    ...(claudeMiss ? { claudeMiss: claudeMissForResponse(claudeMiss) } : {}),
+  }
+}
+
+function sideWaitMs(env: ReportEnv | undefined, startedAt: number, now: number): number {
+  return geminiWaitMs({
+    capMs: Math.min(geminiTimeoutFromEnv(env), CLAUDE_TIMEOUT_CAP_MS),
+    budgetMs: GEMINI_REPORT_BUDGET_MS,
+    startedAt,
+    now,
+  })
 }
 
 function batches(plan: PlannedTheme[]): PlannedTheme[][] {
@@ -373,7 +464,7 @@ async function completeBatch(
       }),
     })
   } catch (err) {
-    return { ok: false, error: `OpenAI request failed: ${failureDetail(err)}` }
+    return { ok: false, error: `ChatGPT request failed: ${failureDetail(err)}` }
   }
 
   if (!res.ok) {
@@ -385,7 +476,7 @@ async function completeBatch(
     } catch {
       // Keep the status.
     }
-    return { ok: false, error: `OpenAI request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
+    return { ok: false, error: `ChatGPT request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
   }
 
   try {
@@ -393,10 +484,10 @@ async function completeBatch(
     const raw = payload.choices?.[0]?.message?.content
     const content = typeof raw === 'string' ? raw : ''
     const parsed = parseModelJson(scrubSecret(content, apiKey))
-    if (!parsed) return { ok: false, error: 'OpenAI request failed: model output was not usable JSON' }
+    if (!parsed) return { ok: false, error: 'ChatGPT request failed: model output was not usable JSON' }
     return { ok: true, json: parsed }
   } catch {
-    return { ok: false, error: 'OpenAI request failed: unreadable response' }
+    return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
 }
 
@@ -528,7 +619,7 @@ async function completeOwnedBatch(
       }),
     })
   } catch (err) {
-    return { ok: false, error: `OpenAI request failed: ${failureDetail(err)}` }
+    return { ok: false, error: `ChatGPT request failed: ${failureDetail(err)}` }
   }
 
   if (!res.ok) {
@@ -540,7 +631,7 @@ async function completeOwnedBatch(
     } catch {
       // Keep the status.
     }
-    return { ok: false, error: `OpenAI request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
+    return { ok: false, error: `ChatGPT request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
   }
 
   try {
@@ -548,10 +639,10 @@ async function completeOwnedBatch(
     const raw = payload.choices?.[0]?.message?.content
     const content = typeof raw === 'string' ? raw : ''
     const parsed = parseModelJson(scrubSecret(content, apiKey))
-    if (!parsed) return { ok: false, error: 'OpenAI request failed: model output was not usable JSON' }
+    if (!parsed) return { ok: false, error: 'ChatGPT request failed: model output was not usable JSON' }
     return { ok: true, json: parsed }
   } catch {
-    return { ok: false, error: 'OpenAI request failed: unreadable response' }
+    return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
 }
 
@@ -667,14 +758,11 @@ async function answerOwnedReport(opts: {
   const preview = mergeOwnedAnswers(opts.owned, { themes: [] }, { domain: opts.domain, includesBranded })
   const asked = preview ? unbrandedQuestionTexts(preview) : []
   const startedAt = Date.now()
-  const waitMs = geminiWaitMs({
-    capMs: geminiTimeoutFromEnv(opts.env),
-    budgetMs: GEMINI_REPORT_BUDGET_MS,
-    startedAt,
-    now: startedAt,
-  })
-  const stopGemini = new AbortController()
-  const geminiTask = softGemini(asked, opts.env, [opts.apiKey, opts.sb.serviceRole], waitMs, stopGemini.signal)
+  const waitMs = sideWaitMs(opts.env, startedAt, startedAt)
+  const stopSide = new AbortController()
+  const scrub = [opts.apiKey, opts.sb.serviceRole]
+  const geminiTask = softGemini(asked, opts.env, scrub, waitMs, stopSide.signal)
+  const claudeTask = softClaude(asked, opts.env, scrub, waitMs, stopSide.signal)
 
   const excerpt = await homepageExcerpt(opts.domain)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, opts.apiKey) : null
@@ -683,8 +771,8 @@ async function answerOwnedReport(opts: {
   )
   const failed = parts.find((part) => !part.ok)
   if (failed && !failed.ok) {
-    stopGemini.abort()
-    await geminiTask
+    stopSide.abort()
+    await Promise.all([geminiTask, claudeTask])
     await admitted.release()
     return json(502, { error: failed.error })
   }
@@ -694,13 +782,14 @@ async function answerOwnedReport(opts: {
     { domain: opts.domain, includesBranded },
   )
   if (!merged) {
-    stopGemini.abort()
-    await geminiTask
+    stopSide.abort()
+    await Promise.all([geminiTask, claudeTask])
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
   const gemini = themesWithGemini(merged, await geminiTask, asked)
-  const themes = gemini.themes
+  const claude = themesWithClaude(gemini.themes, await claudeTask, asked)
+  const themes = claude.themes
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,
@@ -729,7 +818,7 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(saved.status, { error: saved.error })
   }
-  const body = withGeminiMiss(
+  const body = withEngineMisses(
     {
       ok: true,
       report: 'full',
@@ -741,13 +830,16 @@ async function answerOwnedReport(opts: {
       ...('runs' in saved ? { runs: saved.runs } : {}),
     },
     gemini.geminiMiss,
+    claude.claudeMiss,
   )
   const text = JSON.stringify(body)
   const geminiKey = geminiApiKeyFromEnv(opts.env)
+  const claudeKey = claudeApiKeyFromEnv(opts.env)
   if (
     text.includes(opts.apiKey) ||
     text.includes(opts.sb.serviceRole) ||
-    (geminiKey !== '' && text.includes(geminiKey))
+    (geminiKey !== '' && text.includes(geminiKey)) ||
+    (claudeKey !== '' && text.includes(claudeKey))
   ) {
     return json(500, { error: 'Could not build the full report.' })
   }
@@ -758,8 +850,8 @@ async function answerOwnedReport(opts: {
 }
 
 /**
- * Run again while OpenAI is off. Gemini only, on the unbranded questions.
- * No homepage fetch, no OpenAI, no saved run, no quota.
+ * Run again while ChatGPT is off. Gemini and Claude only, on the unbranded questions.
+ * No homepage fetch, no ChatGPT call, no saved run, no quota.
  */
 async function answerOwnedPaused(opts: {
   domain: string
@@ -774,28 +866,30 @@ async function answerOwnedPaused(opts: {
   if (!preview) return json(502, { error: 'Couldn’t answer this question set — try again.' })
   const asked = unbrandedQuestionTexts(preview)
   const startedAt = Date.now()
-  const waitMs = geminiWaitMs({
-    capMs: geminiTimeoutFromEnv(opts.env),
-    budgetMs: GEMINI_REPORT_BUDGET_MS,
-    startedAt,
-    now: startedAt,
-  })
-  const gemini = themesWithGemini(preview, await softGemini(asked, opts.env, opts.scrub, waitMs), asked)
-  const body = withGeminiMiss(
+  const waitMs = sideWaitMs(opts.env, startedAt, startedAt)
+  const [geminiResult, claudeResult] = await Promise.all([
+    softGemini(asked, opts.env, opts.scrub, waitMs),
+    softClaude(asked, opts.env, opts.scrub, waitMs),
+  ])
+  const gemini = themesWithGemini(preview, geminiResult, asked)
+  const claude = themesWithClaude(gemini.themes, claudeResult, asked)
+  const body = withEngineMisses(
     {
       ok: true,
       report: 'full',
       domain: opts.domain,
       model: MODEL,
       includesBranded,
-      themes: gemini.themes,
+      themes: claude.themes,
       openaiPaused: true,
     },
     gemini.geminiMiss,
+    claude.claudeMiss,
   )
   const text = JSON.stringify(body)
   const geminiKey = geminiApiKeyFromEnv(opts.env)
-  const secrets = geminiKey ? [...opts.scrub, geminiKey] : opts.scrub
+  const claudeKey = claudeApiKeyFromEnv(opts.env)
+  const secrets = [geminiKey, claudeKey, ...opts.scrub].filter((secret) => secret !== '')
   if (secrets.some((secret) => secret !== '' && text.includes(secret))) {
     return json(500, { error: 'Could not build the full report.' })
   }
@@ -908,17 +1002,16 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     await reserved.release()
     return json(502, { error: 'Couldn’t build the full report — try again.' })
   }
-  const waitMs = geminiWaitMs({
-    capMs: geminiTimeoutFromEnv(context.env),
-    budgetMs: GEMINI_REPORT_BUDGET_MS,
-    startedAt,
-    now: Date.now(),
-  })
-  const gemini = themesWithGemini(
-    shapedThemes,
-    await softGemini(unbrandedQuestionTexts(shapedThemes), context.env, [apiKey, sb.serviceRole], waitMs),
-  )
-  const themes = gemini.themes
+  const waitMs = sideWaitMs(context.env, startedAt, Date.now())
+  const asked = unbrandedQuestionTexts(shapedThemes)
+  const scrub = [apiKey, sb.serviceRole]
+  const [geminiResult, claudeResult] = await Promise.all([
+    softGemini(asked, context.env, scrub, waitMs),
+    softClaude(asked, context.env, scrub, waitMs),
+  ])
+  const gemini = themesWithGemini(shapedThemes, geminiResult, asked)
+  const claude = themesWithClaude(gemini.themes, claudeResult, asked)
+  const themes = claude.themes
 
   const saved = await saveReport(
     sb,
@@ -934,7 +1027,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     return json(502, { error: 'Could not save this full report.' })
   }
 
-  const body = withGeminiMiss(
+  const body = withEngineMisses(
     {
       ok: true,
       report: 'full',
@@ -949,10 +1042,17 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       },
     },
     gemini.geminiMiss,
+    claude.claudeMiss,
   )
   const text = JSON.stringify(body)
   const geminiKey = geminiApiKeyFromEnv(context.env)
-  if (text.includes(apiKey) || text.includes(sb.serviceRole) || (geminiKey !== '' && text.includes(geminiKey))) {
+  const claudeKey = claudeApiKeyFromEnv(context.env)
+  if (
+    text.includes(apiKey) ||
+    text.includes(sb.serviceRole) ||
+    (geminiKey !== '' && text.includes(geminiKey)) ||
+    (claudeKey !== '' && text.includes(claudeKey))
+  ) {
     return json(500, { error: 'Could not build the full report.' })
   }
   return new Response(text, {

@@ -31,7 +31,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.upgradeHeadline, 'Free limit reached')
     assert.equal(
       config.copy.upgradeBody,
-      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled OpenAI checks.',
+      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled checks.',
     )
     assert.equal(config.copy.upgradeHeadline.includes('Need more checks'), false)
     assert.equal(/\d|\$/.test(config.copy.upgradeHeadline + config.copy.upgradeBody), false)
@@ -49,7 +49,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.fullReportTitle, 'Full visibility report')
     assert.equal(
       config.copy.fullReportSub,
-      "More questions about this site, grouped by theme. Unbranded answers are labeled OpenAI and Gemini. We don't blend them.",
+      "More questions about this site, grouped by theme. Unbranded answers are labeled ChatGPT, Gemini, and Claude. We don't blend them.",
     )
     assert.equal(config.copy.fullReportLoading, 'Building your full report…')
     assert.equal(config.copy.fullReportEmptyThemes, 'No themes yet — try again.')
@@ -95,7 +95,7 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.deltaWhoAppeared, 'Newly showing up instead')
     assert.equal(config.copy.deltaWhoDropped, 'No longer showing up instead')
     assert.equal(config.copy.overTimeTitle, 'Over time')
-    assert.equal(config.copy.overTimeHelper, 'Each column is one run. Same questions — mention status as you re-run.')
+    assert.equal(config.copy.overTimeHelper, 'Each column is one run. Same questions — ChatGPT mention status as you re-run.')
     assert.equal(config.copy.overTimeQuestion, 'Question')
     assert.equal(config.copy.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
     assert.equal(config.copy.themeMentionRate, '{pct}% mentioned')
@@ -111,12 +111,12 @@ describe('productConfigFromEnv', () => {
     assert.equal(config.copy.competitorsTab, 'Competitors')
     assert.equal(
       config.copy.competitorsHelper,
-      'Your mention rate, and names that showed up instead on unbranded questions this run. Not market share.',
+      'Your ChatGPT mention rate, and names ChatGPT gave instead on unbranded questions this run. Not market share.',
     )
     assert.equal(config.copy.competitorsYou, 'You')
-    assert.equal(config.copy.geminiMentionsEmpty, 'No Gemini mentions on this check yet.')
-    assert.equal(config.copy.engineOpenAI, 'OpenAI')
+    assert.equal(config.copy.engineOpenAI, 'ChatGPT')
     assert.equal(config.copy.engineGemini, 'Gemini')
+    assert.equal(config.copy.engineClaude, 'Claude')
     assert.equal(config.copy.engineFilterHelper, 'Which engines show under each question.')
     assert.equal(config.copy.reportTopicColumn, 'Topic')
     assert.equal(config.copy.reportThisCheck, 'This check')

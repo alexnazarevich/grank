@@ -12,18 +12,20 @@ export const STORY = {
   digHelper: 'Questions that name your brand — tone, claims, how you’re described.',
   digBadge: 'Branded',
   digFail: 'Couldn’t generate branded questions — try again.',
-  answerLabel: 'Generated · OpenAI',
+  answerLabel: 'Generated · ChatGPT',
   geminiLabel: 'Generated · Gemini',
   geminiMiss: "Gemini didn't answer.",
+  claudeLabel: 'Generated · Claude',
+  claudeMiss: "Claude didn't answer.",
   answerHelper:
-    "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
+    "Each answer is labeled with the engine that gave it. Branded answers are ChatGPT only. We don't blend them into one score.",
   answerMiss: 'Couldn’t get an answer.',
-  /** Shown in the OpenAI answer spot while FULL_REPORT_OPENAI is off. Not a Gemini miss. */
-  openaiPausedAnswer: 'OpenAI is paused for this run.',
-  /** Mention chip, who-instead, and the theme row while OpenAI is paused. */
-  openaiPausedMark: 'Paused while OpenAI is off.',
+  /** Shown in the ChatGPT answer spot while FULL_REPORT_OPENAI is off. Not a Gemini or Claude miss. */
+  openaiPausedAnswer: 'ChatGPT is paused for this run.',
+  /** Mention chip, who-instead, and the theme row while ChatGPT is paused. */
+  openaiPausedMark: 'Paused while ChatGPT is off.',
   /** Near Run again after a paused response. This run is not written to history. */
-  openaiPausedHistory: "OpenAI is paused, so this run isn't saved to Over time.",
+  openaiPausedHistory: "ChatGPT is paused, so this run isn't saved to Over time.",
   documentTitle: 'Grank — See if you show up in AI answers',
   headerBadge: 'SIMPLE AEO · LABELED MODEL CHECKS',
   homeH1: 'What does AI say about your brand?',
@@ -33,7 +35,9 @@ export const STORY = {
   homeLoading: 'Checking how AI might talk about you…',
   exampleLead: 'Or try an example:',
   homeProof:
-    "Unbranded answers are labeled OpenAI and Gemini. Branded answers are OpenAI only. We never blend them into one score.",
+    'Your free check labels ChatGPT and Gemini answers. Full reports add Claude. Branded answers are ChatGPT only. We never blend them into one score.',
+  metaDescription:
+    'Grank — simple AEO for thin marketing teams. Unbranded category questions first, branded when you ask. Answers labeled by engine: ChatGPT and Gemini, plus Claude in full reports. Never a blended score.',
   foilTitle: 'Built for thin teams',
   foilBody:
     '“Are we in AI answers?” shouldn’t need a $499 demo or a prompt lab. Suites sell ops. You need a glance: do you show up for what you solve — and who shows up instead.',
@@ -49,7 +53,7 @@ export const STORY = {
   deltaWhoAppeared: 'Newly showing up instead',
   deltaWhoDropped: 'No longer showing up instead',
   overTimeTitle: 'Over time',
-  overTimeHelper: 'Each column is one run. Same questions — mention status as you re-run.',
+  overTimeHelper: 'Each column is one run. Same questions — ChatGPT mention status as you re-run.',
   overTimeQuestion: 'Question',
   overTimeLegend: 'Mentioned · Not mentioned · Unclear',
   themeMentionRate: '{pct}% mentioned',
@@ -66,11 +70,11 @@ export const STORY = {
   whoInsteadBoardMore: '{n} more in the questions',
   competitorsTab: 'Competitors',
   competitorsHelper:
-    'Your mention rate, and names that showed up instead on unbranded questions this run. Not market share.',
+    'Your ChatGPT mention rate, and names ChatGPT gave instead on unbranded questions this run. Not market share.',
   competitorsYou: 'You',
-  geminiMentionsEmpty: 'No Gemini mentions on this check yet.',
-  engineOpenAI: 'OpenAI',
+  engineOpenAI: 'ChatGPT',
   engineGemini: 'Gemini',
+  engineClaude: 'Claude',
   engineFilterHelper: 'Which engines show under each question.',
   runTestQuestion: 'Run test question',
   runTestHelper: 'Only this question, one engine. Not a full report.',

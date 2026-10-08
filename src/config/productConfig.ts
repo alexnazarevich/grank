@@ -76,9 +76,9 @@ export type ProductCopy = {
   competitorsTab: string
   competitorsHelper: string
   competitorsYou: string
-  geminiMentionsEmpty: string
   engineOpenAI: string
   engineGemini: string
+  engineClaude: string
   engineFilterHelper: string
   reportTopicColumn: string
   reportThisCheck: string
@@ -153,13 +153,13 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     historyTitle: 'Your checks',
     upgradeHeadline: 'Free limit reached',
     upgradeBody:
-      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled OpenAI checks.',
+      'You’ve used what’s included for free. One paid plan unlocks more full reports, saved checks, and ongoing land and dig — same labeled checks.',
     upgradeCta: 'Upgrade',
     showFullReportCta: 'Show full report',
     fullReportMagicLinkHint: 'Sign in with a magic link to unlock your full report. No password.',
     fullReportTitle: 'Full visibility report',
     fullReportSub:
-      "More questions about this site, grouped by theme. Unbranded answers are labeled OpenAI and Gemini. We don't blend them.",
+      "More questions about this site, grouped by theme. Unbranded answers are labeled ChatGPT, Gemini, and Claude. We don't blend them.",
     fullReportLoading: 'Building your full report…',
     fullReportEmptyThemes: 'No themes yet — try again.',
     fullReportLimitHit: 'You’ve used your free full report.',
@@ -209,9 +209,9 @@ export const PRODUCT_DEFAULTS: ProductConfig = {
     competitorsTab: STORY.competitorsTab,
     competitorsHelper: STORY.competitorsHelper,
     competitorsYou: STORY.competitorsYou,
-    geminiMentionsEmpty: STORY.geminiMentionsEmpty,
     engineOpenAI: STORY.engineOpenAI,
     engineGemini: STORY.engineGemini,
+    engineClaude: STORY.engineClaude,
     engineFilterHelper: STORY.engineFilterHelper,
     reportTopicColumn: STORY.reportTopicColumn,
     reportThisCheck: STORY.reportThisCheck,
@@ -305,9 +305,9 @@ const COPY_KEYS: (keyof ProductCopy)[] = [
   'competitorsTab',
   'competitorsHelper',
   'competitorsYou',
-  'geminiMentionsEmpty',
   'engineOpenAI',
   'engineGemini',
+  'engineClaude',
   'engineFilterHelper',
   'reportTopicColumn',
   'reportThisCheck',

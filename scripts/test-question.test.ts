@@ -104,6 +104,19 @@ function openaiOk(question: string, answer: string) {
   )
 }
 
+function claudeOk(text: string) {
+  return new Response(
+    JSON.stringify({
+      stop_reason: 'end_turn',
+      content: [
+        { type: 'thinking', thinking: '', signature: 'sig' },
+        { type: 'text', text: JSON.stringify({ answers: [text] }) },
+      ],
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  )
+}
+
 function geminiOk(text: string) {
   return new Response(
     JSON.stringify({
@@ -218,6 +231,53 @@ describe('test question route', () => {
       assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
       assert.equal(wroteUsage(mock.calls), false)
       assert.equal(mock.calls.some((call) => call.url.includes('/api/full-report')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('api.anthropic.com')), false)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('runs Claude for one question and skips usage, checks, and the other engines', async () => {
+    const mock = install((call) => {
+      if (call.url.includes('/auth/v1/user')) return authOk()
+      if (call.url.includes('api.anthropic.com')) return claudeOk('Only this Claude block changed.')
+      return new Response(`unexpected ${call.url}`, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: post({
+          domain: 'linear.app',
+          question: QUESTION,
+          engine: 'claude',
+          themeId: 'problems',
+          questions: [QUESTION, OTHER],
+        }),
+        env: env({ ANTHROPIC_API_KEY: 'sk-ant-test-question-secret', CLAUDE_MODEL: 'claude-haiku-5-5' }),
+      })
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as { ok?: boolean; engine?: string; claude?: string; claudeMiss?: unknown }
+      assert.deepEqual(Object.keys(body).sort(), ['claude', 'engine', 'ok'])
+      assert.equal(body.ok, true)
+      assert.equal(body.engine, 'claude')
+      assert.equal(body.claude, 'Only this Claude block changed.')
+      assert.equal(body.claudeMiss, undefined)
+      const sent = mock.calls.find((call) => call.url.includes('api.anthropic.com'))
+      assert.ok(sent)
+      assert.equal(sent.url, 'https://api.anthropic.com/v1/messages')
+      const payload = JSON.parse(sent.body) as Record<string, unknown>
+      assert.equal(payload.model, 'claude-haiku-5-5')
+      assert.equal('temperature' in payload, false)
+      assert.equal('top_p' in payload, false)
+      assert.equal('top_k' in payload, false)
+      assert.deepEqual(payload.output_config, { effort: 'low' })
+      assert.deepEqual(payload.thinking, { type: 'adaptive' })
+      assert.equal(sent.body.includes(OTHER), false)
+      assert.equal(sent.headers.get('x-api-key'), 'sk-ant-test-question-secret')
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('generativelanguage.googleapis.com')), false)
+      assert.equal(wroteUsage(mock.calls), false)
+      const read = interpretTestQuestionResponse(200, body, false)
+      assert.deepEqual(read, { ok: true, engine: 'claude', claude: 'Only this Claude block changed.' })
     } finally {
       mock.restore()
     }
@@ -296,21 +356,22 @@ describe('test question route', () => {
     }
   })
 
-  it('rejects a third engine and a missing OpenAI key without writing usage', async () => {
-    const claude = install((call) => {
+  it('rejects an unknown engine and a missing OpenAI key without writing usage', async () => {
+    const unknown = install((call) => {
       if (call.url.includes('/auth/v1/user')) return authOk()
       return new Response(`unexpected ${call.url}`, { status: 500 })
     })
     try {
       const res = await onRequest({
-        request: post({ domain: 'linear.app', question: QUESTION, engine: 'claude' }),
+        request: post({ domain: 'linear.app', question: QUESTION, engine: 'perplexity' }),
         env: env(),
       })
       assert.equal(res.status, 400)
-      assert.equal(claude.calls.some((call) => call.url.includes('api.openai.com')), false)
-      assert.equal(wroteUsage(claude.calls), false)
+      assert.equal(unknown.calls.some((call) => call.url.includes('api.openai.com')), false)
+      assert.equal(unknown.calls.some((call) => call.url.includes('api.anthropic.com')), false)
+      assert.equal(wroteUsage(unknown.calls), false)
     } finally {
-      claude.restore()
+      unknown.restore()
     }
 
     const missing = install((call) => {
@@ -365,8 +426,10 @@ describe('test question route', () => {
     assert.equal(handler.includes('fetchOwnedReport'), false)
     assert.equal(handler.includes('/api/full-report'), false)
     assert.equal(STORY.runTestQuestion, 'Run test question')
-    assert.equal(STORY.engineOpenAI, 'OpenAI')
+    assert.equal(STORY.engineOpenAI, 'ChatGPT')
     assert.equal(STORY.engineGemini, 'Gemini')
+    assert.equal(STORY.engineClaude, 'Claude')
+    assert.equal(STORY.claudeMiss, "Claude didn't answer.")
     assert.equal(STORY.runTestHelper, 'Only this question, one engine. Not a full report.')
     assert.equal(STORY.runTestBusy, 'Running…')
     assert.equal(STORY.engineFilterHelper, 'Which engines show under each question.')
@@ -389,6 +452,25 @@ describe('test question patch', () => {
     const branded = patchTestAnswer(report, 'What do teams say about Linear?', {
       engine: 'gemini',
       gemini: 'Should not attach.',
+    })
+    assert.equal(branded, report)
+  })
+
+  it('updates one Claude block and leaves ChatGPT, Gemini, mention, and other questions', () => {
+    const report = sample()
+    const next = patchTestAnswer(report, QUESTION, { engine: 'claude', claude: 'Only this Claude block changed.' })
+    const first = next.themes[0].questions[0]
+    const second = next.themes[0].questions[1]
+    assert.equal(first.claude, 'Only this Claude block changed.')
+    assert.equal(first.answer, 'Stored OpenAI must stay.')
+    assert.equal(first.gemini, 'Stored Gemini until the test.')
+    assert.equal(first.mention, 'not_mentioned')
+    assert.deepEqual(first.whoInstead, ['Jira'])
+    assert.equal(second.claude, report.themes[0].questions[1].claude)
+    assert.equal(next.themes[1], report.themes[1])
+    const branded = patchTestAnswer(report, 'What do teams say about Linear?', {
+      engine: 'claude',
+      claude: 'Should not attach.',
     })
     assert.equal(branded, report)
   })
@@ -467,12 +549,13 @@ describe('test question control', () => {
       assert.match(answered, /Only this question, one engine\. Not a full report\./)
       assert.match(answered, /data-engine="openai"/)
       assert.match(answered, /data-engine="gemini"/)
-      assert.match(answered, /Generated · OpenAI/)
+      assert.match(answered, /Generated · ChatGPT/)
       assert.match(answered, /Generated · Gemini/)
+      assert.match(answered, /Generated · Claude/)
+      assert.match(answered, /data-engine="claude"/)
+      assert.match(answered, />ChatGPT</)
       assert.match(answered, /Which engines show under each question\./)
       assert.match(answered, /<td>50%<\/td>/)
-      assert.equal(answered.includes('ChatGPT'), false)
-      assert.equal(answered.includes('Claude'), false)
       const unsigned = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
@@ -497,6 +580,7 @@ describe('test question control', () => {
       )
       assert.match(branded, /data-engine="openai"/)
       assert.equal(branded.includes('data-engine="gemini"'), false)
+      assert.equal(branded.includes('data-engine="claude"'), false)
       assert.match(branded, /Only this question, one engine\. Not a full report\./)
     } finally {
       await server.close()

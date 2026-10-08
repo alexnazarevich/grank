@@ -545,7 +545,7 @@ describe('POST /api/full-report', () => {
       if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
         assert.match(call.body, /"mode":"unbranded"/)
         assert.match(call.body, /"report":"full"/)
-        assert.match(call.body, /Generated · OpenAI/)
+        assert.match(call.body, /Generated · ChatGPT/)
         assert.equal(call.body.includes('%'), false)
         assert.equal(call.body.includes(SERVICE), false)
         assert.equal(call.body.includes(KEY), false)
@@ -1302,16 +1302,21 @@ describe('full-report question accordion', () => {
       assert.deepEqual(problems?.whoInstead, ['Jira', 'Asana'])
       assert.equal(problems?.answer, 'Jira shows up for that job.')
       assert.equal(problems?.gemini, '')
+      assert.equal((problems as { claude?: string } | undefined)?.claude, '')
       assert.deepEqual((JSON.parse(text) as { geminiMiss?: unknown }).geminiMiss, { class: 'missing_key' })
+      assert.deepEqual((JSON.parse(text) as { claudeMiss?: unknown }).claudeMiss, { class: 'missing_key' })
       assert.equal(text.includes('gemini miss'), false)
+      assert.equal(text.includes('claude miss'), false)
       const savedCheck = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
       assert.equal(savedCheck?.body.includes('geminiMiss'), false)
+      assert.equal(savedCheck?.body.includes('claudeMiss'), false)
       assert.equal(savedCheck?.body.includes('missing_key'), false)
       assert.equal(described?.question, added)
       assert.equal(described?.mention, 'mentioned')
       assert.deepEqual(described?.whoInstead, [])
       assert.equal(described?.answer, 'Linear is a fast issue tracker for software teams.')
       assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
+      assert.equal(described ? Object.hasOwn(described, 'claude') : false, false)
       assert.equal(body.themes.some((theme) => theme.questions.some((item) => item.question === 'What tool should I buy instead?')), false)
       assert.equal(mock.calls.some((call) => call.url.includes('kind=eq.full_report')), false)
       assert.equal(mock.calls.some((call) => call.url.includes('generativelanguage.googleapis.com')), false)
@@ -1320,6 +1325,7 @@ describe('full-report question accordion', () => {
       if (!read.ok) return
       const readProblems = read.report.themes.find((theme) => theme.id === 'problems')?.questions[0]
       assert.equal(readProblems?.gemini, '')
+      assert.equal(readProblems?.claude, '')
       assert.equal(readProblems?.answer, 'Jira shows up for that job.')
       assert.deepEqual(readProblems?.whoInstead, ['Jira', 'Asana'])
       assert.deepEqual(read.geminiMiss, { class: 'missing_key' })
@@ -1505,7 +1511,14 @@ describe('full-report question accordion', () => {
         assert.equal(described ? Object.hasOwn(described, 'gemini') : false, false)
         if (item.miss) assert.deepEqual(body.geminiMiss, item.miss)
         else assert.equal(body.geminiMiss, undefined)
-        assert.deepEqual(logs, item.log ? [item.log] : [])
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('gemini ')),
+          item.log ? [item.log] : [],
+        )
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('claude ')),
+          ['claude miss missing_key'],
+        )
         assert.equal(logs.some((line) => line.includes(geminiKey) || line.includes(KEY)), false)
         const savedCheck = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
         assert.equal(savedCheck?.body.includes('geminiMiss'), false)
@@ -1674,7 +1687,14 @@ describe('full-report question accordion', () => {
         assert.equal(problems?.answer, openaiAnswer)
         assert.equal(problems?.gemini, '')
         assert.deepEqual(body.geminiMiss, item.miss)
-        assert.deepEqual(logs, [item.log])
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('gemini ')),
+          [item.log],
+        )
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('claude ')),
+          ['claude miss missing_key'],
+        )
         assert.equal(logs.some((line) => line.includes(geminiKey)), false)
         if (item.kind === 'hang') {
           assert.equal(overlapped, true)
@@ -1871,7 +1891,14 @@ describe('owned Run again attaches Gemini by position', () => {
         assert.equal(body.themes[0]?.questions[0]?.answer, 'Jira shows up for that job.')
         assert.equal(body.themes[0]?.questions[0]?.gemini, '')
         assert.deepEqual(body.geminiMiss, item.miss)
-        assert.deepEqual(logs, [item.log])
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('gemini ')),
+          [item.log],
+        )
+        assert.deepEqual(
+          logs.filter((line) => line.startsWith('claude ')),
+          ['claude miss missing_key'],
+        )
         const saved = mock.calls.find((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks'))
         assert.equal(saved?.body.includes('geminiMiss'), false)
       } finally {

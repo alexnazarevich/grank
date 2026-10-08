@@ -1,7 +1,8 @@
-import { cleanGeminiText, type FullReport } from './fullReport.ts'
+import { cleanClaudeText, cleanGeminiText, type FullReport } from './fullReport.ts'
+import { geminiMissFromPayload, type SignedGeminiMiss } from './fullReportClient.ts'
 import type { ThemeId } from './mentionFacts.ts'
 
-export type TestEngine = 'openai' | 'gemini'
+export type TestEngine = 'openai' | 'gemini' | 'claude'
 
 export type TestQuestionInput = {
   question: string
@@ -16,6 +17,7 @@ export type TestQuestionOk =
   | { ok: true; engine: 'openai'; openaiPaused: true }
   | { ok: true; engine: 'openai'; answer: string }
   | { ok: true; engine: 'gemini'; gemini: string }
+  | { ok: true; engine: 'claude'; claude: string; claudeMiss?: SignedGeminiMiss }
 
 export type TestQuestionFail = { ok: false; error: string }
 
@@ -50,7 +52,10 @@ function cleanAnswerText(value: string): string {
 export function patchTestAnswer(
   report: FullReport,
   question: string,
-  patch: { engine: 'openai'; answer: string } | { engine: 'gemini'; gemini: string },
+  patch:
+    | { engine: 'openai'; answer: string }
+    | { engine: 'gemini'; gemini: string }
+    | { engine: 'claude'; claude: string },
 ): FullReport {
   const key = questionKey(question)
   let changed = false
@@ -58,13 +63,20 @@ export function patchTestAnswer(
     let themeChanged = false
     const questions = theme.questions.map((item) => {
       if (questionKey(item.question) !== key) return item
-      if (patch.engine === 'gemini') {
+      if (patch.engine === 'gemini' || patch.engine === 'claude') {
         if (item.framing !== 'unbranded') return item
-        const gemini = cleanGeminiText(patch.gemini)
-        if ((item.gemini ?? '') === gemini) return item
+        if (patch.engine === 'gemini') {
+          const gemini = cleanGeminiText(patch.gemini)
+          if ((item.gemini ?? '') === gemini) return item
+          themeChanged = true
+          changed = true
+          return { ...item, gemini }
+        }
+        const claude = cleanClaudeText(patch.claude)
+        if ((item.claude ?? '') === claude) return item
         themeChanged = true
         changed = true
-        return { ...item, gemini }
+        return { ...item, claude }
       }
       const answer = cleanAnswerText(patch.answer)
       if (item.answer === answer) return item
@@ -96,6 +108,10 @@ export function interpretTestQuestionResponse(
   }
   if (rec.engine === 'gemini' && typeof rec.gemini === 'string') {
     return { ok: true, engine: 'gemini', gemini: rec.gemini }
+  }
+  if (rec.engine === 'claude' && typeof rec.claude === 'string') {
+    const claudeMiss = geminiMissFromPayload(rec.claudeMiss)
+    return { ok: true, engine: 'claude', claude: rec.claude, ...(claudeMiss ? { claudeMiss } : {}) }
   }
   if (rec.engine === 'openai' && typeof rec.answer === 'string') {
     return { ok: true, engine: 'openai', answer: rec.answer }

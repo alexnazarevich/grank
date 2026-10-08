@@ -392,7 +392,7 @@ describe('onRequest /api/visibility', () => {
       assert.equal(res.status, 502)
       const text = await res.text()
       assert.equal(text.includes(KEY), false)
-      assert.match(text, /OpenAI request failed/)
+      assert.match(text, /ChatGPT request failed/)
       assert.match(text, /\[redacted\]/)
     } finally {
       globalThis.fetch = prev
@@ -418,7 +418,7 @@ describe('interpretVisibilityResponse', () => {
 
     const failed = interpretVisibilityResponse(502, {
       ok: false,
-      error: 'OpenAI request failed: timed out',
+      error: 'ChatGPT request failed: timed out',
       answered: 'yes',
       whoInstead: ['Jira', 'Asana'],
     }, false)
@@ -874,10 +874,10 @@ describe('unbranded samples and story copy', () => {
     )
     assert.equal(STORY.digBadge, 'Branded')
     assert.equal(STORY.digFail, 'Couldn’t generate branded questions — try again.')
-    assert.equal(STORY.answerLabel, 'Generated · OpenAI')
+    assert.equal(STORY.answerLabel, 'Generated · ChatGPT')
     assert.equal(
       STORY.answerHelper,
-      "OpenAI and Gemini, each labeled on the block. Branded answers are OpenAI only. We don't blend them into one score.",
+      "Each answer is labeled with the engine that gave it. Branded answers are ChatGPT only. We don't blend them into one score.",
     )
     assert.equal(STORY.answerMiss, 'Couldn’t get an answer.')
     assert.equal('showFullAnswer' in STORY, false)
@@ -909,7 +909,7 @@ describe('unbranded samples and story copy', () => {
     assert.equal(STORY.exampleLead, 'Or try an example:')
     assert.equal(
       STORY.homeProof,
-      "Unbranded answers are labeled OpenAI and Gemini. Branded answers are OpenAI only. We never blend them into one score.",
+      "Your free check labels ChatGPT and Gemini answers. Full reports add Claude. Branded answers are ChatGPT only. We never blend them into one score.",
     )
     assert.equal(STORY.foilTitle, 'Built for thin teams')
     assert.equal(
@@ -935,7 +935,7 @@ function geminiPayload(answers: string[]) {
 
 describe('gemini on unbranded questions', () => {
   it('labels OpenAI and Gemini apart, and a miss is not the OpenAI label', () => {
-    assert.equal(STORY.answerLabel, 'Generated · OpenAI')
+    assert.equal(STORY.answerLabel, 'Generated · ChatGPT')
     assert.equal(STORY.geminiLabel, 'Generated · Gemini')
     assert.equal(STORY.geminiMiss, "Gemini didn't answer.")
     assert.equal(/multi-engine|suite|blend|SOV|Perplexity|AI Overviews/i.test(`${STORY.geminiLabel} ${STORY.geminiMiss}`), false)

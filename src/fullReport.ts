@@ -34,6 +34,11 @@ export type FullReportQuestion = {
    * Absent on branded. Not a mention and not a who-instead list.
    */
   gemini?: string
+  /**
+   * Unbranded Claude reply beside `answer`. "" is a miss.
+   * Absent on branded. Not a mention and not a who-instead list.
+   */
+  claude?: string
 }
 
 export type FullReportTheme = {
@@ -247,22 +252,30 @@ function cleanAnswer(value: unknown): string {
 
 const GEMINI_MAX = 900
 
-/** Gemini reply text. A missing or blank value is a miss, not a cleared OpenAI answer. */
+/** Gemini reply text. A missing or blank value is a miss, not a cleared ChatGPT answer. */
 export function cleanGeminiText(value: unknown): string {
   if (typeof value !== 'string') return ''
   return value.replace(/\s+/g, ' ').trim().slice(0, GEMINI_MAX)
 }
 
+/** Claude reply text. Same cap as Gemini. A blank is a miss, not a cleared ChatGPT answer. */
+export function cleanClaudeText(value: unknown): string {
+  return cleanGeminiText(value)
+}
+
 /**
- * Keep the saved OpenAI read. Copy Gemini text from a paused run onto matching unbranded questions.
- * Mention, who-instead, and branded answers stay as they were.
+ * Keep the saved ChatGPT read. Copy Gemini and Claude text from a paused run
+ * onto matching unbranded questions. Mention, who-instead, and branded answers stay.
  */
 export function overlayUnbrandedGemini(current: FullReport, incoming: FullReport): FullReport {
   const gemini = new Map<string, string>()
+  const claude = new Map<string, string>()
   for (const theme of incoming.themes) {
     for (const item of theme.questions) {
       if (item.framing !== 'unbranded') continue
-      gemini.set(item.question.toLowerCase(), item.gemini ?? '')
+      const key = item.question.toLowerCase()
+      gemini.set(key, item.gemini ?? '')
+      if (item.claude !== undefined) claude.set(key, item.claude)
     }
   }
   return {
@@ -272,8 +285,10 @@ export function overlayUnbrandedGemini(current: FullReport, incoming: FullReport
       questions: theme.questions.map((item) => {
         if (item.framing !== 'unbranded') return item
         const key = item.question.toLowerCase()
-        if (!gemini.has(key)) return item
-        return { ...item, gemini: gemini.get(key) ?? '' }
+        let next = item
+        if (gemini.has(key)) next = { ...next, gemini: gemini.get(key) ?? '' }
+        if (claude.has(key)) next = { ...next, claude: claude.get(key) ?? '' }
+        return next
       }),
     })),
   }
@@ -319,6 +334,33 @@ export function attachUnbrandedGemini(
       const gemini = lined[cursor] ?? ''
       cursor += 1
       return { ...item, gemini }
+    }),
+  }))
+}
+
+/**
+ * Zip Claude replies onto unbranded questions only, same positions as Gemini.
+ * Does not change `answer`, mention, whoInstead, or `gemini`.
+ */
+export function attachUnbrandedClaude(
+  themes: readonly FullReportTheme[],
+  replies: readonly string[],
+  asked?: readonly string[],
+): FullReportTheme[] {
+  const slots = asked ? asked.length : replies.length
+  const lined = Array.from({ length: slots }, (_, index) => cleanClaudeText(replies[index]))
+  let cursor = 0
+  return themes.map((theme) => ({
+    ...theme,
+    questions: theme.questions.map((item) => {
+      if (item.framing !== 'unbranded') {
+        if (item.claude === undefined) return item
+        const { claude: _drop, ...rest } = item
+        return rest
+      }
+      const claude = lined[cursor] ?? ''
+      cursor += 1
+      return { ...item, claude }
     }),
   }))
 }
@@ -576,7 +618,10 @@ export function fullReportFromStored(result: unknown): FullReport | null {
         whoInstead: framing === 'unbranded' && mention ? parseWhoInstead(item.whoInstead, domain) : [],
       }
       if (mention) stored.mention = mention
-      if (framing === 'unbranded') stored.gemini = cleanGeminiText(item.gemini)
+      if (framing === 'unbranded') {
+        stored.gemini = cleanGeminiText(item.gemini)
+        stored.claude = cleanClaudeText(item.claude)
+      }
       questions.push(stored)
     }
     if (questions.length === 0) continue
