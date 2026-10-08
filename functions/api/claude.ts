@@ -1,7 +1,9 @@
 /**
  * Signed-in Claude replies for unbranded full-report questions.
- * One question is one call (Run test). A longer list is parallel chunks of
- * CLAUDE_CHUNK_SIZE, merged by position. One chunk's miss blanks only that slice.
+ * One question is one call (Run test). A longer list is at most four parallel
+ * chunks, merged by position. One chunk's miss blanks only that slice.
+ * A 404 on claude-haiku-5-5 is remembered for this isolate, so later calls
+ * go straight to claude-haiku-4-5.
  * Guest /api/visibility does not import this module.
  * ANTHROPIC_API_KEY stays on the server. Never a VITE_ name.
  */
@@ -65,11 +67,19 @@ export function claudeMaxOutputTokens(questionCount: number): number {
 }
 
 /**
- * Full-report chunk size. Four questions keeps each reply small enough to
- * finish inside the shared 8s wait. 80 unbranded questions is the app cap,
- * which is 20 of these calls (40 if every chunk retries a 404 once).
+ * Floor on questions per chunk, and the most chunks in one report.
+ * chunkSize = max(4, ceil(n / 4)). Sixteen or fewer questions stay at 4 per
+ * call. Eighty questions is 4 calls of 20. Every in-flight chunk can still
+ * retry a 404 once, which is 8 calls, and only before this isolate remembers.
  */
 export const CLAUDE_CHUNK_SIZE = 4
+
+/** Questions per Claude call for a report of this length. */
+export function claudeChunkSize(questionCount: number): number {
+  const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
+  if (count === 0) return CLAUDE_CHUNK_SIZE
+  return Math.max(CLAUDE_CHUNK_SIZE, Math.ceil(count / CLAUDE_CHUNK_SIZE))
+}
 
 /**
  * Per-answer allowance after the Haiku 5.5 tokenizer (~30% more tokens for
@@ -85,13 +95,35 @@ export function claudeChunkMaxOutputTokens(questionCount: number): number {
   return CLAUDE_CHUNK_TOKEN_BASE + count * CLAUDE_CHUNK_TOKENS_PER_QUESTION
 }
 
-/** Contiguous slices. Positions stay in order when the slices are concatenated. */
+/** Contiguous slices. At most CLAUDE_CHUNK_SIZE of them. Order is the report order. */
 export function claudeQuestionChunks<T>(questions: readonly T[]): T[][] {
+  if (questions.length === 0) return []
+  const size = claudeChunkSize(questions.length)
   const chunks: T[][] = []
-  for (let index = 0; index < questions.length; index += CLAUDE_CHUNK_SIZE) {
-    chunks.push(questions.slice(index, index + CLAUDE_CHUNK_SIZE))
+  for (let index = 0; index < questions.length; index += size) {
+    chunks.push(questions.slice(index, index + size))
   }
   return chunks
+}
+
+/**
+ * Set when claude-haiku-5-5 (or whatever primary id 404'd) is missing.
+ * Later calls in this isolate, and any chunk in this request that has not
+ * been sent yet, use the fallback without a retry.
+ */
+let claudeMissingModel: string | null = null
+
+export function resetClaudeModelMemo(): void {
+  claudeMissingModel = null
+}
+
+function claudeModelToSend(requested: string): string {
+  if (claudeMissingModel && requested === claudeMissingModel) return CLAUDE_MODEL_FALLBACK
+  return requested
+}
+
+function rememberClaudeFallback(model: string): void {
+  if (model !== CLAUDE_MODEL_FALLBACK) claudeMissingModel = model
 }
 
 /**
@@ -249,8 +281,10 @@ function dropBody(res: Response) {
 }
 
 /**
- * One slice. A 404 or not_found retries once on the fallback, without effort.
- * HTTP 400 is http_reject and is not retried. stop_reason max_tokens is bad_json.
+ * One slice. A 404 or not_found retries once on the fallback, without effort,
+ * and is remembered so the next slice skips the missing id. HTTP 400 is
+ * http_reject and is not retried. stop_reason max_tokens is bad_json.
+ * Run test uses this same path, so it shares the memo.
  */
 async function claudeSlice(opts: {
   apiKey: string
@@ -262,7 +296,8 @@ async function claudeSlice(opts: {
 }): Promise<ClaudeReplySet> {
   const blank = () => opts.questions.map(() => '')
   const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
-  let model = opts.model
+  const requested = opts.model
+  let model = claudeModelToSend(requested)
   let res: Response
   try {
     res = await postClaude(opts.apiKey, model, prompt, opts.questions.length, opts.signal, opts.shape)
@@ -270,6 +305,7 @@ async function claudeSlice(opts: {
     return noteClaudeMiss(blank(), { class: 'timeout' })
   }
   if (!res.ok && model !== CLAUDE_MODEL_FALLBACK && (await claudeModelNotFound(res))) {
+    rememberClaudeFallback(model)
     dropBody(res)
     model = CLAUDE_MODEL_FALLBACK
     try {

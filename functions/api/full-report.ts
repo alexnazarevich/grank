@@ -8,7 +8,7 @@
  * Those fields are not stored on the check. This route requires sign-in.
  * Gemini and Claude cannot fail the report. Run again overlaps them with the
  * ChatGPT call, and the wait is capped so a slow call ends as `timeout`.
- * Claude asks unbranded questions in parallel chunks of four.
+ * Claude asks unbranded questions in at most four parallel chunks.
  * Branded rows stay ChatGPT only. Mention and who-instead stay on the ChatGPT answer.
  * The first freeFullReports runs are complimentary. A further run needs a paid
  * plan, then uses that plan's check quota. Free check quota cannot buy another

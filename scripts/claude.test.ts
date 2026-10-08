@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { describe, it } from 'node:test'
+import { beforeEach, describe, it } from 'node:test'
 import {
   CLAUDE_CHUNK_SIZE,
   CLAUDE_CHUNK_TOKEN_BASE,
@@ -19,9 +19,11 @@ import {
   claudeMissFromChunks,
   claudeMissLogLine,
   claudeModelFromEnv,
+  claudeChunkSize,
   claudeQuestionChunks,
   claudeReplies,
   claudeSendsEffort,
+  resetClaudeModelMemo,
 } from '../functions/api/claude.ts'
 import { OWNED_QUESTION_MAX } from '../src/ownedQuestions.ts'
 import { onRequest as fullReport } from '../functions/api/full-report.ts'
@@ -74,7 +76,10 @@ function claudeText(text: string, stop: string = 'end_turn') {
   )
 }
 
-describe('Claude request shape', () => {
+describe('Claude request shape', { concurrency: false }, () => {
+  beforeEach(() => {
+    resetClaudeModelMemo()
+  })
   it('defaults to Haiku 5.5, ignores client env names, and omits sampling params', () => {
     assert.equal(CLAUDE_MODEL_DEFAULT, 'claude-haiku-5-5')
     assert.equal(CLAUDE_MODEL_FALLBACK, 'claude-haiku-4-5')
@@ -135,6 +140,7 @@ describe('Claude request shape', () => {
       mock.restore()
     }
 
+    resetClaudeModelMemo()
     let posts = 0
     const rejected = install(async () => {
       posts += 1
@@ -228,31 +234,50 @@ describe('Claude request shape', () => {
   })
 })
 
-describe('Claude full-report chunks', () => {
-  const chunkCap = CLAUDE_CHUNK_TOKEN_BASE + CLAUDE_CHUNK_SIZE * CLAUDE_CHUNK_TOKENS_PER_QUESTION
+describe('Claude full-report chunks', { concurrency: false }, () => {
+  beforeEach(() => {
+    resetClaudeModelMemo()
+  })
 
-  it('budgets 210 tokens per answer and splits at four', () => {
+  it('keeps at most four chunks and budgets 210 tokens per question in the chunk', () => {
     assert.equal(CLAUDE_CHUNK_SIZE, 4)
     assert.equal(CLAUDE_CHUNK_TOKENS_PER_QUESTION, 210)
     assert.equal(CLAUDE_CHUNK_TOKEN_BASE, 48)
     assert.equal(claudeChunkMaxOutputTokens(4), 888)
     assert.equal(claudeChunkMaxOutputTokens(2), 468)
-    assert.equal(chunkCap, 888)
     assert.equal(claudeMaxOutputTokens(1), 560)
-    const chunk = claudeMessageBody(CLAUDE_MODEL_DEFAULT, 'Answer.', 4, 'chunk')
-    assert.equal(chunk.max_tokens, 888)
-    assert.deepEqual(chunk.thinking, { type: 'disabled' })
-    assert.deepEqual(chunk.output_config, { effort: 'low' })
-    assert.equal('temperature' in chunk, false)
-    const fallback = claudeMessageBody(CLAUDE_MODEL_FALLBACK, 'Answer.', 4, 'chunk')
-    assert.equal(fallback.max_tokens, 888)
+    const expected: Record<number, number[]> = {
+      4: [4],
+      10: [4, 4, 2],
+      16: [4, 4, 4, 4],
+      17: [5, 5, 5, 2],
+      40: [10, 10, 10, 10],
+      80: [20, 20, 20, 20],
+    }
+    for (const [raw, sizes] of Object.entries(expected)) {
+      const count = Number(raw)
+      assert.equal(claudeChunkSize(count), sizes[0])
+      const questions = Array.from({ length: count }, (_, index) => `q${index}`)
+      const slices = claudeQuestionChunks(questions)
+      assert.ok(slices.length <= 4)
+      assert.deepEqual(
+        slices.map((slice) => slice.length),
+        sizes,
+      )
+      assert.deepEqual(slices.flat(), questions)
+      for (const slice of slices) {
+        const body = claudeMessageBody(CLAUDE_MODEL_DEFAULT, 'Answer.', slice.length, 'chunk')
+        assert.equal(body.max_tokens, slice.length * CLAUDE_CHUNK_TOKENS_PER_QUESTION + CLAUDE_CHUNK_TOKEN_BASE)
+        assert.deepEqual(body.thinking, { type: 'disabled' })
+        assert.deepEqual(body.output_config, { effort: 'low' })
+        assert.equal('temperature' in body, false)
+      }
+    }
+    const fallback = claudeMessageBody(CLAUDE_MODEL_FALLBACK, 'Answer.', 20, 'chunk')
+    assert.equal(fallback.max_tokens, 4248)
     assert.equal(fallback.thinking, undefined)
     assert.equal(fallback.output_config, undefined)
-    const questions = Array.from({ length: OWNED_QUESTION_MAX }, (_, index) => `q${index}`)
-    const slices = claudeQuestionChunks(questions)
     assert.equal(OWNED_QUESTION_MAX, 80)
-    assert.equal(slices.length, 20)
-    assert.equal(slices.every((slice) => slice.length === 4), true)
     assert.deepEqual(claudeMissFromChunks([undefined, { class: 'bad_json' }, { class: 'http_reject', status: 400 }]), {
       class: 'http_reject',
       status: 400,
@@ -337,8 +362,46 @@ describe('Claude full-report chunks', () => {
     }
   })
 
-  it('asks the max unbranded set as 20 chunks and retries a 404 without effort', async () => {
-    const questions = Array.from({ length: OWNED_QUESTION_MAX }, (_, index) => `Category question ${index}?`)
+  it('merges every chunk size by position', async () => {
+    for (const count of [4, 10, 16, 17, 40, 80]) {
+      const questions = Array.from({ length: count }, (_, index) => `Slot ${index} question?`)
+      const seen: { max_tokens?: number; questions: string[] }[] = []
+      const mock = install(async (call) => {
+        const body = JSON.parse(call.body) as { max_tokens?: number; messages?: { content?: string }[] }
+        const prompt = body.messages?.[0]?.content ?? ''
+        const asked = questions.filter((question) => prompt.includes(question))
+        seen.push({ max_tokens: body.max_tokens, questions: asked })
+        return claudeText(JSON.stringify({ answers: asked.map((question) => `A ${question}`) }))
+      })
+      try {
+        const hit = await claudeReplies({
+          apiKey: ANTHROPIC,
+          model: CLAUDE_MODEL_DEFAULT,
+          questions,
+          scrub: [],
+        })
+        assert.ok(seen.length <= 4, `n=${count} made ${seen.length} calls`)
+        assert.deepEqual(
+          seen.map((item) => item.questions.length),
+          claudeQuestionChunks(questions).map((slice) => slice.length),
+        )
+        assert.equal(
+          seen.every((item) => item.max_tokens === (item.questions.length * 210 + 48)),
+          true,
+        )
+        assert.deepEqual(
+          hit.replies,
+          questions.map((question) => `A ${question}`),
+        )
+        assert.equal(hit.miss, undefined)
+      } finally {
+        mock.restore()
+      }
+    }
+  })
+
+  it('remembers a 404 and retries each chunk at most once', async () => {
+    const questions = Array.from({ length: 80 }, (_, index) => `Category question ${index}?`)
     const seen: { model?: string; thinking?: string; max_tokens?: number }[] = []
     const mock = install(async (call) => {
       const body = JSON.parse(call.body) as {
@@ -349,14 +412,16 @@ describe('Claude full-report chunks', () => {
       }
       seen.push({ model: body.model, thinking: body.thinking?.type, max_tokens: body.max_tokens })
       const prompt = body.messages?.[0]?.content ?? ''
-      if (body.model === CLAUDE_MODEL_DEFAULT && prompt.includes('Category question 0?')) {
+      if (body.model === CLAUDE_MODEL_DEFAULT) {
         return new Response(JSON.stringify({ error: { type: 'not_found_error' } }), { status: 404 })
       }
-      const answers = questions.filter((question) => prompt.includes(question)).map(() => 'Yes.')
-      return claudeText(JSON.stringify({ answers }))
+      const asked = [...questions, 'What should a team use for issue tracking?'].filter((question) =>
+        prompt.includes(question),
+      )
+      return claudeText(JSON.stringify({ answers: asked.map(() => 'Yes.') }))
     })
     try {
-      const hit = await claudeReplies({
+      const first = await claudeReplies({
         apiKey: ANTHROPIC,
         model: CLAUDE_MODEL_DEFAULT,
         questions,
@@ -364,14 +429,38 @@ describe('Claude full-report chunks', () => {
       })
       const primary = seen.filter((item) => item.model === CLAUDE_MODEL_DEFAULT)
       const fallback = seen.filter((item) => item.model === CLAUDE_MODEL_FALLBACK)
-      assert.equal(primary.length, 20)
-      assert.equal(primary.every((item) => item.thinking === 'disabled' && item.max_tokens === 888), true)
-      assert.equal(fallback.length, 1)
-      assert.equal(fallback[0]?.thinking, undefined)
-      assert.equal(fallback[0]?.max_tokens, 888)
-      assert.equal(hit.replies.length, 80)
-      assert.equal(hit.replies.every((reply) => reply === 'Yes.'), true)
-      assert.equal(hit.miss, undefined)
+      assert.equal(primary.length, 4)
+      assert.equal(primary.every((item) => item.thinking === 'disabled' && item.max_tokens === 4248), true)
+      assert.equal(fallback.length, 4)
+      assert.equal(fallback.every((item) => item.thinking === undefined && item.max_tokens === 4248), true)
+      assert.equal(seen.length, 8)
+      assert.equal(first.replies.length, 80)
+      assert.equal(first.replies.every((reply) => reply === 'Yes.'), true)
+      assert.equal(first.miss, undefined)
+
+      seen.length = 0
+      const second = await claudeReplies({
+        apiKey: ANTHROPIC,
+        model: CLAUDE_MODEL_DEFAULT,
+        questions,
+        scrub: [],
+      })
+      assert.equal(seen.length, 4)
+      assert.equal(seen.every((item) => item.model === CLAUDE_MODEL_FALLBACK), true)
+      assert.equal(seen.some((item) => item.model === CLAUDE_MODEL_DEFAULT), false)
+      assert.equal(second.replies.every((reply) => reply === 'Yes.'), true)
+
+      seen.length = 0
+      const tested = await claudeReplies({
+        apiKey: ANTHROPIC,
+        model: CLAUDE_MODEL_DEFAULT,
+        questions: ['What should a team use for issue tracking?'],
+        scrub: [],
+      })
+      assert.equal(seen.length, 1)
+      assert.equal(seen[0]?.model, CLAUDE_MODEL_FALLBACK)
+      assert.equal(seen[0]?.thinking, undefined)
+      assert.equal(tested.replies[0], 'Yes.')
     } finally {
       mock.restore()
     }
