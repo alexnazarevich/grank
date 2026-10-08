@@ -979,11 +979,6 @@ async function completeVisibility(
       scrub: [apiKey, gemini.apiKey],
     })
     body.gemini = geminiResult.replies
-    const allBlank = geminiResult.replies.every((reply) => reply.trim() === '')
-    // TEMP until bet (15) passes — remove
-    if (questions.length > 0 && allBlank) {
-      body.geminiMiss = geminiMissForResponse(geminiResult.miss ?? { class: 'empty' })
-    }
   }
   return json(200, body)
 }
