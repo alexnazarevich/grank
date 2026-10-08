@@ -551,10 +551,11 @@ describe('test question control', () => {
       assert.match(answered, /data-engine="gemini"/)
       assert.match(answered, /Generated · ChatGPT/)
       assert.match(answered, /Generated · Gemini/)
+      assert.match(answered, /Generated · Claude/)
+      assert.match(answered, /data-engine="claude"/)
+      assert.match(answered, />ChatGPT</)
       assert.match(answered, /Which engines show under each question\./)
       assert.match(answered, /<td>50%<\/td>/)
-      assert.equal(answered.includes('ChatGPT'), false)
-      assert.equal(answered.includes('Claude'), false)
       const unsigned = renderToStaticMarkup(
         React.createElement(FullReportSection, {
           copy: PRODUCT_DEFAULTS.copy,
@@ -579,6 +580,7 @@ describe('test question control', () => {
       )
       assert.match(branded, /data-engine="openai"/)
       assert.equal(branded.includes('data-engine="gemini"'), false)
+      assert.equal(branded.includes('data-engine="claude"'), false)
       assert.match(branded, /Only this question, one engine\. Not a full report\./)
     } finally {
       await server.close()

@@ -833,7 +833,7 @@ describe('what’s changed and over time markup', () => {
       assert.match(waiting, /A short read on this check since the previous run\./)
       assert.match(waiting, /Run again to start comparing over time\./)
       assert.match(waiting, /Over time/)
-      assert.match(waiting, /Each column is one run\. Same questions — mention status as you re-run\./)
+      assert.match(waiting, /Each column is one run\. Same questions — ChatGPT mention status as you re-run\./)
       assert.match(waiting, /Mentioned · Not mentioned · Unclear/)
       assert.equal(waiting.match(/<th scope="col">/g)?.length, 2)
       assert.match(waiting, /Sep 1, 12:00 AM/)

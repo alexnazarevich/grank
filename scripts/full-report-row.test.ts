@@ -271,7 +271,7 @@ describe('full-report row markup', () => {
       )
       assert.match(
         html,
-        /Your mention rate, and names that showed up instead on unbranded questions this run\. Not market share\./,
+        /Your ChatGPT mention rate, and names ChatGPT gave instead on unbranded questions this run\. Not market share\./,
       )
       const topics = html.split('<section class="competitors-topic">').slice(1)
       assert.equal(topics.length, 3)
@@ -961,8 +961,8 @@ describe('unbranded engine blocks', () => {
           runs,
         }),
       )
-      assert.match(overTime, /OpenAI is paused for this run\./)
-      assert.match(overTime, /Paused while OpenAI is off\./)
+      assert.match(overTime, /ChatGPT is paused for this run\./)
+      assert.match(overTime, /Paused while ChatGPT is off\./)
       assert.match(overTime, /Gemini didn&#x27;t answer\. \(timeout\)/)
       assert.equal(overTime.includes('Jira shows up for that job.'), false)
       assert.equal(overTime.includes('Not mentioned'), false)
@@ -977,8 +977,8 @@ describe('unbranded engine blocks', () => {
           openaiPaused: true,
         }),
       )
-      assert.match(competitors, /OpenAI is paused for this run\./)
-      assert.match(competitors, /Paused while OpenAI is off\./)
+      assert.match(competitors, /ChatGPT is paused for this run\./)
+      assert.match(competitors, /Paused while ChatGPT is off\./)
       assert.equal(competitors.includes('<strong>Jira</strong>'), false)
       assert.equal(competitors.includes('0%'), false)
       assert.equal(competitors.includes('Not mentioned'), false)
@@ -995,7 +995,7 @@ describe('unbranded engine blocks', () => {
       assert.match(storedView, /Jira shows up for that job\./)
       assert.match(storedView, /<strong>Jira<\/strong>/)
       const note = renderToStaticMarkup(React.createElement(ChatGptPausedNote))
-      assert.match(note, /OpenAI is paused, so this run isn&#x27;t saved to Over time\./)
+      assert.match(note, /ChatGPT is paused, so this run isn&#x27;t saved to Over time\./)
       assert.equal(note.includes(STORY.geminiMiss), false)
       assert.equal(overTime.includes('100%'), false)
       assert.equal(STORY.openaiPausedAnswer, 'ChatGPT is paused for this run.')
