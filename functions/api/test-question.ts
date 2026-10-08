@@ -1,10 +1,10 @@
 /**
  * POST /api/test-question { domain, question, engine, themeId? }
- * Signed-in smoke of one question on one engine (openai or gemini).
+ * Signed-in smoke of one question on one engine (openai, gemini, or claude).
  * Patches nothing on the server. The client updates that answer block only.
  * Does not write a usage event, a check, or run history, and does not meter a full report.
- * FULL_REPORT_OPENAI=off: an OpenAI test does not call OpenAI and returns openaiPaused.
- * Gemini still runs. OPENAI_API_KEY and GEMINI_API_KEY are the existing Pages secrets.
+ * FULL_REPORT_OPENAI=off: an OpenAI test does not call the model and returns openaiPaused.
+ * Gemini and Claude still run. Keys stay server-side.
  */
 
 import { FULL_REPORT_SYSTEM_PROMPT, parseModelJson, resolveThemeId, type ThemeId } from '../../src/fullReport.ts'
@@ -19,6 +19,13 @@ import {
   geminiTimeoutFromEnv,
 } from './visibility.ts'
 import {
+  CLAUDE_TIMEOUT_CAP_MS,
+  claudeApiKeyFromEnv,
+  claudeMissForResponse,
+  claudeModelFromEnv,
+  claudeReplies,
+} from './claude.ts'
+import {
   bearer,
   sbConfig,
   SERVER_AUTH_NOT_CONFIGURED,
@@ -31,7 +38,7 @@ const TIMEOUT_MS = 20_000
 
 export const TEST_QUESTION_SIGN_IN = 'Sign in to run a test question.'
 
-type TestEngine = 'openai' | 'gemini'
+type TestEngine = 'openai' | 'gemini' | 'claude'
 type TestEnv = Record<string, string | undefined>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,8 +80,8 @@ async function readBody(request: Request): Promise<
   const question = typeof data.question === 'string' ? data.question.replace(/\s+/g, ' ').trim() : ''
   if (!question || question.length > 240) return { ok: false, status: 400, error: 'Send one question.' }
   const engine = typeof data.engine === 'string' ? data.engine.trim().toLowerCase() : ''
-  if (engine !== 'openai' && engine !== 'gemini') {
-    return { ok: false, status: 400, error: 'engine must be openai or gemini' }
+  if (engine !== 'openai' && engine !== 'gemini' && engine !== 'claude') {
+    return { ok: false, status: 400, error: 'engine must be openai, gemini, or claude' }
   }
   return { ok: true, domain, question, engine, themeId: resolveThemeId(data.themeId) ?? 'problems' }
 }
@@ -110,7 +117,7 @@ async function openAIAnswer(
       }),
     })
   } catch (err) {
-    return { ok: false, error: `OpenAI request failed: ${failureDetail(err)}` }
+    return { ok: false, error: `ChatGPT request failed: ${failureDetail(err)}` }
   }
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
@@ -121,21 +128,21 @@ async function openAIAnswer(
     } catch {
       // Keep the status.
     }
-    return { ok: false, error: `OpenAI request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
+    return { ok: false, error: `ChatGPT request failed: ${scrubSecret(detail, apiKey).slice(0, 180)}` }
   }
   try {
     const payload = (await res.json()) as { choices?: { message?: { content?: string | null } }[] }
     const raw = payload.choices?.[0]?.message?.content
     const content = typeof raw === 'string' ? raw : ''
     const parsed = parseModelJson(scrubSecret(content, apiKey))
-    if (!parsed) return { ok: false, error: 'OpenAI request failed: model output was not usable JSON' }
+    if (!parsed) return { ok: false, error: 'ChatGPT request failed: model output was not usable JSON' }
     const merged = mergeOwnedAnswers(owned, parsed, { domain, includesBranded: true })
     const answer =
       merged?.flatMap((theme) => theme.questions).find((item) => item.question.toLowerCase() === safeQuestion.toLowerCase())
         ?.answer ?? ''
     return { ok: true, answer: scrubSecret(answer, apiKey) }
   } catch {
-    return { ok: false, error: 'OpenAI request failed: unreadable response' }
+    return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
 }
 
@@ -155,7 +162,8 @@ export async function onRequest(context: { request: Request; env?: TestEnv }): P
 
   const apiKey = typeof context.env?.OPENAI_API_KEY === 'string' ? context.env.OPENAI_API_KEY.trim() : ''
   const geminiKey = geminiApiKeyFromEnv(context.env)
-  const secrets = [apiKey, geminiKey, sb.serviceRole].filter((secret) => secret !== '')
+  const claudeKey = claudeApiKeyFromEnv(context.env)
+  const secrets = [apiKey, geminiKey, claudeKey, sb.serviceRole].filter((secret) => secret !== '')
 
   if (incoming.engine === 'openai' && fullReportOpenAIPaused(context.env)) {
     return respond({ ok: true, engine: 'openai', openaiPaused: true }, secrets)
@@ -165,6 +173,20 @@ export async function onRequest(context: { request: Request; env?: TestEnv }): P
     const answered = await openAIAnswer(apiKey, incoming.domain, incoming.question, incoming.themeId)
     if (!answered.ok) return json(502, { error: answered.error })
     return respond({ ok: true, engine: 'openai', answer: answered.answer }, secrets)
+  }
+
+  if (incoming.engine === 'claude') {
+    const result = await claudeReplies({
+      apiKey: claudeKey,
+      model: claudeModelFromEnv(context.env),
+      questions: [incoming.question],
+      scrub: secrets,
+      timeoutMs: CLAUDE_TIMEOUT_CAP_MS,
+    })
+    const claude = secrets.reduce((text, secret) => scrubSecret(text, secret), result.replies[0] ?? '')
+    const body: Record<string, unknown> = { ok: true, engine: 'claude', claude }
+    if (!claude.trim()) body.claudeMiss = claudeMissForResponse(result.miss ?? { class: 'empty' })
+    return respond(body, secrets)
   }
 
   const result = await geminiReplies({

@@ -322,9 +322,9 @@ describe('manual re-run history write', () => {
     result: {
       questionSetOwned: true,
       labels: {
-        questions: 'Generated · OpenAI',
+        questions: 'Generated · ChatGPT',
         answered: 'Live model',
-        whoInstead: 'Generated · OpenAI',
+        whoInstead: 'Generated · ChatGPT',
         mode: 'Unbranded',
       },
       model: 'gpt-4o-mini',
@@ -447,7 +447,7 @@ describe('manual re-run history write', () => {
       assert.equal(body.ok, true)
       assert.equal(body.check?.id, CHECK)
       assert.equal(body.check?.result?.questionSetOwned, true)
-      assert.equal(body.check?.result?.labels?.questions, 'Generated · OpenAI')
+      assert.equal(body.check?.result?.labels?.questions, 'Generated · ChatGPT')
       assert.equal(body.check?.result?.tracking?.cadence, 'weekly')
       const runs = body.check?.result?.runs ?? []
       assert.equal(runs.length, 2)
@@ -631,7 +631,7 @@ describe('owned report re-run writes history on the same check', () => {
       const patched = calls.find((call) => call.method === 'PATCH' && call.url.includes('/rest/v1/checks'))
       assert.ok(patched)
       const storedRun = JSON.parse(patched.body) as { result?: { labels?: { questions?: string }; runs?: unknown[] } }
-      assert.equal(storedRun.result?.labels?.questions, 'Generated · OpenAI')
+      assert.equal(storedRun.result?.labels?.questions, 'Generated · ChatGPT')
       assert.equal(storedRun.result?.runs?.length, 2)
       assert.equal(
         calls.some((call) => call.method === 'POST' && call.url.includes('/rest/v1/checks')),
@@ -718,7 +718,7 @@ describe('what’s changed and over time story', () => {
     assert.equal(STORY.deltaWhoAppeared, 'Newly showing up instead')
     assert.equal(STORY.deltaWhoDropped, 'No longer showing up instead')
     assert.equal(STORY.overTimeTitle, 'Over time')
-    assert.equal(STORY.overTimeHelper, 'Each column is one run. Same questions — mention status as you re-run.')
+    assert.equal(STORY.overTimeHelper, 'Each column is one run. Same questions — ChatGPT mention status as you re-run.')
     assert.equal(STORY.overTimeQuestion, 'Question')
     assert.equal(STORY.overTimeLegend, 'Mentioned · Not mentioned · Unclear')
     assert.equal(STORY.themeMentionRate, '{pct}% mentioned')
@@ -738,7 +738,7 @@ describe('what’s changed and over time story', () => {
       false,
     )
     assert.equal(STORY.landTitle, 'Do you show up for what you solve?')
-    assert.equal(STORY.answerLabel, 'Generated · OpenAI')
+    assert.equal(STORY.answerLabel, 'Generated · ChatGPT')
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
     const panel = readFileSync(new URL('../src/RunHistoryPanel.tsx', import.meta.url), 'utf8')
     const scheduled = readFileSync(new URL('../functions/scheduled.ts', import.meta.url), 'utf8')
@@ -774,8 +774,8 @@ describe('what’s changed and over time story', () => {
     assert.equal(gridRow.includes('q-badge'), false)
     assert.equal(gridRow.includes('landBadge'), false)
     assert.equal(gridRow.includes('digBadge'), false)
-    assert.match(gridRow, /<OpenAIAnswer/)
-    const openaiAnswer = section.slice(section.indexOf('function OpenAIAnswer'), section.indexOf('function GeminiBlock'))
+    assert.match(gridRow, /<ChatGptAnswer/)
+    const openaiAnswer = section.slice(section.indexOf('function ChatGptAnswer'), section.indexOf('function GeminiBlock'))
     assert.match(openaiAnswer, /\{GENERATED\}/)
     assert.match(panel, /deltaNewlyMentioned/)
     assert.match(panel, /deltaWhoAppeared/)
@@ -838,7 +838,7 @@ describe('what’s changed and over time markup', () => {
       assert.equal(waiting.match(/<th scope="col">/g)?.length, 2)
       assert.match(waiting, /Sep 1, 12:00 AM/)
       assert.match(waiting, /Not mentioned/)
-      assert.match(waiting, /Generated · OpenAI/)
+      assert.match(waiting, /Generated · ChatGPT/)
       assert.match(waiting, /Jira shows up for tracking\./)
       assert.equal(/monitoring|every week|scheduled|Vs last run/i.test(waiting), false)
 

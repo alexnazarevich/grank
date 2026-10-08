@@ -10,7 +10,7 @@ import { STORY } from '../src/story.ts'
 import type { FullReport } from '../src/fullReport.ts'
 
 const HELPER =
-  'Your mention rate, and names that showed up instead on unbranded questions this run. Not market share.'
+  'Your ChatGPT mention rate, and names ChatGPT gave instead on unbranded questions this run. Not market share.'
 
 function question(
   text: string,
@@ -75,10 +75,10 @@ describe('full report tabs', () => {
   it('opens Over time first, filters answer blocks, and leaves cron off', async () => {
     assert.equal(STORY.competitorsTab, 'Competitors')
     assert.equal(STORY.competitorsHelper, HELPER)
-    assert.equal(STORY.geminiMentionsEmpty, 'No Gemini mentions on this check yet.')
-    assert.equal(STORY.engineOpenAI, 'OpenAI')
+    assert.equal(STORY.engineOpenAI, 'ChatGPT')
     assert.equal(STORY.engineGemini, 'Gemini')
-    assert.equal(/share|SOV|\brank\b/i.test(`${STORY.competitorsTab} ${STORY.competitorsYou} ${STORY.engineOpenAI} ${STORY.engineGemini} ${STORY.geminiMentionsEmpty}`), false)
+    assert.equal(STORY.engineClaude, 'Claude')
+    assert.equal(/share|SOV|\brank\b/i.test(`${STORY.competitorsTab} ${STORY.competitorsYou} ${STORY.engineOpenAI} ${STORY.engineGemini} ${STORY.engineClaude}`), false)
     assert.equal(PRODUCT_DEFAULTS.trackingCronEnabled, false)
     const server: ViteDevServer = await createServer({
       server: { middlewareMode: true },
@@ -139,15 +139,15 @@ describe('full report tabs', () => {
       assert.equal(html.includes('>Citations<'), false)
       assert.equal(html.includes('>Glance<'), false)
       assert.equal(html.includes('>Overview<'), false)
-      assert.equal(html.includes('ChatGPT'), false)
+      assert.equal(html.includes('Generated · ChatGPT'), false)
       assert.equal(html.includes('>LLM<'), false)
-      assert.equal((html.match(/aria-pressed="true"/g) || []).length, 2)
+      assert.equal((html.match(/aria-pressed="true"/g) || []).length, 3)
       assert.match(html, /Which engines show under each question\./)
-      assert.match(html, />OpenAI</)
+      assert.match(html, />ChatGPT</)
       assert.match(html, />Gemini</)
+      assert.match(html, />Claude</)
       assert.match(html, /over-time-grid/)
-      assert.equal(html.includes('No Gemini mentions on this check yet.'), false)
-      assert.equal(html.includes('Claude'), false)
+      assert.equal(html.includes('Generated · Claude'), false)
       assert.match(html, /<td>0%<\/td><td>100%<\/td>/)
       assert.equal(html.includes(HELPER), false)
       assert.equal(html.includes('What should a team use to track issues?'), false)
@@ -164,12 +164,12 @@ describe('full report tabs', () => {
       )
       assert.match(geminiOff, /over-time-grid/)
       assert.match(geminiOff, /<td>0%<\/td><td>100%<\/td>/)
-      assert.match(geminiOff, /Generated · OpenAI/)
+      assert.match(geminiOff, /Generated · ChatGPT/)
       assert.match(geminiOff, /This OpenAI reply must stay inside the expand\./)
       assert.match(geminiOff, /<strong>Jira<\/strong>/)
       assert.equal(geminiOff.includes('Generated · Gemini'), false)
       assert.equal(geminiOff.includes('Monday is named only in the Gemini reply.'), false)
-      assert.equal(geminiOff.includes('No Gemini mentions on this check yet.'), false)
+      assert.match(geminiOff, /Generated · Claude/)
       assert.match(geminiOff, /aria-pressed="false"/)
       assert.equal((geminiOff.match(/role="tab"/g) || []).length, 2)
 
@@ -187,7 +187,7 @@ describe('full report tabs', () => {
       assert.match(openaiOff, /Generated · Gemini/)
       assert.match(openaiOff, /Monday is named only in the Gemini reply\./)
       assert.match(openaiOff, /<strong>Jira<\/strong>/)
-      assert.equal(openaiOff.includes('Generated · OpenAI'), false)
+      assert.equal(openaiOff.includes('Generated · ChatGPT'), false)
       assert.equal(openaiOff.includes('This OpenAI reply must stay inside the expand.'), false)
 
       const opened = renderToStaticMarkup(
@@ -210,7 +210,7 @@ describe('full report tabs', () => {
           answersOpen: true,
         }),
       )
-      assert.match(answered, /Generated · OpenAI/)
+      assert.match(answered, /Generated · ChatGPT/)
       assert.match(answered, /Generated · Gemini/)
       assert.match(answered, /Monday is named only in the Gemini reply\./)
       assert.match(answered, /This OpenAI reply must stay inside the expand\./)

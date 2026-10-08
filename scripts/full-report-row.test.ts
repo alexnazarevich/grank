@@ -463,7 +463,7 @@ describe('full-report row markup', () => {
       assert.match(closed, />Unbranded</)
       assert.equal(/>Branded</.test(closed), false)
       assert.equal(closed.includes('q-badge'), false)
-      assert.equal(closed.includes('Generated · OpenAI'), false)
+      assert.equal(closed.includes('Generated · ChatGPT'), false)
       assert.equal(closed.includes('>Not mentioned<'), false)
       assert.equal(closed.includes('Jira shows up.'), false)
       const html = renderToStaticMarkup(
@@ -588,7 +588,7 @@ describe('full-report row markup', () => {
       assert.match(html, />Unbranded</)
       assert.match(html, />Branded</)
       assert.equal(html.includes('q-badge'), false)
-      assert.equal(html.includes('Generated · OpenAI'), false)
+      assert.equal(html.includes('Generated · ChatGPT'), false)
       assert.equal(html.includes('>Edit<'), false)
       assert.equal(html.includes('>Delete<'), false)
       assert.equal(html.includes('Across runs:'), false)
@@ -650,7 +650,7 @@ describe('unbranded engine blocks', () => {
           copy,
         }),
       )
-      assert.match(both, /Generated · OpenAI/)
+      assert.match(both, /Generated · ChatGPT/)
       assert.match(both, /Generated · Gemini/)
       assert.match(both, /Monday and ClickUp are common picks for this job\./)
       assert.match(both, /<strong>Jira<\/strong>/)
@@ -667,7 +667,7 @@ describe('unbranded engine blocks', () => {
           copy,
         }),
       )
-      assert.match(missed, /Generated · OpenAI/)
+      assert.match(missed, /Generated · ChatGPT/)
       assert.match(missed, /Generated · Gemini/)
       assert.match(missed, /Gemini didn&#x27;t answer\./)
       assert.match(missed, /<strong>Jira<\/strong>/)
@@ -745,7 +745,7 @@ describe('unbranded engine blocks', () => {
           whoInsteadOpen: true,
         }),
       )
-      assert.match(hit, /Generated · OpenAI/)
+      assert.match(hit, /Generated · ChatGPT/)
       assert.match(hit, /Generated · Gemini/)
       assert.match(hit, /Monday is a common pick for this job\./)
       assert.match(hit, new RegExp(openai.replace(/[.]/g, '\\.')))
@@ -794,7 +794,7 @@ describe('unbranded engine blocks', () => {
           answersOpen: true,
         }),
       )
-      assert.match(missed, /Generated · OpenAI/)
+      assert.match(missed, /Generated · ChatGPT/)
       assert.match(missed, /Generated · Gemini/)
       assert.match(missed, /Gemini didn&#x27;t answer\./)
       assert.match(missed, new RegExp(openai.replace(/[.]/g, '\\.')))
@@ -910,7 +910,7 @@ describe('unbranded engine blocks', () => {
       ssr: { external: ['react', 'react-dom'] },
     })
     try {
-      const { FullReportSection, OpenAIPausedNote } = (await server.ssrLoadModule(
+      const { FullReportSection, ChatGptPausedNote } = (await server.ssrLoadModule(
         '/src/FullReportSection.tsx',
       )) as typeof import('../src/FullReportSection.tsx')
       const { fullReportFromStored } = (await server.ssrLoadModule('/src/fullReport.ts')) as typeof import('../src/fullReport.ts')
@@ -994,13 +994,13 @@ describe('unbranded engine blocks', () => {
       assert.equal(storedView.includes(STORY.openaiPausedMark), false)
       assert.match(storedView, /Jira shows up for that job\./)
       assert.match(storedView, /<strong>Jira<\/strong>/)
-      const note = renderToStaticMarkup(React.createElement(OpenAIPausedNote))
+      const note = renderToStaticMarkup(React.createElement(ChatGptPausedNote))
       assert.match(note, /OpenAI is paused, so this run isn&#x27;t saved to Over time\./)
       assert.equal(note.includes(STORY.geminiMiss), false)
       assert.equal(overTime.includes('100%'), false)
-      assert.equal(STORY.openaiPausedAnswer, 'OpenAI is paused for this run.')
-      assert.equal(STORY.openaiPausedMark, 'Paused while OpenAI is off.')
-      assert.equal(STORY.openaiPausedHistory, "OpenAI is paused, so this run isn't saved to Over time.")
+      assert.equal(STORY.openaiPausedAnswer, 'ChatGPT is paused for this run.')
+      assert.equal(STORY.openaiPausedMark, 'Paused while ChatGPT is off.')
+      assert.equal(STORY.openaiPausedHistory, "ChatGPT is paused, so this run isn't saved to Over time.")
     } finally {
       await server.close()
     }

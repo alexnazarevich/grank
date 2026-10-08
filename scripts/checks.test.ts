@@ -329,7 +329,7 @@ describe('history trim', () => {
 })
 
 describe('view models', () => {
-  it('keeps Generated · OpenAI and Unbranded on a live result', () => {
+  it('keeps Generated · ChatGPT and Unbranded on a live result', () => {
     const aha = {
       domain: 'linear.app',
       questions: ['What is Linear?', 'Linear vs Jira?', 'Is Linear worth it?'],
@@ -343,8 +343,8 @@ describe('view models', () => {
       homepageSupport: null,
     }
     const view = viewFromAha(aha)
-    assert.equal(view.questionsLabel, 'Generated · OpenAI')
-    assert.equal(view.whoInsteadLabel, 'Generated · OpenAI')
+    assert.equal(view.questionsLabel, 'Generated · ChatGPT')
+    assert.equal(view.whoInsteadLabel, 'Generated · ChatGPT')
     assert.equal(view.modeLabel, 'Unbranded')
     assert.equal(view.model, 'gpt-4o-mini')
   })
@@ -502,7 +502,7 @@ describe('onRequest /api/checks', () => {
               domain: 'linear.app',
               mode: 'unbranded',
               created_at: '2026-09-25T12:00:00.000Z',
-              result: { labels: { mode: 'Unbranded', questions: 'Generated · OpenAI', answered: 'Live model', whoInstead: 'Generated · OpenAI' }, model: 'gpt-4o-mini', questions: ['What is Linear?'] },
+              result: { labels: { mode: 'Unbranded', questions: 'Generated · ChatGPT', answered: 'Live model', whoInstead: 'Generated · ChatGPT' }, model: 'gpt-4o-mini', questions: ['What is Linear?'] },
             },
           ]),
           { status: 200, headers: { 'content-type': 'application/json' } },
@@ -821,9 +821,9 @@ describe('onRequest /api/checks', () => {
               result: {
                 report: 'full',
                 labels: {
-                  questions: 'Generated · OpenAI',
-                  answered: 'Generated · OpenAI',
-                  whoInstead: 'Generated · OpenAI',
+                  questions: 'Generated · ChatGPT',
+                  answered: 'Generated · ChatGPT',
+                  whoInstead: 'Generated · ChatGPT',
                   mode: 'Full report',
                 },
                 model: 'gpt-4o-mini',

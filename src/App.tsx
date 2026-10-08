@@ -27,7 +27,7 @@ import {
   supabasePublicConfig,
   type AuthSession,
 } from './authClient'
-import { FullReportSection, OpenAIPausedNote } from './FullReportSection'
+import { ChatGptPausedNote, FullReportSection } from './FullReportSection'
 import {
   fetchFullReport,
   fetchOwnedReport,
@@ -111,8 +111,8 @@ function checkoutReturnNote(): string {
   return note
 }
 
-function withOpenAI(text: string) {
-  const word = 'OpenAI'
+function withChatGPT(text: string) {
+  const word = 'ChatGPT'
   const at = text.indexOf(word)
   if (at < 0) return text
   return (
@@ -259,9 +259,9 @@ function savedFromDraft(draft: CheckDraft): SavedCheck {
     createdAt: new Date().toISOString(),
     result: {
       labels: {
-        questions: draft.questionsGenerated ? 'Generated · OpenAI' : 'Sample',
+        questions: draft.questionsGenerated ? 'Generated · ChatGPT' : 'Sample',
         answered: draft.answeredLive ? 'Live model' : 'Unavailable',
-        whoInstead: 'Generated · OpenAI',
+        whoInstead: 'Generated · ChatGPT',
         mode: draft.mode === 'branded' ? 'Branded' : 'Unbranded',
       },
       model: draft.model,
@@ -343,6 +343,8 @@ export default function App() {
   const [reportMessage, setReportMessage] = useState('')
   const [fullReport, setFullReport] = useState<FullReport | null>(null)
   const [geminiMiss, setGeminiMiss] = useState<SignedGeminiMiss | null>(null)
+  const [claudeMiss, setClaudeMiss] = useState<SignedGeminiMiss | null>(null)
+  const [claudeTestMisses, setClaudeTestMisses] = useState<Record<string, SignedGeminiMiss>>({})
   const [openaiPaused, setOpenaiPaused] = useState(false)
   const [emailPurpose, setEmailPurpose] = useState<EmailPurpose>('save')
   const [pins, setPins] = useState<PinItem[]>([])
@@ -396,6 +398,8 @@ export default function App() {
     }
     setQuotaWall(false)
     setGeminiMiss(result.geminiMiss ?? null)
+    setClaudeMiss(result.claudeMiss ?? null)
+    setClaudeTestMisses({})
     setOpenaiPaused(result.openaiPaused === true)
     testEpoch.current += 1
     if (result.openaiPaused) {
@@ -1224,6 +1228,20 @@ export default function App() {
       )
       return { ok: true }
     }
+    if (result.engine === 'claude') {
+      const claude = result.claude
+      const key = input.question.replace(/\s+/g, ' ').trim().toLowerCase()
+      setClaudeTestMisses((current) => {
+        const next = { ...current }
+        if (result.claudeMiss) next[key] = result.claudeMiss
+        else delete next[key]
+        return next
+      })
+      setFullReport((current) =>
+        current ? patchTestAnswer(current, input.question, { engine: 'claude', claude }) : current,
+      )
+      return { ok: true }
+    }
     if ('openaiPaused' in result) return { ok: true, openaiPaused: true }
     const answer = result.answer
     setFullReport((current) =>
@@ -1559,7 +1577,7 @@ export default function App() {
             />
           ) : null}
 
-          <p className="proof">{withOpenAI(STORY.homeProof)}</p>
+          <p className="proof">{withChatGPT(STORY.homeProof)}</p>
 
           <div className="examples">
             <span className="muted lead">{STORY.exampleLead}</span>
@@ -1625,7 +1643,7 @@ export default function App() {
                 <h1>{config.copy.fullReportTitle}</h1>
                 <p className="engines">{screen.domain}</p>
               </div>
-              <span className="badge live">Generated · OpenAI</span>
+              <span className="badge live">{STORY.answerLabel}</span>
             </div>
             <p className="why">{config.copy.fullReportSub}</p>
             {showDelta ? (
@@ -1645,13 +1663,15 @@ export default function App() {
               runs={runs}
               preview={runPreview}
               geminiMiss={geminiMiss}
+              claudeMiss={claudeMiss}
+              claudeTestMisses={claudeTestMisses}
               openaiPaused={openaiPaused}
               onRunTestQuestion={session ? onRunTestQuestion : undefined}
               testQuestionDisabled={questionToolsBusy}
             />
             {owning ? (
               <div className="save-row">
-                {openaiPaused ? <OpenAIPausedNote /> : null}
+                {openaiPaused ? <ChatGptPausedNote /> : null}
                 <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                   {busy ? 'Generating…' : config.copy.runAgainCta}
                 </button>
@@ -1674,7 +1694,7 @@ export default function App() {
                   {brandedLoading
                     ? STORY.digLoading
                     : beat?.answeredLive
-                      ? `OpenAI · ${beat.model} · ${land ? 'Unbranded' : 'Branded'}`
+                      ? `ChatGPT · ${beat.model} · ${land ? 'Unbranded' : 'Branded'}`
                       : land
                         ? 'Model call failed — questions below are a labeled sample. Answered-by-you is unavailable.'
                         : STORY.digFail}
@@ -1713,7 +1733,7 @@ export default function App() {
               <h2 className="beat-title">
                 {land ? STORY.landTitle : STORY.digTitle}{' '}
                 {beat?.questionsGenerated ? (
-                  <span className="tag plain live">Generated · OpenAI</span>
+                  <span className="tag plain live">{STORY.answerLabel}</span>
                 ) : land && beat && !screen.omittedQuestions ? (
                   <span className="tag plain">Sample</span>
                 ) : null}
@@ -1898,7 +1918,7 @@ export default function App() {
                     {beat.answeredLive ? 'Live model' : 'Unavailable'}
                   </span>
                   {beat.answeredLive ? (
-                    <span className="tag plain live">OpenAI · gpt-4o-mini</span>
+                    <span className="tag plain live">ChatGPT · gpt-4o-mini</span>
                   ) : null}
                 </h2>
                 {screen.omittedAnswers ? (
@@ -1928,7 +1948,7 @@ export default function App() {
             ) : null}
 
             <div className={`save-row${emphasizeSave && !savedId ? ' nudge' : ''}`}>
-              {openaiPaused ? <OpenAIPausedNote /> : null}
+              {openaiPaused ? <ChatGptPausedNote /> : null}
               <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
                 {busy ? 'Generating…' : config.copy.runAgainCta}
               </button>
@@ -2020,6 +2040,8 @@ export default function App() {
                 report={fullReport}
                 copy={config.copy}
                 geminiMiss={geminiMiss}
+                claudeMiss={claudeMiss}
+                claudeTestMisses={claudeTestMisses}
                 openaiPaused={openaiPaused}
                 onRunTestQuestion={session ? onRunTestQuestion : undefined}
                 testQuestionDisabled={questionToolsBusy}
@@ -2045,8 +2067,7 @@ export default function App() {
       ) : null}
 
       <footer className="foot">
-        Grank — simple AEO for thin marketing teams. Unbranded category questions first, branded
-        when you ask. One OpenAI model — not a blended score.
+        {STORY.metaDescription}
       </footer>
     </div>
   )

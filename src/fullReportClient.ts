@@ -24,7 +24,9 @@ export type FullReportOk = {
   runs: CheckRun[]
   /** In memory for this response only. Never part of the stored report. */
   geminiMiss?: SignedGeminiMiss
-  /** This Run again skipped OpenAI and was not saved. */
+  /** In memory for this response only. Never part of the stored report. */
+  claudeMiss?: SignedGeminiMiss
+  /** This Run again skipped ChatGPT and was not saved. The field name stays openaiPaused. */
   openaiPaused?: boolean
 }
 
@@ -116,6 +118,7 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
   }
   const check = isRecord(rec.check) && typeof rec.check.id === 'string' ? rec.check.id : null
   const geminiMiss = geminiMissFromPayload(rec.geminiMiss)
+  const claudeMiss = geminiMissFromPayload(rec.claudeMiss)
   const openaiPaused = rec.openaiPaused === true
   return {
     ok: true,
@@ -123,6 +126,7 @@ export function interpretFullReportResponse(status: number, data: unknown, unusa
     checkId: check,
     runs: cleanRuns(rec.runs),
     ...(geminiMiss ? { geminiMiss } : {}),
+    ...(claudeMiss ? { claudeMiss } : {}),
     ...(openaiPaused ? { openaiPaused: true as const } : {}),
   }
 }

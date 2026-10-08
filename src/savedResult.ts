@@ -3,7 +3,7 @@ import type { FullReport } from './fullReport.ts'
 import { cleanAnswerFacts, type AnswerFact, type Framing } from './mentionFacts.ts'
 import type { CheckRun } from './runHistory.ts'
 
-export const LABEL_GENERATED = 'Generated · OpenAI'
+export const LABEL_GENERATED = 'Generated · ChatGPT'
 export const LABEL_SAMPLE = 'Sample'
 export const LABEL_LIVE = 'Live model'
 export const LABEL_UNAVAILABLE = 'Unavailable'

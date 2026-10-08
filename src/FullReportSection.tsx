@@ -14,15 +14,18 @@ import {
   type MentionGridCell,
   type ThemeMentionRate,
 } from './runHistory.ts'
-import { geminiMissLine, geminiRow } from './engineBlock.ts'
+import { claudeMissLine, claudeRow, geminiMissLine, geminiRow } from './engineBlock.ts'
 import type { SignedGeminiMiss } from './fullReportClient.ts'
 import type { TestQuestionInput, TestQuestionOutcome } from './testQuestionClient.ts'
 import { STORY } from './story.ts'
 
-const GENERATED = 'Generated · OpenAI'
+const GENERATED = STORY.answerLabel
 
 /** Present only for the signed-in response that just ran. Stored checks leave this null. */
 const GeminiMissContext = createContext<SignedGeminiMiss | null>(null)
+const ClaudeMissContext = createContext<SignedGeminiMiss | null>(null)
+/** Miss from Run test question, keyed by question. Only that block reads it. */
+const ClaudeTestMissContext = createContext<Readonly<Record<string, SignedGeminiMiss>>>({})
 
 type TestQuestionApi = {
   run: ((input: TestQuestionInput) => Promise<TestQuestionOutcome>) | null
@@ -59,7 +62,7 @@ function TestQuestionControl({
   const [error, setError] = useState('')
   const pending = useRef(false)
   if (!api.run) return null
-  async function run(engine: 'openai' | 'gemini') {
+  async function run(engine: 'openai' | 'gemini' | 'claude') {
     if (!api.run || pending.current || api.disabled) return
     pending.current = true
     setBusy(true)
@@ -86,6 +89,11 @@ function TestQuestionControl({
             {STORY.engineGemini}
           </button>
         ) : null}
+        {framing === 'unbranded' ? (
+          <button type="button" data-engine="claude" disabled={locked} onClick={() => void run('claude')}>
+            {STORY.engineClaude}
+          </button>
+        ) : null}
       </div>
       {busy ? (
         <p className="status" role="status">
@@ -99,9 +107,9 @@ function TestQuestionControl({
 }
 
 /** Which labeled answer blocks are visible. The Over time grid does not read this. */
-type ShownEngines = { openai: boolean; gemini: boolean }
+type ShownEngines = { openai: boolean; gemini: boolean; claude: boolean }
 
-const ShownEnginesContext = createContext<ShownEngines>({ openai: true, gemini: true })
+const ShownEnginesContext = createContext<ShownEngines>({ openai: true, gemini: true, claude: true })
 
 function themeFramingOf(theme: { framing?: Framing; questions: { framing: Framing }[] }): Framing | null {
   const first = theme.questions[0]?.framing
@@ -224,8 +232,9 @@ function ReportQuestion({
       {open ? (
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? <NameList names={names} /> : null}
-          <OpenAIAnswer text={text} paused={answerPaused} />
+          <ChatGptAnswer text={text} paused={answerPaused} />
           {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+          {item.framing === 'unbranded' ? <ClaudeBlock question={item.question} text={item.claude ?? ''} /> : null}
           <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
         </div>
       ) : null}
@@ -300,8 +309,9 @@ function ThemeGridRow({
                 ))}
               </ul>
             ) : null}
-            <OpenAIAnswer text={text} paused={answerPaused} />
+            <ChatGptAnswer text={text} paused={answerPaused} />
             {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+            {item.framing === 'unbranded' ? <ClaudeBlock question={item.question} text={item.claude ?? ''} /> : null}
             <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
           </div>
         ) : null}
@@ -669,6 +679,8 @@ export function FullReportSection({
   initialEngines,
   topicsOpen = false,
   geminiMiss = null,
+  claudeMiss = null,
+  claudeTestMisses = {},
   openaiPaused = false,
   onRunTestQuestion,
   testQuestionDisabled = false,
@@ -687,13 +699,17 @@ export function FullReportSection({
   answersOpen?: boolean
   /** In-page tab. Over time is first. No URL change. */
   initialTab?: ReportTab
-  /** Which answer blocks start visible. Both on unless a test turns one off. */
-  initialEngines?: { openai?: boolean; gemini?: boolean }
+  /** Which answer blocks start visible. All on unless a test turns one off. */
+  initialEngines?: { openai?: boolean; gemini?: boolean; claude?: boolean }
   /** Opens topic expands on the active tab. */
   topicsOpen?: boolean
   /** Class from this Run again response. Omitted for a stored check. */
   geminiMiss?: SignedGeminiMiss | null
-  /** This Run again skipped OpenAI. Stored checks leave this false. */
+  /** Class from this Run again response. Omitted for a stored check. */
+  claudeMiss?: SignedGeminiMiss | null
+  /** Miss codes from Run test question, one question at a time. */
+  claudeTestMisses?: Readonly<Record<string, SignedGeminiMiss>>
+  /** This Run again skipped ChatGPT. Stored checks leave this false. The prop name stays openaiPaused. */
   openaiPaused?: boolean
   /** Signed-in only. Absent for guests and for renders that are not a full report. */
   onRunTestQuestion?: (input: TestQuestionInput) => Promise<TestQuestionOutcome>
@@ -715,6 +731,7 @@ export function FullReportSection({
   const [engines, setEngines] = useState<ShownEngines>({
     openai: initialEngines?.openai !== false,
     gemini: initialEngines?.gemini !== false,
+    claude: initialEngines?.claude !== false,
   })
   function toggleEngine(which: keyof ShownEngines) {
     setEngines((current) => ({ ...current, [which]: !current[which] }))
@@ -735,6 +752,8 @@ export function FullReportSection({
   const topicsStartOpen = topicsOpen || whoInsteadOpen || answersOpen
   return (
     <GeminiMissContext.Provider value={geminiMiss}>
+    <ClaudeMissContext.Provider value={claudeMiss}>
+    <ClaudeTestMissContext.Provider value={claudeTestMisses}>
     <ShownEnginesContext.Provider value={engines}>
     <TestQuestionContext.Provider
       value={{
@@ -758,6 +777,9 @@ export function FullReportSection({
           </button>
           <button type="button" aria-pressed={engines.gemini} onClick={() => toggleEngine('gemini')}>
             {copy.engineGemini}
+          </button>
+          <button type="button" aria-pressed={engines.claude} onClick={() => toggleEngine('claude')}>
+            {copy.engineClaude}
           </button>
         </div>
         <p className="why">{copy.engineFilterHelper}</p>
@@ -851,12 +873,14 @@ export function FullReportSection({
     </section>
     </TestQuestionContext.Provider>
     </ShownEnginesContext.Provider>
+    </ClaudeTestMissContext.Provider>
+    </ClaudeMissContext.Provider>
     </GeminiMissContext.Provider>
   )
 }
 
-/** OpenAI reply under an opened question. The top filter hides this block only. */
-function OpenAIAnswer({ text, paused }: { text: string; paused: boolean }) {
+/** ChatGPT reply under an opened question. The top filter hides this block only. */
+function ChatGptAnswer({ text, paused }: { text: string; paused: boolean }) {
   const shown = useContext(ShownEnginesContext)
   if (!shown.openai) return null
   return (
@@ -886,7 +910,27 @@ function GeminiBlock({ text }: { text: string }) {
   )
 }
 
-/** One line next to Run again after a paused response. Not the Gemini miss line. */
-export function OpenAIPausedNote() {
+/** Third block on an unbranded row. Empty text is the miss line. Branded rows omit it. */
+function ClaudeBlock({ question, text }: { question: string; text: string }) {
+  const shown = useContext(ShownEnginesContext)
+  const reportMiss = useContext(ClaudeMissContext)
+  const tested = useContext(ClaudeTestMissContext)
+  if (!shown.claude) return null
+  const row = claudeRow([text], 0)
+  if (!row) return null
+  const key = questionPauseKey(question)
+  const miss = Object.prototype.hasOwnProperty.call(tested, key) ? tested[key] : reportMiss
+  return (
+    <div className={row.miss ? 'answer miss' : 'answer'}>
+      <div className="answer-meta">
+        <span className="tag plain live">{row.label}</span>
+      </div>
+      <p className="answer-body">{row.miss ? claudeMissLine(miss) : row.body}</p>
+    </div>
+  )
+}
+
+/** One line next to Run again after a paused response. Not a Gemini or Claude miss line. */
+export function ChatGptPausedNote() {
   return <p className="why">{STORY.openaiPausedHistory}</p>
 }
