@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { describe, it } from 'node:test'
-import { BRANDED_SYSTEM_PROMPT, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, GEMINI_REPORT_BUDGET_MS, GEMINI_TIMEOUT_CAP_MS, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiApiKeyFromEnv, geminiGenerateBody, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissLogLine, geminiModelFromEnv, geminiReplies, geminiTextMiss, geminiTimeoutFromEnv, geminiWaitMs, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, scrubSecret } from '../functions/api/visibility.ts'
+import { beforeEach, describe, it } from 'node:test'
+import { BRANDED_SYSTEM_PROMPT, GEMINI_CHUNK_TOKEN_BASE, GEMINI_CHUNK_TOKENS_PER_QUESTION, GEMINI_MISS_CLASSES, GEMINI_MODEL_DEFAULT, GEMINI_REPORT_BUDGET_MS, GEMINI_TIMEOUT_CAP_MS, UNBRANDED_SYSTEM_PROMPT, geminiAnswerPrompt, geminiApiKeyFromEnv, geminiChunkMaxOutputTokens, geminiChunkSize, geminiGenerateBody, geminiGenerateUrl, geminiGenerationConfig, geminiMaxOutputTokens, geminiMissForResponse, geminiMissFromChunks, geminiMissLogLine, geminiModelFromEnv, geminiQuestionChunks, geminiReplies, geminiTextMiss, geminiTimeoutFromEnv, geminiWaitMs, onRequest, parseGeminiAnswers, parseVisibilityContent, parseVisibilityMode, parseWhoInstead, readQuestionAnswers, resetGeminiThinkingMemo, scrubSecret } from '../functions/api/visibility.ts'
 import { geminiRow } from '../src/engineBlock.ts'
 import { whoInsteadByTopic } from '../src/mentionLabel.ts'
 import { SHARPER_Q_RULES, factsFromVisibility, mentionFromAnswer } from '../src/mentionFacts.ts'
@@ -933,7 +933,11 @@ function geminiPayload(answers: string[]) {
   })
 }
 
-describe('gemini on unbranded questions', () => {
+describe('gemini on unbranded questions', { concurrency: false }, () => {
+  beforeEach(() => {
+    resetGeminiThinkingMemo()
+  })
+
   it('labels OpenAI and Gemini apart, and a miss is not the OpenAI label', () => {
     assert.equal(STORY.answerLabel, 'Generated · ChatGPT')
     assert.equal(STORY.geminiLabel, 'Generated · Gemini')
@@ -1020,11 +1024,19 @@ describe('gemini on unbranded questions', () => {
       assert.equal(sent.includes(GEMINI_KEY), false)
       assert.match(sent, /What is Linear\?/)
       const sentBody = JSON.parse(sent) as {
-        generationConfig?: { thinkingConfig?: { thinkingBudget?: number }; maxOutputTokens?: number; responseMimeType?: string }
+        generationConfig?: {
+          thinkingConfig?: { thinkingBudget?: number; thinkingLevel?: string }
+          maxOutputTokens?: number
+          responseMimeType?: string
+        }
       }
       assert.equal(sentBody.generationConfig?.responseMimeType, 'application/json')
-      assert.equal('thinkingConfig' in (sentBody.generationConfig ?? {}), false)
+      assert.deepEqual(sentBody.generationConfig?.thinkingConfig, { thinkingLevel: 'minimal' })
       assert.equal(sentBody.generationConfig?.maxOutputTokens, geminiMaxOutputTokens(3))
+      assert.equal(
+        urls.filter((item) => item.includes('generativelanguage.googleapis.com')).length,
+        1,
+      )
       return new Response(
         geminiPayload([
           `Monday and ClickUp are common picks. key ${GEMINI_KEY} must not leak.`,
@@ -1289,9 +1301,11 @@ describe('gemini on unbranded questions', () => {
     assert.equal(section.includes('http_reject'), false)
     const flash = geminiGenerationConfig('gemini-2.5-flash', 3)
     assert.equal(flash.thinkingConfig?.thinkingBudget, 0)
+    assert.equal('thinkingLevel' in (flash.thinkingConfig ?? {}), false)
     const lite = geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 3)
-    assert.equal('thinkingConfig' in lite, false)
+    assert.deepEqual(lite.thinkingConfig, { thinkingLevel: 'minimal' })
     assert.equal(lite.maxOutputTokens, 880)
+    assert.equal(lite.responseMimeType, 'application/json')
     assert.equal(geminiMaxOutputTokens(100), 1_200)
     assert.equal(GEMINI_TIMEOUT_CAP_MS, 8_000)
     assert.equal(geminiTimeoutFromEnv(undefined), 8_000)
@@ -1331,7 +1345,7 @@ describe('gemini on unbranded questions', () => {
     assert.equal(documented.contents[0].role, 'user')
     assert.equal(documented.contents[0].parts.length, 1)
     assert.equal(documented.contents[0].parts[0].text, prompt)
-    assert.equal('thinkingConfig' in documented.generationConfig, false)
+    assert.deepEqual(documented.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' })
     const legacy = geminiGenerateBody('gemini-2.5-flash', prompt, 1)
     assert.deepEqual(legacy.generationConfig.thinkingConfig, { thinkingBudget: 0 })
     assert.equal(documented.generationConfig.responseMimeType, 'application/json')
@@ -1353,7 +1367,7 @@ describe('gemini on unbranded questions', () => {
     const proUrl = geminiGenerateUrl(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }))
     assert.equal(proUrl, geminiGenerateUrl(GEMINI_MODEL_DEFAULT))
     const proBody = geminiGenerateBody(geminiModelFromEnv({ GEMINI_MODEL: 'gemini-2.5-pro' }), prompt, 1)
-    assert.equal('thinkingConfig' in proBody.generationConfig, false)
+    assert.deepEqual(proBody.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' })
 
     const shapeCalls: { url: string; body: string; key: string | null }[] = []
     const prevFetch = globalThis.fetch
@@ -1466,7 +1480,7 @@ describe('gemini on unbranded questions', () => {
       {
         name: 'bad_json',
         run: async () => new Response(`not-json ${GEMINI_KEY}`, { status: 200 }),
-        log: 'gemini miss bad_json',
+        log: 'gemini miss bad_json parse',
         miss: { class: 'bad_json' },
       },
       {
@@ -1476,7 +1490,7 @@ describe('gemini on unbranded questions', () => {
             JSON.stringify({ candidates: [{ content: { parts: [{ text: `sure ${GEMINI_KEY}` }] } }] }),
             { status: 200 },
           ),
-        log: 'gemini miss bad_json',
+        log: 'gemini miss bad_json parse',
         miss: { class: 'bad_json' },
       },
       {
@@ -1506,7 +1520,7 @@ describe('gemini on unbranded questions', () => {
             }),
             { status: 200 },
           ),
-        log: 'gemini miss bad_json',
+        log: 'gemini miss bad_json max_tokens',
         miss: { class: 'bad_json' },
       },
       {
@@ -1523,7 +1537,7 @@ describe('gemini on unbranded questions', () => {
             }),
             { status: 200 },
           ),
-        log: 'gemini miss bad_json',
+        log: 'gemini miss bad_json max_tokens',
         miss: { class: 'bad_json' },
       },
       {
@@ -1614,6 +1628,455 @@ describe('gemini on unbranded questions', () => {
       assert.equal(JSON.stringify(hit).includes(GEMINI_KEY), false)
     } finally {
       console.info = prevInfo
+      globalThis.fetch = prev
+    }
+  })
+
+  it('chunks a full report into at most two calls and gives each one a 110-token answer budget', async () => {
+    const answerTokens = 110
+    const sizes: Record<number, number[]> = {
+      1: [1],
+      4: [4],
+      6: [6],
+      12: [6, 6],
+      20: [10, 10],
+      80: [40, 40],
+    }
+    for (const raw of Object.keys(sizes)) {
+      const count = Number(raw)
+      const questions = Array.from({ length: count }, (_, index) => `q${index}`)
+      const slices = geminiQuestionChunks(questions)
+      assert.ok(slices.length <= 2, `n=${count} made ${slices.length} chunks`)
+      assert.deepEqual(
+        slices.map((slice) => slice.length),
+        sizes[count],
+      )
+      assert.deepEqual(slices.flat(), questions)
+      const planned = geminiChunkSize(count)
+      assert.equal(
+        geminiChunkMaxOutputTokens(planned),
+        planned * GEMINI_CHUNK_TOKENS_PER_QUESTION + GEMINI_CHUNK_TOKEN_BASE,
+      )
+      assert.ok(geminiChunkMaxOutputTokens(planned) >= slices[0].length * answerTokens)
+    }
+    assert.deepEqual(
+      geminiMissFromChunks([undefined, { class: 'bad_json' }, { class: 'http_reject', status: 500 }]),
+      { class: 'http_reject', status: 500 },
+    )
+    assert.deepEqual(geminiGenerationConfig('gemini-2.5-flash', 4).thinkingConfig, { thinkingBudget: 0 })
+    assert.deepEqual(geminiGenerationConfig('gemini-2.5-flash-lite', 1).thinkingConfig, { thinkingBudget: 0 })
+    assert.deepEqual(geminiGenerationConfig('gemini-3.5-flash-lite', 6).thinkingConfig, { thinkingLevel: 'minimal' })
+    assert.deepEqual(geminiGenerationConfig('gemini-3-flash', 2).thinkingConfig, { thinkingLevel: 'minimal' })
+    assert.equal('thinkingConfig' in geminiGenerationConfig('gemini-2.0-flash', 2), false)
+    assert.equal(geminiGenerationConfig('gemini-2.5-flash', 6).responseMimeType, 'application/json')
+    assert.equal(geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 12).responseMimeType, 'application/json')
+
+    const questions = Array.from({ length: 12 }, (_, index) => `What should a team use for job ${index}?`)
+    assert.equal(geminiMaxOutputTokens(12), 1_200)
+    assert.equal(400 + 12 * 160, 2_320)
+    assert.ok(12 * answerTokens > geminiMaxOutputTokens(12))
+    const oldConfig = geminiGenerateBody(GEMINI_MODEL_DEFAULT, geminiAnswerPrompt(questions), questions.length)
+    assert.equal(oldConfig.generationConfig.maxOutputTokens, 1_200)
+    assert.equal(oldConfig.generationConfig.responseMimeType, 'application/json')
+    const sentinel = 'TRUNCATED-BODY-MUST-NOT-LOG'
+    const logs: string[] = []
+    const prevInfo = console.info
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map((part) => String(part)).join(' '))
+    }
+    const seen: { maxOutputTokens?: number; responseMimeType?: string; thinking?: unknown; count: number }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '')) as {
+        generationConfig?: {
+          maxOutputTokens?: number
+          responseMimeType?: string
+          thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number }
+        }
+        contents?: { parts?: { text?: string }[] }[]
+      }
+      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+      const count = (prompt.match(/^\d+\. /gm) ?? []).length
+      seen.push({
+        maxOutputTokens: body.generationConfig?.maxOutputTokens,
+        responseMimeType: body.generationConfig?.responseMimeType,
+        thinking: body.generationConfig?.thinkingConfig,
+        count,
+      })
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'MAX_TOKENS',
+              content: { parts: [{ text: `{"answers":["${sentinel}` }] },
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    try {
+      const old = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: false,
+      })
+      assert.equal(seen.length, 1)
+      assert.equal(seen[0]?.count, 12)
+      assert.equal(seen[0]?.maxOutputTokens, 1_200)
+      assert.equal(seen[0]?.responseMimeType, 'application/json')
+      assert.deepEqual(old.replies, questions.map(() => ''))
+      assert.deepEqual(old.miss, { class: 'bad_json' })
+      assert.equal('reason' in (old.miss ?? {}), false)
+      assert.deepEqual(logs, ['gemini miss bad_json max_tokens'])
+      assert.equal(logs.join('\n').includes(sentinel), false)
+      assert.equal(JSON.stringify(old).includes(sentinel), false)
+      assert.equal(JSON.stringify(old).includes(GEMINI_KEY), false)
+    } finally {
+      globalThis.fetch = prev
+      console.info = prevInfo
+    }
+
+    const planned = geminiChunkSize(12)
+    const budget = geminiChunkMaxOutputTokens(planned)
+    assert.equal(planned, 6)
+    assert.equal(budget, 6 * 200 + 64)
+    assert.equal(budget, 1_264)
+    assert.ok(budget >= 6 * answerTokens)
+    assert.ok(budget >= 6 * answerTokens + GEMINI_CHUNK_TOKEN_BASE)
+
+    const chunkLogs: string[] = []
+    const chunkSeen: { maxOutputTokens?: number; responseMimeType?: string; thinking?: unknown; count: number }[] = []
+    console.info = (...args: unknown[]) => {
+      chunkLogs.push(args.map((part) => String(part)).join(' '))
+    }
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '')) as {
+        generationConfig?: {
+          maxOutputTokens?: number
+          responseMimeType?: string
+          thinkingConfig?: { thinkingLevel?: string }
+        }
+        contents?: { parts?: { text?: string }[] }[]
+      }
+      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+      const asked = questions.filter((question) => prompt.includes(question))
+      chunkSeen.push({
+        maxOutputTokens: body.generationConfig?.maxOutputTokens,
+        responseMimeType: body.generationConfig?.responseMimeType,
+        thinking: body.generationConfig?.thinkingConfig,
+        count: asked.length,
+      })
+      const answers = asked.map((question) => `Kept ${question}`)
+      const fenced = '```json\n' + JSON.stringify({ answers }) + '\n```'
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  { thought: true, text: JSON.stringify({ answers: [`thought ${GEMINI_KEY}`] }) },
+                  { text: fenced },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    try {
+      const next = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(chunkSeen.length, 2)
+      assert.deepEqual(
+        chunkSeen.map((item) => item.count),
+        [6, 6],
+      )
+      assert.equal(
+        chunkSeen.every((item) => item.maxOutputTokens === budget && item.responseMimeType === 'application/json'),
+        true,
+      )
+      assert.equal(
+        chunkSeen.every((item) => JSON.stringify(item.thinking) === JSON.stringify({ thinkingLevel: 'minimal' })),
+        true,
+      )
+      assert.deepEqual(
+        next.replies,
+        questions.map((question) => `Kept ${question}`),
+      )
+      assert.equal(next.miss, undefined)
+      assert.equal(next.replies.some((reply) => reply.includes('thought')), false)
+      assert.deepEqual(chunkLogs, [])
+      assert.equal(JSON.stringify(next).includes(GEMINI_KEY), false)
+    } finally {
+      globalThis.fetch = prev
+      console.info = prevInfo
+    }
+  })
+
+  it('blanks only the chunk that missed and does not salvage a MAX_TOKENS parse', async () => {
+    const questions = Array.from({ length: 12 }, (_, index) => `What should a team use for job ${index}?`)
+    const salvage = `Salvage ${GEMINI_KEY} must not leak`
+    const logs: string[] = []
+    const prevInfo = console.info
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map((part) => String(part)).join(' '))
+    }
+    const seen: { responseMimeType?: string; maxOutputTokens?: number }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '')) as {
+        generationConfig?: { responseMimeType?: string; maxOutputTokens?: number }
+        contents?: { parts?: { text?: string }[] }[]
+      }
+      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+      seen.push({
+        responseMimeType: body.generationConfig?.responseMimeType,
+        maxOutputTokens: body.generationConfig?.maxOutputTokens,
+      })
+      const asked = questions.filter((question) => prompt.includes(question))
+      if (prompt.includes('job 0?')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: 'MAX_TOKENS',
+                content: {
+                  parts: [{ text: JSON.stringify({ answers: asked.map(() => salvage) }) }],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: { parts: [{ text: JSON.stringify({ answers: asked.map((question) => `Kept ${question}`) }) }] },
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    try {
+      const hit = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(seen.length, 2)
+      assert.equal(
+        seen.every((item) => item.responseMimeType === 'application/json' && item.maxOutputTokens === 1_264),
+        true,
+      )
+      assert.deepEqual(hit.replies.slice(0, 6), ['', '', '', '', '', ''])
+      assert.deepEqual(
+        hit.replies.slice(6),
+        questions.slice(6).map((question) => `Kept ${question}`),
+      )
+      assert.deepEqual(hit.miss, { class: 'bad_json' })
+      assert.equal(Object.keys(hit.miss ?? {}).join(','), 'class')
+      assert.deepEqual(logs, ['gemini miss bad_json max_tokens'])
+      const packed = JSON.stringify(hit) + logs.join('\n')
+      assert.equal(packed.includes(salvage), false)
+      assert.equal(packed.includes(GEMINI_KEY), false)
+      assert.equal(packed.includes('MAX_TOKENS'), false)
+    } finally {
+      globalThis.fetch = prev
+      console.info = prevInfo
+    }
+
+    const parseLogs: string[] = []
+    console.info = (...args: unknown[]) => {
+      parseLogs.push(args.map((part) => String(part)).join(' '))
+    }
+    const prose = `not-json ${GEMINI_KEY} prompt should not leak`
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '')) as { contents?: { parts?: { text?: string }[] }[] }
+      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+      const asked = questions.filter((question) => prompt.includes(question))
+      if (prompt.includes('job 6?')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [{ finishReason: 'STOP', content: { parts: [{ text: prose }] } }],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: { parts: [{ text: JSON.stringify({ answers: asked.map((question) => `Kept ${question}`) }) }] },
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    try {
+      const hit = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.deepEqual(
+        hit.replies.slice(0, 6),
+        questions.slice(0, 6).map((question) => `Kept ${question}`),
+      )
+      assert.deepEqual(hit.replies.slice(6), ['', '', '', '', '', ''])
+      assert.deepEqual(hit.miss, { class: 'bad_json' })
+      assert.deepEqual(parseLogs, ['gemini miss bad_json parse'])
+      const packed = JSON.stringify(hit) + parseLogs.join('\n')
+      assert.equal(packed.includes(prose), false)
+      assert.equal(packed.includes(GEMINI_KEY), false)
+      assert.equal(packed.includes('prompt should not leak'), false)
+    } finally {
+      globalThis.fetch = prev
+      console.info = prevInfo
+    }
+  })
+
+  it('retries a gemini-3 thinkingLevel 400 once and remembers the plain request', async () => {
+    const questions = Array.from({ length: 12 }, (_, index) => `What should a team use for job ${index}?`)
+    const bodies: { thinking?: unknown; responseMimeType?: string; maxOutputTokens?: number }[] = []
+    const prev = globalThis.fetch
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '')) as {
+        generationConfig?: {
+          thinkingConfig?: { thinkingLevel?: string; thinkingBudget?: number }
+          responseMimeType?: string
+          maxOutputTokens?: number
+        }
+        contents?: { parts?: { text?: string }[] }[]
+      }
+      bodies.push({
+        thinking: body.generationConfig?.thinkingConfig,
+        responseMimeType: body.generationConfig?.responseMimeType,
+        maxOutputTokens: body.generationConfig?.maxOutputTokens,
+      })
+      const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+      const asked = questions.filter((question) => prompt.includes(question))
+      if (body.generationConfig?.thinkingConfig && 'thinkingLevel' in body.generationConfig.thinkingConfig) {
+        return new Response(JSON.stringify({ error: { message: `bad ${GEMINI_KEY}` } }), { status: 400 })
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: { parts: [{ text: JSON.stringify({ answers: asked.map((question) => `Kept ${question}`) }) }] },
+            },
+          ],
+        }),
+        { status: 200 },
+      )
+    }) as typeof fetch
+    try {
+      const hit = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(bodies.length, 4)
+      assert.deepEqual(
+        bodies.slice(0, 2).map((item) => item.thinking),
+        [{ thinkingLevel: 'minimal' }, { thinkingLevel: 'minimal' }],
+      )
+      assert.equal(
+        bodies.slice(2).every((item) => item.thinking === undefined),
+        true,
+      )
+      assert.equal(
+        bodies.every((item) => item.responseMimeType === 'application/json' && item.maxOutputTokens === 1_264),
+        true,
+      )
+      assert.deepEqual(
+        hit.replies,
+        questions.map((question) => `Kept ${question}`),
+      )
+      assert.equal(hit.miss, undefined)
+      assert.equal(JSON.stringify(hit).includes(GEMINI_KEY), false)
+      assert.equal('thinkingConfig' in geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 6), false)
+      assert.deepEqual(geminiGenerationConfig('gemini-2.5-flash', 6).thinkingConfig, { thinkingBudget: 0 })
+
+      bodies.length = 0
+      const again = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(bodies.length, 2)
+      assert.equal(
+        bodies.every((item) => item.thinking === undefined && item.responseMimeType === 'application/json'),
+        true,
+      )
+      assert.equal(again.miss, undefined)
+    } finally {
+      globalThis.fetch = prev
+      resetGeminiThinkingMemo()
+    }
+
+    let posts = 0
+    globalThis.fetch = (async () => {
+      posts += 1
+      return new Response(JSON.stringify({ error: { message: 'nope' } }), { status: 500 })
+    }) as typeof fetch
+    try {
+      const rejected = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: GEMINI_MODEL_DEFAULT,
+        questions,
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(posts, 2)
+      assert.deepEqual(rejected.replies, questions.map(() => ''))
+      assert.deepEqual(rejected.miss, { class: 'http_reject', status: 500 })
+      assert.deepEqual(geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 1).thinkingConfig, { thinkingLevel: 'minimal' })
+    } finally {
+      globalThis.fetch = prev
+    }
+
+    posts = 0
+    globalThis.fetch = (async () => {
+      posts += 1
+      return new Response(JSON.stringify({ error: { message: `bad ${GEMINI_KEY}` } }), { status: 400 })
+    }) as typeof fetch
+    try {
+      const flash = await geminiReplies({
+        apiKey: GEMINI_KEY,
+        model: 'gemini-2.5-flash',
+        questions: questions.slice(0, 6),
+        scrub: [GEMINI_KEY],
+        report: true,
+      })
+      assert.equal(posts, 1)
+      assert.deepEqual(flash.miss, { class: 'http_reject', status: 400 })
+      assert.deepEqual(geminiGenerationConfig(GEMINI_MODEL_DEFAULT, 1).thinkingConfig, { thinkingLevel: 'minimal' })
+    } finally {
       globalThis.fetch = prev
     }
   })

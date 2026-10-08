@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer, type ViteDevServer } from 'vite'
 import { describe, it } from 'node:test'
 import { TEST_QUESTION_SIGN_IN, onRequest } from '../functions/api/test-question.ts'
+import { geminiMaxOutputTokens } from '../functions/api/visibility.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import type { FullReport } from '../src/fullReport.ts'
 import { STORY } from '../src/story.ts'
@@ -223,11 +224,24 @@ describe('test question route', () => {
       assert.equal(body.ok, true)
       assert.equal(body.engine, 'gemini')
       assert.equal(body.gemini, 'Only this Gemini block changed.')
-      const geminiCall = mock.calls.find((call) => call.url.includes('generativelanguage.googleapis.com'))
+      const geminiCalls = mock.calls.filter((call) => call.url.includes('generativelanguage.googleapis.com'))
+      assert.equal(geminiCalls.length, 1)
+      const geminiCall = geminiCalls[0]
       assert.ok(geminiCall)
       assert.match(geminiCall.url, /models\/gemini-3\.5-flash-lite:generateContent/)
       assert.match(geminiCall.body, /What should a team use to track issues\?/)
       assert.equal(geminiCall.body.includes(OTHER), false)
+      const sent = JSON.parse(geminiCall.body) as {
+        generationConfig?: {
+          maxOutputTokens?: number
+          responseMimeType?: string
+          thinkingConfig?: { thinkingLevel?: string }
+        }
+      }
+      assert.equal(sent.generationConfig?.maxOutputTokens, geminiMaxOutputTokens(1))
+      assert.equal(sent.generationConfig?.maxOutputTokens, 560)
+      assert.equal(sent.generationConfig?.responseMimeType, 'application/json')
+      assert.deepEqual(sent.generationConfig?.thinkingConfig, { thinkingLevel: 'minimal' })
       assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
       assert.equal(wroteUsage(mock.calls), false)
       assert.equal(mock.calls.some((call) => call.url.includes('/api/full-report')), false)

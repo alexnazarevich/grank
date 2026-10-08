@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { FULL_REPORT_PAUSED_ERROR, fullReportOpenAIPaused, missWhenUnbrandedBlank, onRequest } from '../functions/api/full-report.ts'
-import { BRANDED_SYSTEM_PROMPT, UNBRANDED_SYSTEM_PROMPT } from '../functions/api/visibility.ts'
+import {
+  BRANDED_SYSTEM_PROMPT,
+  UNBRANDED_SYSTEM_PROMPT,
+  geminiChunkMaxOutputTokens,
+  geminiChunkSize,
+  resetGeminiThinkingMemo,
+} from '../functions/api/visibility.ts'
 import { PRODUCT_DEFAULTS } from '../src/config/productConfig.ts'
 import {
   FULL_REPORT_SYSTEM_PROMPT,
@@ -1351,7 +1357,7 @@ describe('full-report question accordion', () => {
       { geminiStatus: 500, expectText: '', miss: { class: 'http_reject', status: 500 }, log: 'gemini miss http_reject 500' },
       { geminiStatus: 'timeout', expectText: '', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
       { geminiStatus: 'throw', expectText: '', miss: { class: 'timeout' }, log: 'gemini miss timeout' },
-      { geminiStatus: 'bad_json', expectText: '', miss: { class: 'bad_json' }, log: 'gemini miss bad_json' },
+      { geminiStatus: 'bad_json', expectText: '', miss: { class: 'bad_json' }, log: 'gemini miss bad_json parse' },
       { geminiStatus: 'empty', expectText: '', miss: { class: 'empty' }, log: 'gemini miss empty' },
     ]
     for (const item of cases) {
@@ -1413,9 +1419,13 @@ describe('full-report question accordion', () => {
           assert.equal(call.body.includes('whoInstead'), false)
           assert.equal(call.body.includes(geminiKey), false)
           const sent = JSON.parse(call.body) as {
-            generationConfig?: { thinkingConfig?: { thinkingBudget?: number }; responseMimeType?: string }
+            generationConfig?: {
+              thinkingConfig?: { thinkingBudget?: number; thinkingLevel?: string }
+              responseMimeType?: string
+            }
           }
-          assert.equal('thinkingConfig' in (sent.generationConfig ?? {}), false)
+          const thinking = sent.generationConfig?.thinkingConfig
+          if (thinking) assert.deepEqual(thinking, { thinkingLevel: 'minimal' })
           assert.equal(sent.generationConfig?.responseMimeType, 'application/json')
           if (item.geminiStatus === 'timeout') {
             const err = new Error(`timed out ${geminiKey}`)
@@ -1822,7 +1832,7 @@ describe('owned Run again attaches Gemini by position', () => {
     const geminiKey = 'gemini-report-key-should-not-leak'
     const cases: { payload: unknown; miss: { class: string; status?: number }; log: string }[] = [
       { payload: { candidates: [] }, miss: { class: 'empty' }, log: 'gemini miss empty' },
-      { payload: 'not-json', miss: { class: 'bad_json' }, log: 'gemini miss bad_json' },
+      { payload: 'not-json', miss: { class: 'bad_json' }, log: 'gemini miss bad_json parse' },
     ]
     for (const item of cases) {
       const logs: string[] = []
@@ -2329,6 +2339,118 @@ describe('full report OpenAI pause', () => {
       assert.equal(text.includes('openaiPaused'), false)
     } finally {
       mock.restore()
+    }
+  })
+
+  it('chunks a 12-question paused Run again and does not salvage a MAX_TOKENS slice', async () => {
+    resetGeminiThinkingMemo()
+    const questions = Array.from({ length: 12 }, (_, index) => `What should a team use for job ${index}?`)
+    const geminiKey = 'gemini-pause-key-should-not-leak'
+    const salvage = `Salvage ${geminiKey} must not leak`
+    const logs: string[] = []
+    const prevInfo = console.info
+    console.info = (...args: unknown[]) => {
+      logs.push(args.map((part) => String(part)).join(' '))
+    }
+    const seen: { maxOutputTokens?: number; responseMimeType?: string; count: number }[] = []
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('api.openai.com') || call.url.startsWith('https://linear.app')) {
+        throw new Error('paused run must not call OpenAI or fetch a homepage excerpt')
+      }
+      if (call.url.includes('/rest/v1/')) {
+        throw new Error('paused run must not save or spend ' + call.method + ' ' + call.url)
+      }
+      if (call.url.includes('generativelanguage.googleapis.com')) {
+        const body = JSON.parse(call.body) as {
+          generationConfig?: { maxOutputTokens?: number; responseMimeType?: string }
+          contents?: { parts?: { text?: string }[] }[]
+        }
+        const prompt = body.contents?.[0]?.parts?.[0]?.text ?? ''
+        const asked = questions.filter((question) => prompt.includes(question))
+        seen.push({
+          maxOutputTokens: body.generationConfig?.maxOutputTokens,
+          responseMimeType: body.generationConfig?.responseMimeType,
+          count: asked.length,
+        })
+        if (prompt.includes('job 0?')) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  finishReason: 'MAX_TOKENS',
+                  content: { parts: [{ text: JSON.stringify({ answers: asked.map(() => salvage) }) }] },
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        }
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: 'STOP',
+                content: {
+                  parts: [{ text: JSON.stringify({ answers: asked.map((question) => `Kept ${question}`) }) }],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response('unexpected ' + call.method + ' ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await onRequest({
+        request: authedRequest({
+          owned: questions.map((question) => ({ question, themeId: 'problems' })),
+          checkId: CHECK,
+        }),
+        env: env({ FULL_REPORT_OPENAI: 'off', GEMINI_API_KEY: geminiKey }),
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.equal(text.includes(geminiKey), false)
+      assert.equal(text.includes(salvage), false)
+      const budget = geminiChunkMaxOutputTokens(geminiChunkSize(12))
+      assert.equal(budget, 1_264)
+      assert.equal(seen.length, 2)
+      assert.deepEqual(
+        seen.map((item) => item.count),
+        [6, 6],
+      )
+      assert.equal(
+        seen.every((item) => item.maxOutputTokens === budget && item.responseMimeType === 'application/json'),
+        true,
+      )
+      const body = JSON.parse(text) as {
+        openaiPaused?: boolean
+        geminiMiss?: { class?: string; reason?: string }
+        themes: { questions: { question: string; gemini?: string }[] }[]
+      }
+      assert.equal(body.openaiPaused, true)
+      assert.deepEqual(body.geminiMiss, { class: 'bad_json' })
+      assert.equal(body.geminiMiss?.reason, undefined)
+      const gemini = body.themes.flatMap((theme) => theme.questions.map((item) => item.gemini ?? ''))
+      assert.deepEqual(gemini.slice(0, 6), ['', '', '', '', '', ''])
+      assert.deepEqual(
+        gemini.slice(6),
+        questions.slice(6).map((question) => `Kept ${question}`),
+      )
+      assert.deepEqual(
+        logs.filter((line) => line.startsWith('gemini ')),
+        ['gemini miss bad_json max_tokens'],
+      )
+      assert.equal(logs.some((line) => line.includes(geminiKey) || line.includes(salvage)), false)
+      assert.equal(mock.calls.some((call) => call.url.includes('api.openai.com')), false)
+    } finally {
+      console.info = prevInfo
+      mock.restore()
+      resetGeminiThinkingMemo()
     }
   })
 })

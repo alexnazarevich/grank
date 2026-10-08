@@ -445,10 +445,17 @@ export function geminiMissForResponse(miss: GeminiMiss): { class: GeminiMissClas
   }
 }
 
-/** Pages Function log line. Same vocabulary as geminiMiss, nothing else. */
-export function geminiMissLogLine(miss: GeminiMiss): string {
+/**
+ * Pages Function log line. Same vocabulary as geminiMiss.
+ * `bad_json` may add a server-only reason: `max_tokens` or `parse`.
+ * The reason is not part of the response. Never a body, prompt, or key.
+ */
+export function geminiMissLogLine(miss: GeminiMiss, reason?: 'max_tokens' | 'parse'): string {
   const safe = geminiMissForResponse(miss)
   if (safe.class === 'http_reject' && typeof safe.status === 'number') return `gemini miss http_reject ${safe.status}`
+  if (safe.class === 'bad_json' && (reason === 'max_tokens' || reason === 'parse')) {
+    return `gemini miss bad_json ${reason}`
+  }
   return `gemini miss ${safe.class}`
 }
 
@@ -508,23 +515,82 @@ function geminiSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortS
 }
 
 /**
- * 2.5 Flash thinks unless thinkingBudget is 0, and those tokens count against maxOutputTokens.
- * The old cap (at most 2400, often ~1000) then comes back empty, so every unbranded question misses.
- * Older flash ids do not get thinkingConfig: a 2.0 model can reject the field.
+ * Floor on questions per chunk, and the most chunks in one report.
+ * chunkSize = max(6, ceil(n / 2)). Twelve questions is 2 calls of 6.
+ * Eighty questions is 2 calls of 40. One to six questions stay one call.
  */
-export function geminiGenerationConfig(model: string, questionCount: number): {
+export const GEMINI_CHUNK_FLOOR = 6
+
+/** Questions per Gemini call for a report of this length. */
+export function geminiChunkSize(questionCount: number): number {
+  const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
+  if (count === 0) return GEMINI_CHUNK_FLOOR
+  return Math.max(GEMINI_CHUNK_FLOOR, Math.ceil(count / 2))
+}
+
+/**
+ * Per-chunk output budget. 200 covers a 2 to 4 sentence answer (~110 tokens)
+ * with room to spare. 64 covers the JSON wrapper. Thinking is off, so this
+ * is answer text only. Every chunk in the report uses the planned chunk size,
+ * including a short tail.
+ */
+export const GEMINI_CHUNK_TOKENS_PER_QUESTION = 200
+export const GEMINI_CHUNK_TOKEN_BASE = 64
+
+export function geminiChunkMaxOutputTokens(chunkSize: number): number {
+  const count = Number.isFinite(chunkSize) && chunkSize > 0 ? Math.floor(chunkSize) : 0
+  return count * GEMINI_CHUNK_TOKENS_PER_QUESTION + GEMINI_CHUNK_TOKEN_BASE
+}
+
+/** Contiguous slices. At most two of them. Order is the report order. */
+export function geminiQuestionChunks<T>(questions: readonly T[]): T[][] {
+  if (questions.length === 0) return []
+  const size = geminiChunkSize(questions.length)
+  const chunks: T[][] = []
+  for (let index = 0; index < questions.length; index += size) {
+    chunks.push(questions.slice(index, index + size))
+  }
+  return chunks
+}
+
+/**
+ * Set when a gemini-3 `thinkingLevel` request comes back HTTP 400.
+ * Later calls in this isolate, and any chunk in this request that has not
+ * been sent yet, omit thinkingConfig. A 2.5 Flash `thinkingBudget` is unrelated.
+ */
+let geminiThinkingLevelRejected = false
+
+export function resetGeminiThinkingMemo(): void {
+  geminiThinkingLevelRejected = false
+}
+
+/**
+ * 2.5 Flash thinks unless thinkingBudget is 0, and those tokens count against maxOutputTokens.
+ * gemini-3 thinks unless thinkingLevel is minimal, and those tokens count the same way.
+ * Older flash ids do not get thinkingConfig: a 2.0 model can reject the field.
+ * After a gemini-3 400, thinkingLevel is left off for the rest of this isolate.
+ */
+export function geminiGenerationConfig(
+  model: string,
+  questionCount: number,
+  opts?: { maxOutputTokens?: number },
+): {
   temperature: number
   maxOutputTokens: number
   responseMimeType: 'application/json'
-  thinkingConfig?: { thinkingBudget: 0 }
+  thinkingConfig?: { thinkingBudget: 0 } | { thinkingLevel: 'minimal' }
 } {
   const base = {
     temperature: 0.2,
-    maxOutputTokens: geminiMaxOutputTokens(questionCount),
+    maxOutputTokens: opts?.maxOutputTokens ?? geminiMaxOutputTokens(questionCount),
     responseMimeType: 'application/json' as const,
   }
-  if (model.toLowerCase().startsWith('gemini-2.5-flash')) {
+  const id = model.toLowerCase()
+  if (id.startsWith('gemini-2.5-flash')) {
     return { ...base, thinkingConfig: { thinkingBudget: 0 } }
+  }
+  if (id.startsWith('gemini-3') && !geminiThinkingLevelRejected) {
+    return { ...base, thinkingConfig: { thinkingLevel: 'minimal' } }
   }
   return base
 }
@@ -573,15 +639,162 @@ function geminiFinishReason(payload: unknown): string {
   return typeof reason === 'string' ? reason : ''
 }
 
-function noteGeminiMiss(replies: string[], miss: GeminiMiss): GeminiReplySet {
+function noteGeminiMiss(
+  replies: string[],
+  miss: GeminiMiss,
+  reason?: 'max_tokens' | 'parse',
+): GeminiReplySet {
   const safe = geminiMissForResponse(miss)
-  console.info(geminiMissLogLine(safe))
+  console.info(geminiMissLogLine(safe, reason))
   return { replies, miss: safe }
 }
 
 /**
+ * One class for the blank rows. A chunk that returned answers does not
+ * contribute. http_reject wins, then timeout, then bad_json, then empty.
+ */
+export function geminiMissFromChunks(misses: readonly (GeminiMiss | undefined)[]): GeminiMiss | undefined {
+  const present = misses.filter((miss): miss is GeminiMiss => !!miss)
+  if (present.length === 0) return undefined
+  const rank = ['http_reject', 'timeout', 'bad_json', 'empty', 'missing_key'] as const
+  for (const kind of rank) {
+    const hit = present.find((miss) => miss.class === kind)
+    if (hit) return geminiMissForResponse(hit)
+  }
+  return geminiMissForResponse(present[0])
+}
+
+function dropGeminiBody(res: Response) {
+  try {
+    void res.body?.cancel()?.catch(() => {})
+  } catch {
+    // Status only. Never read the body.
+  }
+}
+
+function geminiPostBody(model: string, prompt: string, questionCount: number, maxOutputTokens: number) {
+  return {
+    contents: [{ role: 'user' as const, parts: [{ text: prompt }] }],
+    generationConfig: geminiGenerationConfig(model, questionCount, { maxOutputTokens }),
+  }
+}
+
+async function postGemini(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  questionCount: number,
+  maxOutputTokens: number,
+  signal: AbortSignal,
+): Promise<{ res: Response; sentThinkingLevel: boolean }> {
+  const requestBody = geminiPostBody(model, prompt, questionCount, maxOutputTokens)
+  const thinking = requestBody.generationConfig.thinkingConfig
+  const sentThinkingLevel = !!thinking && 'thinkingLevel' in thinking
+  const res = await fetch(geminiGenerateUrl(model), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    signal,
+    body: JSON.stringify(requestBody),
+  })
+  return { res, sentThinkingLevel }
+}
+
+/**
+ * One slice. A gemini-3 thinkingLevel HTTP 400 retries once without thinkingConfig
+ * and is remembered so the next slice skips that field. Any other non-OK status
+ * is http_reject and is not retried. On a chunk, MAX_TOKENS is bad_json before
+ * the answer text is parsed. A later parse failure is also bad_json.
+ */
+async function geminiSlice(opts: {
+  apiKey: string
+  model: string
+  questions: string[]
+  scrub: string[]
+  signal: AbortSignal
+  maxOutputTokens: number
+  shape: 'single' | 'chunk'
+}): Promise<GeminiReplySet> {
+  const blank = () => opts.questions.map(() => '')
+  const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
+  let res: Response
+  let sentThinkingLevel = false
+  try {
+    const sent = await postGemini(
+      opts.apiKey,
+      opts.model,
+      prompt,
+      opts.questions.length,
+      opts.maxOutputTokens,
+      opts.signal,
+    )
+    res = sent.res
+    sentThinkingLevel = sent.sentThinkingLevel
+  } catch {
+    return noteGeminiMiss(blank(), { class: 'timeout' })
+  }
+  if (!res.ok && res.status === 400 && sentThinkingLevel) {
+    geminiThinkingLevelRejected = true
+    dropGeminiBody(res)
+    try {
+      const retried = await postGemini(
+        opts.apiKey,
+        opts.model,
+        prompt,
+        opts.questions.length,
+        opts.maxOutputTokens,
+        opts.signal,
+      )
+      res = retried.res
+    } catch {
+      return noteGeminiMiss(blank(), { class: 'timeout' })
+    }
+  }
+  if (!res.ok) {
+    const status = res.status
+    dropGeminiBody(res)
+    return noteGeminiMiss(blank(), { class: 'http_reject', status })
+  }
+  try {
+    const payload = (await res.json()) as unknown
+    return repliesFromGeminiPayload(payload, opts.questions.length, opts.scrub, opts.shape)
+  } catch {
+    return noteGeminiMiss(blank(), { class: 'bad_json' }, 'parse')
+  }
+}
+
+function repliesFromGeminiPayload(
+  payload: unknown,
+  count: number,
+  scrub: string[],
+  shape: 'single' | 'chunk',
+): GeminiReplySet {
+  const finish = geminiFinishReason(payload)
+  // A chunk that hit the cap is bad_json before any answer parse. Do not keep a partial list.
+  if (shape === 'chunk' && finish === 'MAX_TOKENS') {
+    return noteGeminiMiss(
+      Array.from({ length: count }, () => ''),
+      { class: 'bad_json' },
+      'max_tokens',
+    )
+  }
+  const text = scrubKeys(geminiPayloadText(payload), scrub)
+  const outcome = geminiTextMiss(text, count, shape === 'chunk' ? undefined : finish)
+  const replies = outcome.replies.map((answer) => scrubKeys(answer, scrub))
+  if (!outcome.miss) return { replies }
+  if (outcome.miss.class === 'bad_json') {
+    return noteGeminiMiss(replies, { class: 'bad_json' }, finish === 'MAX_TOKENS' ? 'max_tokens' : 'parse')
+  }
+  return noteGeminiMiss(replies, outcome.miss)
+}
+
+/**
  * Same unbranded questions, Gemini text only.
- * One call, one miss class when every reply is blank.
+ * Guest visibility and Run test stay one call. A full report (`report`) runs
+ * in at most two parallel chunks and is zipped back by position. A miss on
+ * one chunk blanks only that slice.
  * Missing key, an HTTP error, a timeout, bad JSON, and an empty payload stay empty strings.
  */
 export async function geminiReplies(opts: {
@@ -592,6 +805,8 @@ export async function geminiReplies(opts: {
   /** Clamped to GEMINI_TIMEOUT_CAP_MS. Zero skips the call and reports timeout. */
   timeoutMs?: number
   signal?: AbortSignal
+  /** Signed-in full report and Run again. Omitted for the guest check and Run test. */
+  report?: boolean
 }): Promise<GeminiReplySet> {
   const blank = () => opts.questions.map(() => '')
   if (opts.questions.length === 0) return { replies: [] }
@@ -601,45 +816,40 @@ export async function geminiReplies(opts: {
     typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) ? Math.floor(rawTimeout) : GEMINI_TIMEOUT_CAP_MS
   const timeoutMs = Math.min(GEMINI_TIMEOUT_CAP_MS, Math.max(0, requested))
   if (timeoutMs === 0 || opts.signal?.aborted) return noteGeminiMiss(blank(), { class: 'timeout' })
-  const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
-  const requestBody = geminiGenerateBody(opts.model, prompt, opts.questions.length)
-  let res: Response
   const timed = geminiSignal(timeoutMs, opts.signal)
   try {
-    res = await fetch(geminiGenerateUrl(opts.model), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-goog-api-key': opts.apiKey,
-      },
-      signal: timed.signal,
-      body: JSON.stringify(requestBody),
-    })
-  } catch {
-    // Our timer, a parent abort, or any other transport throw (network, DNS).
-    // All of those stay timeout. The error message is not logged; it can contain the API key.
-    return noteGeminiMiss(blank(), { class: 'timeout' })
+    if (!opts.report) {
+      return await geminiSlice({
+        apiKey: opts.apiKey,
+        model: opts.model,
+        questions: opts.questions,
+        scrub: opts.scrub,
+        signal: timed.signal,
+        maxOutputTokens: geminiMaxOutputTokens(opts.questions.length),
+        shape: 'single',
+      })
+    }
+    const planned = geminiChunkSize(opts.questions.length)
+    const maxOutputTokens = geminiChunkMaxOutputTokens(planned)
+    const chunks = geminiQuestionChunks(opts.questions)
+    const parts = await Promise.all(
+      chunks.map((questions) =>
+        geminiSlice({
+          apiKey: opts.apiKey,
+          model: opts.model,
+          questions,
+          scrub: opts.scrub,
+          signal: timed.signal,
+          maxOutputTokens,
+          shape: 'chunk',
+        }),
+      ),
+    )
+    const replies = parts.flatMap((part) => part.replies)
+    const miss = geminiMissFromChunks(parts.map((part) => part.miss))
+    return miss ? { replies, miss } : { replies }
   } finally {
     timed.done()
-  }
-  if (!res.ok) {
-    // Do not await cancel(). A stuck error body must not hold the report open.
-    try {
-      void res.body?.cancel()?.catch(() => {})
-    } catch {
-      // Status only. Never read the body.
-    }
-    return noteGeminiMiss(blank(), { class: 'http_reject', status: res.status })
-  }
-  try {
-    const payload = await res.json()
-    const text = geminiPayloadText(payload)
-    const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length, geminiFinishReason(payload))
-    const replies = outcome.replies.map((answer) => scrubKeys(answer, opts.scrub))
-    if (!outcome.miss) return { replies }
-    return noteGeminiMiss(replies, outcome.miss)
-  } catch {
-    return noteGeminiMiss(blank(), { class: 'bad_json' })
   }
 }
 
