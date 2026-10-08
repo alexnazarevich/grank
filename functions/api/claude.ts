@@ -1,6 +1,7 @@
 /**
  * Signed-in Claude replies for unbranded full-report questions.
- * One Messages API call. A miss is empty strings plus one class.
+ * One question is one call (Run test). A longer list is parallel chunks of
+ * CLAUDE_CHUNK_SIZE, merged by position. One chunk's miss blanks only that slice.
  * Guest /api/visibility does not import this module.
  * ANTHROPIC_API_KEY stays on the server. Never a VITE_ name.
  */
@@ -55,9 +56,8 @@ export function claudeSendsEffort(model: string): boolean {
 }
 
 /**
- * Answer tokens only, same ceiling Gemini uses so the call can finish inside 8s.
- * Thinking tokens on Haiku 5.5 count against this cap. Effort stays low so the
- * model can skip thinking instead of burning the budget.
+ * Run test budget. One question, adaptive thinking at low effort.
+ * Same ceiling Gemini uses. A full-report batch does not use this.
  */
 export function claudeMaxOutputTokens(questionCount: number): number {
   const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
@@ -65,37 +65,86 @@ export function claudeMaxOutputTokens(questionCount: number): number {
 }
 
 /**
+ * Full-report chunk size. Four questions keeps each reply small enough to
+ * finish inside the shared 8s wait. 80 unbranded questions is the app cap,
+ * which is 20 of these calls (40 if every chunk retries a 404 once).
+ */
+export const CLAUDE_CHUNK_SIZE = 4
+
+/**
+ * Per-answer allowance after the Haiku 5.5 tokenizer (~30% more tokens for
+ * the same text than the 160-token figure). 48 covers the JSON wrapper.
+ * A full chunk is 48 + 4 * 210 = 888 tokens. Thinking is off, so this is
+ * answer text only.
+ */
+export const CLAUDE_CHUNK_TOKEN_BASE = 48
+export const CLAUDE_CHUNK_TOKENS_PER_QUESTION = 210
+
+export function claudeChunkMaxOutputTokens(questionCount: number): number {
+  const count = Number.isFinite(questionCount) && questionCount > 0 ? Math.floor(questionCount) : 0
+  return CLAUDE_CHUNK_TOKEN_BASE + count * CLAUDE_CHUNK_TOKENS_PER_QUESTION
+}
+
+/** Contiguous slices. Positions stay in order when the slices are concatenated. */
+export function claudeQuestionChunks<T>(questions: readonly T[]): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < questions.length; index += CLAUDE_CHUNK_SIZE) {
+    chunks.push(questions.slice(index, index + CLAUDE_CHUNK_SIZE))
+  }
+  return chunks
+}
+
+/**
  * Messages API body. No temperature, top_p, or top_k — Haiku 5.5 returns 400
- * for a non-default sampling value. Effort is `low` via output_config.
- * The fallback model omits effort and adaptive thinking.
+ * for a non-default sampling value.
+ * `single` is Run test: adaptive thinking, effort low, the 560-token one-question cap.
+ * `chunk` is a full-report slice: thinking disabled (Haiku 5.5 allows that at
+ * effort low) so max_tokens is spent on the answers. The fallback model omits
+ * effort and thinking on both shapes.
  */
 export function claudeMessageBody(
   model: string,
   prompt: string,
   questionCount: number,
+  shape: 'single' | 'chunk' = 'single',
 ): {
   model: string
   max_tokens: number
   messages: [{ role: 'user'; content: string }]
-  thinking?: { type: 'adaptive' }
+  thinking?: { type: 'adaptive' } | { type: 'disabled' }
   output_config?: { effort: 'low' }
 } {
   const body: {
     model: string
     max_tokens: number
     messages: [{ role: 'user'; content: string }]
-    thinking?: { type: 'adaptive' }
+    thinking?: { type: 'adaptive' } | { type: 'disabled' }
     output_config?: { effort: 'low' }
   } = {
     model,
-    max_tokens: claudeMaxOutputTokens(questionCount),
+    max_tokens: shape === 'chunk' ? claudeChunkMaxOutputTokens(questionCount) : claudeMaxOutputTokens(questionCount),
     messages: [{ role: 'user', content: prompt }],
   }
   if (claudeSendsEffort(model)) {
-    body.thinking = { type: 'adaptive' }
+    body.thinking = shape === 'chunk' ? { type: 'disabled' } : { type: 'adaptive' }
     body.output_config = { effort: 'low' }
   }
   return body
+}
+
+/**
+ * One class for the blank rows. A chunk that returned answers does not
+ * contribute. http_reject wins, then timeout, then bad_json, then empty.
+ */
+export function claudeMissFromChunks(misses: readonly (ClaudeMiss | undefined)[]): ClaudeMiss | undefined {
+  const present = misses.filter((miss): miss is ClaudeMiss => !!miss)
+  if (present.length === 0) return undefined
+  const rank = ['http_reject', 'timeout', 'bad_json', 'empty', 'missing_key'] as const
+  for (const kind of rank) {
+    const hit = present.find((miss) => miss.class === kind)
+    if (hit) return claudeMissForResponse(hit)
+  }
+  return claudeMissForResponse(present[0])
 }
 
 export function claudeMissForResponse(miss: ClaudeMiss): { class: ClaudeMissClass; status?: number } {
@@ -177,6 +226,7 @@ async function postClaude(
   prompt: string,
   questionCount: number,
   signal: AbortSignal,
+  shape: 'single' | 'chunk',
 ): Promise<Response> {
   return fetch(CLAUDE_URL, {
     method: 'POST',
@@ -186,7 +236,7 @@ async function postClaude(
       'content-type': 'application/json',
     },
     signal,
-    body: JSON.stringify(claudeMessageBody(model, prompt, questionCount)),
+    body: JSON.stringify(claudeMessageBody(model, prompt, questionCount, shape)),
   })
 }
 
@@ -199,9 +249,57 @@ function dropBody(res: Response) {
 }
 
 /**
+ * One slice. A 404 or not_found retries once on the fallback, without effort.
+ * HTTP 400 is http_reject and is not retried. stop_reason max_tokens is bad_json.
+ */
+async function claudeSlice(opts: {
+  apiKey: string
+  model: string
+  questions: string[]
+  scrub: string[]
+  signal: AbortSignal
+  shape: 'single' | 'chunk'
+}): Promise<ClaudeReplySet> {
+  const blank = () => opts.questions.map(() => '')
+  const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
+  let model = opts.model
+  let res: Response
+  try {
+    res = await postClaude(opts.apiKey, model, prompt, opts.questions.length, opts.signal, opts.shape)
+  } catch {
+    return noteClaudeMiss(blank(), { class: 'timeout' })
+  }
+  if (!res.ok && model !== CLAUDE_MODEL_FALLBACK && (await claudeModelNotFound(res))) {
+    dropBody(res)
+    model = CLAUDE_MODEL_FALLBACK
+    try {
+      res = await postClaude(opts.apiKey, model, prompt, opts.questions.length, opts.signal, opts.shape)
+    } catch {
+      return noteClaudeMiss(blank(), { class: 'timeout' })
+    }
+  }
+  if (!res.ok) {
+    const status = res.status
+    dropBody(res)
+    return noteClaudeMiss(blank(), { class: 'http_reject', status })
+  }
+  try {
+    const payload = await res.json()
+    const text = claudePayloadText(payload)
+    const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length, claudeStoppedEarly(payload))
+    const replies = outcome.replies.map((answer) => scrubKeys(answer, opts.scrub))
+    if (!outcome.miss) return { replies }
+    return noteClaudeMiss(replies, outcome.miss)
+  } catch {
+    return noteClaudeMiss(blank(), { class: 'bad_json' })
+  }
+}
+
+/**
  * Same unbranded questions, Claude text only.
- * One call. If the chosen model 404s or is not_found, retry once on the fallback
- * without the effort param. Any other HTTP status, including 400, is http_reject.
+ * One question stays one call. A longer list runs in parallel chunks and is
+ * zipped back by position. A miss on one chunk blanks only that slice.
+ * The whole set shares one 8s abort. A chunk that 404s retries once.
  */
 export async function claudeReplies(opts: {
   apiKey: string
@@ -220,40 +318,27 @@ export async function claudeReplies(opts: {
     typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) ? Math.floor(rawTimeout) : CLAUDE_TIMEOUT_CAP_MS
   const timeoutMs = Math.min(CLAUDE_TIMEOUT_CAP_MS, Math.max(0, requested))
   if (timeoutMs === 0 || opts.signal?.aborted) return noteClaudeMiss(blank(), { class: 'timeout' })
-  const prompt = geminiAnswerPrompt(opts.questions.map((question) => scrubKeys(question, opts.scrub)))
   const timed = claudeSignal(timeoutMs, opts.signal)
   try {
-    let model = opts.model
-    let res: Response
-    try {
-      res = await postClaude(opts.apiKey, model, prompt, opts.questions.length, timed.signal)
-    } catch {
-      return noteClaudeMiss(blank(), { class: 'timeout' })
+    if (opts.questions.length === 1) {
+      return await claudeSlice({ ...opts, signal: timed.signal, shape: 'single' })
     }
-    if (!res.ok && model !== CLAUDE_MODEL_FALLBACK && (await claudeModelNotFound(res))) {
-      dropBody(res)
-      model = CLAUDE_MODEL_FALLBACK
-      try {
-        res = await postClaude(opts.apiKey, model, prompt, opts.questions.length, timed.signal)
-      } catch {
-        return noteClaudeMiss(blank(), { class: 'timeout' })
-      }
-    }
-    if (!res.ok) {
-      const status = res.status
-      dropBody(res)
-      return noteClaudeMiss(blank(), { class: 'http_reject', status })
-    }
-    try {
-      const payload = await res.json()
-      const text = claudePayloadText(payload)
-      const outcome = geminiTextMiss(scrubKeys(text, opts.scrub), opts.questions.length, claudeStoppedEarly(payload))
-      const replies = outcome.replies.map((answer) => scrubKeys(answer, opts.scrub))
-      if (!outcome.miss) return { replies }
-      return noteClaudeMiss(replies, outcome.miss)
-    } catch {
-      return noteClaudeMiss(blank(), { class: 'bad_json' })
-    }
+    const chunks = claudeQuestionChunks(opts.questions)
+    const parts = await Promise.all(
+      chunks.map((questions) =>
+        claudeSlice({
+          apiKey: opts.apiKey,
+          model: opts.model,
+          questions,
+          scrub: opts.scrub,
+          signal: timed.signal,
+          shape: 'chunk',
+        }),
+      ),
+    )
+    const replies = parts.flatMap((part) => part.replies)
+    const miss = claudeMissFromChunks(parts.map((part) => part.miss))
+    return miss ? { replies, miss } : { replies }
   } finally {
     timed.done()
   }

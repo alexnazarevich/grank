@@ -6,17 +6,24 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import {
+  CLAUDE_CHUNK_SIZE,
+  CLAUDE_CHUNK_TOKEN_BASE,
+  CLAUDE_CHUNK_TOKENS_PER_QUESTION,
   CLAUDE_MODEL_DEFAULT,
   CLAUDE_MODEL_FALLBACK,
   CLAUDE_TIMEOUT_CAP_MS,
   claudeApiKeyFromEnv,
+  claudeChunkMaxOutputTokens,
   claudeMaxOutputTokens,
   claudeMessageBody,
+  claudeMissFromChunks,
   claudeMissLogLine,
   claudeModelFromEnv,
+  claudeQuestionChunks,
   claudeReplies,
   claudeSendsEffort,
 } from '../functions/api/claude.ts'
+import { OWNED_QUESTION_MAX } from '../src/ownedQuestions.ts'
 import { onRequest as fullReport } from '../functions/api/full-report.ts'
 import { onRequest as testQuestion } from '../functions/api/test-question.ts'
 import { onRequest as visibility } from '../functions/api/visibility.ts'
@@ -217,6 +224,251 @@ describe('Claude request shape', () => {
       assert.deepEqual(empty.miss, { class: 'empty' })
     } finally {
       blank.restore()
+    }
+  })
+})
+
+describe('Claude full-report chunks', () => {
+  const chunkCap = CLAUDE_CHUNK_TOKEN_BASE + CLAUDE_CHUNK_SIZE * CLAUDE_CHUNK_TOKENS_PER_QUESTION
+
+  it('budgets 210 tokens per answer and splits at four', () => {
+    assert.equal(CLAUDE_CHUNK_SIZE, 4)
+    assert.equal(CLAUDE_CHUNK_TOKENS_PER_QUESTION, 210)
+    assert.equal(CLAUDE_CHUNK_TOKEN_BASE, 48)
+    assert.equal(claudeChunkMaxOutputTokens(4), 888)
+    assert.equal(claudeChunkMaxOutputTokens(2), 468)
+    assert.equal(chunkCap, 888)
+    assert.equal(claudeMaxOutputTokens(1), 560)
+    const chunk = claudeMessageBody(CLAUDE_MODEL_DEFAULT, 'Answer.', 4, 'chunk')
+    assert.equal(chunk.max_tokens, 888)
+    assert.deepEqual(chunk.thinking, { type: 'disabled' })
+    assert.deepEqual(chunk.output_config, { effort: 'low' })
+    assert.equal('temperature' in chunk, false)
+    const fallback = claudeMessageBody(CLAUDE_MODEL_FALLBACK, 'Answer.', 4, 'chunk')
+    assert.equal(fallback.max_tokens, 888)
+    assert.equal(fallback.thinking, undefined)
+    assert.equal(fallback.output_config, undefined)
+    const questions = Array.from({ length: OWNED_QUESTION_MAX }, (_, index) => `q${index}`)
+    const slices = claudeQuestionChunks(questions)
+    assert.equal(OWNED_QUESTION_MAX, 80)
+    assert.equal(slices.length, 20)
+    assert.equal(slices.every((slice) => slice.length === 4), true)
+    assert.deepEqual(claudeMissFromChunks([undefined, { class: 'bad_json' }, { class: 'http_reject', status: 400 }]), {
+      class: 'http_reject',
+      status: 400,
+    })
+  })
+
+  it('merges a 10-question batch by position and blanks only the failed chunk', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => `What should a team use for job ${index}?`)
+    const bodies: { count: number; thinking?: string; effort?: string; max_tokens?: number; temperature?: unknown }[] = []
+    const mock = install(async (call) => {
+      const body = JSON.parse(call.body) as {
+        max_tokens?: number
+        temperature?: number
+        thinking?: { type?: string }
+        output_config?: { effort?: string }
+        messages?: { content?: string }[]
+      }
+      const prompt = body.messages?.[0]?.content ?? ''
+      const count = (prompt.match(/^\d+\. /gm) ?? []).length
+      bodies.push({
+        count,
+        thinking: body.thinking?.type,
+        effort: body.output_config?.effort,
+        max_tokens: body.max_tokens,
+        temperature: body.temperature,
+      })
+      if (prompt.includes('job 4?')) {
+        return new Response(JSON.stringify({ error: { type: 'invalid_request_error' } }), { status: 400 })
+      }
+      const answers = questions.filter((question) => prompt.includes(question)).map((question) => `Claude ${question}`)
+      return claudeText(JSON.stringify({ answers }))
+    })
+    try {
+      const hit = await claudeReplies({
+        apiKey: ANTHROPIC,
+        model: CLAUDE_MODEL_DEFAULT,
+        questions,
+        scrub: [ANTHROPIC],
+        timeoutMs: 8_000,
+      })
+      assert.equal(bodies.length, 3)
+      assert.deepEqual(bodies.map((item) => item.count), [4, 4, 2])
+      assert.equal(bodies.every((item) => item.thinking === 'disabled' && item.effort === 'low'), true)
+      assert.deepEqual(bodies.map((item) => item.max_tokens), [888, 888, 468])
+      assert.equal(bodies.every((item) => item.temperature === undefined), true)
+      assert.equal(hit.replies.length, 10)
+      assert.equal(hit.replies[0], 'Claude What should a team use for job 0?')
+      assert.equal(hit.replies[3], 'Claude What should a team use for job 3?')
+      assert.deepEqual(hit.replies.slice(4, 8), ['', '', '', ''])
+      assert.equal(hit.replies[8], 'Claude What should a team use for job 8?')
+      assert.equal(hit.replies[9], 'Claude What should a team use for job 9?')
+      assert.deepEqual(hit.miss, { class: 'http_reject', status: 400 })
+      assert.equal(JSON.stringify(hit).includes(ANTHROPIC), false)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('classifies a truncated chunk as bad_json and keeps the other slices', async () => {
+    const questions = Array.from({ length: 6 }, (_, index) => `How do teams handle task ${index}?`)
+    const mock = install(async (call) => {
+      const body = JSON.parse(call.body) as { messages?: { content?: string }[] }
+      const prompt = body.messages?.[0]?.content ?? ''
+      if (prompt.includes('task 4?')) {
+        return claudeText('{"answers":["cut', 'max_tokens')
+      }
+      const answers = questions.filter((question) => prompt.includes(question)).map(() => 'Kept.')
+      return claudeText(JSON.stringify({ answers }))
+    })
+    try {
+      const hit = await claudeReplies({
+        apiKey: ANTHROPIC,
+        model: CLAUDE_MODEL_DEFAULT,
+        questions,
+        scrub: [],
+      })
+      assert.deepEqual(hit.replies.slice(0, 4), ['Kept.', 'Kept.', 'Kept.', 'Kept.'])
+      assert.deepEqual(hit.replies.slice(4), ['', ''])
+      assert.deepEqual(hit.miss, { class: 'bad_json' })
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('asks the max unbranded set as 20 chunks and retries a 404 without effort', async () => {
+    const questions = Array.from({ length: OWNED_QUESTION_MAX }, (_, index) => `Category question ${index}?`)
+    const seen: { model?: string; thinking?: string; max_tokens?: number }[] = []
+    const mock = install(async (call) => {
+      const body = JSON.parse(call.body) as {
+        model?: string
+        max_tokens?: number
+        thinking?: { type?: string }
+        messages?: { content?: string }[]
+      }
+      seen.push({ model: body.model, thinking: body.thinking?.type, max_tokens: body.max_tokens })
+      const prompt = body.messages?.[0]?.content ?? ''
+      if (body.model === CLAUDE_MODEL_DEFAULT && prompt.includes('Category question 0?')) {
+        return new Response(JSON.stringify({ error: { type: 'not_found_error' } }), { status: 404 })
+      }
+      const answers = questions.filter((question) => prompt.includes(question)).map(() => 'Yes.')
+      return claudeText(JSON.stringify({ answers }))
+    })
+    try {
+      const hit = await claudeReplies({
+        apiKey: ANTHROPIC,
+        model: CLAUDE_MODEL_DEFAULT,
+        questions,
+        scrub: [],
+      })
+      const primary = seen.filter((item) => item.model === CLAUDE_MODEL_DEFAULT)
+      const fallback = seen.filter((item) => item.model === CLAUDE_MODEL_FALLBACK)
+      assert.equal(primary.length, 20)
+      assert.equal(primary.every((item) => item.thinking === 'disabled' && item.max_tokens === 888), true)
+      assert.equal(fallback.length, 1)
+      assert.equal(fallback[0]?.thinking, undefined)
+      assert.equal(fallback[0]?.max_tokens, 888)
+      assert.equal(hit.replies.length, 80)
+      assert.equal(hit.replies.every((reply) => reply === 'Yes.'), true)
+      assert.equal(hit.miss, undefined)
+    } finally {
+      mock.restore()
+    }
+  })
+
+  it('returns 200 on Run again when one Claude chunk rejects', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => `What should a team use for job ${index}?`)
+    const mock = install(async (call) => {
+      if (call.url.includes('/auth/v1/user')) {
+        return new Response(JSON.stringify({ id: USER, email: 'a@b.co' }), { status: 200 })
+      }
+      if (call.url.includes('/rest/v1/profiles')) return new Response('{}', { status: 201 })
+      if (call.url.startsWith('https://linear.app')) return new Response('no', { status: 404 })
+      if (call.url.includes('api.openai.com')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    themes: [
+                      {
+                        id: 'problems',
+                        questions: questions.map((question) => ({
+                          question,
+                          answer: `ChatGPT ${question}`,
+                          mention: 'not_mentioned',
+                          whoInstead: ['Jira'],
+                        })),
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (call.url.includes('api.anthropic.com')) {
+        const body = JSON.parse(call.body) as { messages?: { content?: string }[]; thinking?: { type?: string } }
+        assert.equal(body.thinking?.type, 'disabled')
+        assert.equal(call.body.includes('temperature'), false)
+        const prompt = body.messages?.[0]?.content ?? ''
+        if (prompt.includes('job 4?')) {
+          return new Response(JSON.stringify({ error: { type: 'invalid_request_error' } }), { status: 400 })
+        }
+        const answers = questions.filter((question) => prompt.includes(question)).map((question) => `Claude ${question}`)
+        return claudeText(JSON.stringify({ answers }))
+      }
+      if (call.method === 'POST' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 201 })
+      }
+      if (call.method === 'GET' && call.url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify([{ id: CHECK, created_at: '2026-09-27T00:00:00.000Z' }]), { status: 200 })
+      }
+      return new Response('unexpected ' + call.url, { status: 500 })
+    })
+    try {
+      const res = await fullReport({
+        request: new Request('https://grank.pages.dev/api/full-report', {
+          method: 'POST',
+          headers: { authorization: 'Bearer user-access-token', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            domain: 'linear.app',
+            owned: questions.map((question) => ({ question, themeId: 'problems' })),
+          }),
+        }),
+        env: {
+          OPENAI_API_KEY: KEY,
+          ANTHROPIC_API_KEY: ANTHROPIC,
+          SUPABASE_URL: SB,
+          SUPABASE_SERVICE_ROLE_KEY: SERVICE,
+          FULL_REPORT_QUESTION_TARGET: '6',
+          FULL_REPORT_THEME_MIN: '1',
+          FULL_REPORT_THEME_MAX: '3',
+          FREE_FULL_REPORTS: '1',
+        },
+      })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      const body = JSON.parse(text) as {
+        claudeMiss?: { class: string; status?: number }
+        themes: { questions: { question: string; answer: string; claude?: string }[] }[]
+      }
+      const rows = body.themes[0]?.questions ?? []
+      assert.equal(rows.length, 10)
+      assert.equal(rows[0]?.answer, 'ChatGPT What should a team use for job 0?')
+      assert.equal(rows[0]?.claude, 'Claude What should a team use for job 0?')
+      assert.equal(rows[4]?.claude, '')
+      assert.equal(rows[7]?.claude, '')
+      assert.equal(rows[9]?.claude, 'Claude What should a team use for job 9?')
+      assert.deepEqual(body.claudeMiss, { class: 'http_reject', status: 400 })
+      assert.equal(mock.calls.filter((call) => call.url.includes('api.anthropic.com')).length, 3)
+      assert.equal(text.includes(ANTHROPIC), false)
+    } finally {
+      mock.restore()
     }
   })
 })
