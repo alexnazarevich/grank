@@ -213,6 +213,8 @@ async function readJson(res: Response): Promise<unknown | null> {
     return await res.json()
   } catch {
     return null
+  } finally {
+    await dropBody(res)
   }
 }
 

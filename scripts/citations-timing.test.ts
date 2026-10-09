@@ -493,7 +493,8 @@ describe('probe guard', { concurrency: false }, () => {
         calls?: ProbeRow[]
         totals?: {
           wallMs: number
-          over8s: number
+          maxRunMs: number
+          over8sFromSlot: number
           totalSearches: number
           misses: Record<string, number>
           plainLateStarts: number
@@ -512,13 +513,17 @@ describe('probe guard', { concurrency: false }, () => {
       assert.equal(body.missing_keys, undefined)
       assert.equal(typeof body.supabaseMs, 'number')
       assert.ok(body.totals)
-      assert.equal(body.totals.over8s, 0)
+      assert.equal(body.totals.over8sFromSlot, 0)
+      assert.equal(typeof body.totals.maxRunMs, 'number')
+      assert.ok(body.totals.maxRunMs < 8000)
+      assert.equal(typeof body.totals.wallMs, 'number')
       assert.equal(body.totals.totalSearches, 4 * 2 + 4 * 2)
       assert.equal(body.totals.misses.missing_key, 0)
       assert.equal(body.totals.plainLateStarts, 0)
       assert.equal(body.totals.plainTimeouts, 0)
       const calls = body.calls ?? []
       assert.equal(calls.every((row) => row.late_start === false), true)
+      assert.equal(calls.every((row) => row.queue_ms === row.t_slot - row.t_queued && row.run_ms === row.t_end - row.t_slot), true)
       assert.equal(calls.filter((row) => row.engine === 'gemini' && row.kind === 'plain').length, 2)
       assert.equal(calls.filter((row) => row.engine === 'claude' && row.kind === 'plain').length, 3)
       assert.equal(calls.filter((row) => row.engine === 'chatgpt' && row.kind === 'plain').length, 1)
@@ -629,8 +634,9 @@ describe('probe guard', { concurrency: false }, () => {
     assert.equal(parseProbeCap('3'), 3)
     assert.equal(parseProbeCap('1'), 1)
     assert.equal(parseProbeCap('6'), 6)
-    assert.equal(parseProbeCap('0'), null)
+    assert.equal(parseProbeCap('0'), 0)
     assert.equal(parseProbeCap('7'), null)
+    assert.equal(parseProbeCap('-1'), null)
     assert.equal(parseProbeCap('3.5'), null)
     assert.equal(parseProbeCap(null), null)
     assert.equal(rowLateStart(0, 2000), false)
@@ -640,9 +646,9 @@ describe('probe guard', { concurrency: false }, () => {
       throw new Error('fetch leaked')
     })
     try {
-      const low = await ask('cap=0&domain=linear.app')
+      const low = await ask('cap=-1&domain=linear.app')
       assert.equal(low.status, 400)
-      assert.equal((await low.json()).error, 'cap must be an integer from 1 to 6')
+      assert.equal((await low.json()).error, 'cap must be an integer from 0 to 6')
       const high = await ask('cap=7&domain=linear.app')
       assert.equal(high.status, 400)
       const res = await ask('cap=3&domain=linear.app&n=12', TOKEN, {
@@ -673,6 +679,49 @@ describe('probe guard', { concurrency: false }, () => {
       mock.restore()
     }
   })
+
+  it('cap 0 runs the plain engines and no searched calls', async () => {
+    const mock = install((call) => {
+      if (call.url.includes('/v1/responses') || call.body.includes('google_search')) {
+        throw new Error(`searched call leaked ${call.url}`)
+      }
+      if (call.url.includes('generativelanguage')) {
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Gemini plain.' }] } }] }), { status: 200 })
+      }
+      if (call.url.includes('anthropic')) {
+        return new Response(JSON.stringify({ content: [{ type: 'text', text: 'Claude plain.' }] }), { status: 200 })
+      }
+      if (call.url.includes('/v1/chat/completions')) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"answers":[]}' } }] }), { status: 200 })
+      }
+      throw new Error(`unexpected ${call.url}`)
+    })
+    try {
+      const res = await ask('cap=0&domain=linear.app&n=12&order=last')
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as {
+        cap?: number
+        searched?: number
+        calls?: ProbeRow[]
+        totals?: { wallMs: number; maxRunMs: number; over8sFromSlot: number; plainLateStarts: number; plainTimeouts: number }
+      }
+      assert.equal(body.cap, 0)
+      assert.equal(body.searched, 0)
+      const calls = body.calls ?? []
+      assert.equal(calls.some((row) => row.kind === 'search' || row.kind === 'grounded'), false)
+      assert.equal(calls.filter((row) => row.kind === 'plain').length, 6)
+      assert.equal(calls.every((row) => row.late_start === false && row.queue_ms >= 0 && row.run_ms >= 0), true)
+      assert.equal(body.totals?.over8sFromSlot, 0)
+      assert.equal(body.totals?.plainLateStarts, 0)
+      assert.equal(body.totals?.plainTimeouts, 0)
+      assert.equal(typeof body.totals?.maxRunMs, 'number')
+      assert.equal(typeof body.totals?.wallMs, 'number')
+      assert.equal(mock.calls.some((call) => call.url.includes('/v1/responses')), false)
+      assert.equal(mock.calls.some((call) => call.body.includes('google_search')), false)
+    } finally {
+      mock.restore()
+    }
+  })
 })
 
 describe('probe question list', () => {
@@ -692,6 +741,10 @@ describe('probe question list', () => {
       t_end: 4,
       ms_total: 3,
       ms_waiting_estimate: 1,
+      t_queued: 1,
+      t_slot: 2,
+      queue_ms: 1,
+      run_ms: 2,
       late_start: false,
       status: 429,
       miss: 'http_reject',

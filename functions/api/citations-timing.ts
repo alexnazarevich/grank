@@ -1,7 +1,7 @@
 /**
  * TEMPORARY preview probe. DELETE before launch. Not part of the product UI.
  *
- * GET /api/citations-timing?cap=1..6&domain=...&n=12&order=last|first
+ * GET /api/citations-timing?cap=0..6&domain=...&n=12&order=last|first
  * Header: `x-probe-token: <PROBE_TOKEN>`
  *
  * 404 when `CF_PAGES_BRANCH` is `main` or unset, when `PROBE_TOKEN` is unset
@@ -16,24 +16,28 @@
  * Start order matches full-report Run again for the existing engines: Gemini
  * chunks (at most two), then Claude chunks (at most four), then the plain
  * ChatGPT batch. Those three overlap. Run again also awaits a homepage excerpt
- * before ChatGPT; this probe skips that fetch so the model calls themselves
- * fill the six slots. ChatGPT keeps its 22s timeout. Gemini, Claude, and both
- * searched calls keep the 8s cap.
+ * before ChatGPT; this probe skips that fetch. ChatGPT keeps its 22s timeout.
+ * Gemini, Claude, both searched calls, and the Supabase select keep the 8s cap.
+ * `cap=0` runs no searched calls: a baseline of today's Run again.
  *
- * `order=last` (default) starts the searched calls after those existing calls
- * so the plain blocks are first in the connection queue. `order=first` starts
- * searched calls before the existing engines, for comparison.
- * A Supabase `checks` select runs only after the model calls, and only when
- * `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set.
+ * Every outbound fetch goes through one 6-slot limiter (`functions/lib/slots.ts`).
+ * `t_queued` is when the call asked for a slot. `t_slot` is when it got one.
+ * That call's AbortController starts at `t_slot`, not while it is waiting.
+ * `queue_ms` is `t_slot - t_queued`. `run_ms` is `t_end - t_slot`.
+ * `late_start` is `queue_ms > 2000`. The slot is released in a `finally` block
+ * after the body is read or `body.cancel()` runs.
  *
- * Stamps are milliseconds since this request started. `t_start` is when
- * `fetch` is invoked, and `t_created` is when the call was constructed.
- * `late_start` is `(t_start - t_created) > 2000`. Workers queue past 6
- * simultaneous outbound connections inside `fetch`, so that queue wait shows
- * in `ms_waiting_estimate` (`t_headers - t_start`, or until the call ends if
- * headers never arrive), not in `t_start - t_created`.
- * `totals.plainLateStarts` counts plain rows with `late_start`.
- * `totals.plainTimeouts` counts plain rows whose miss is `timeout`.
+ * `order=last` (default) asks for slots for the existing engines first, so the
+ * plain blocks are ahead of the searched calls. `order=first` asks for the
+ * searched calls first. A Supabase `checks` select asks only after the model
+ * calls, and only when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set.
+ *
+ * Stamps are milliseconds since this request started. `t_start` is when `fetch`
+ * is invoked. `t_headers` is when response headers arrive.
+ * `totals.maxRunMs` is the longest engine `run_ms`. `totals.over8sFromSlot`
+ * counts engine rows with `run_ms > 8000`. `totals.plainLateStarts` counts plain
+ * rows with `late_start`. `totals.plainTimeouts` counts plain rows whose miss
+ * is `timeout`. `totals.wallMs` is the model-call wall. Totals omit the select.
  */
 
 import { FULL_REPORT_SYSTEM_PROMPT } from '../../src/fullReport.ts'
@@ -49,11 +53,12 @@ import {
 } from './claude.ts'
 import { canonicalHostname } from './homepage.ts'
 import { json, scrubSecret } from './http.ts'
+import { OUTBOUND_SLOT_LIMIT, cancelResponseBody, createOutboundSlots, type HeldSlot } from '../lib/slots.ts'
 import {
+  SEARCH_TIMEOUT_MS,
   clockTotalMs,
   clockWaitingMs,
   elapsedSince,
-  engineAbort,
   geminiGrounded,
   chatgptSearchModelFromEnv,
   chatgptWebSearch,
@@ -116,12 +121,18 @@ export type ProbeRow = {
   kind: string
   index: number
   t_created: number
+  t_queued: number
+  t_slot: number
   t_start: number
   t_headers: number | null
   t_end: number
   ms_total: number
   ms_waiting_estimate: number
-  /** `(t_start - t_created) > 2000`. Queue time inside fetch is not included. */
+  /** `t_slot - t_queued`. Time waiting for a limiter slot, before fetch. */
+  queue_ms: number
+  /** `t_end - t_slot`. Includes the fetch and the body read or cancel. */
+  run_ms: number
+  /** `queue_ms > 2000`. Wait inside fetch is not included. */
   late_start: boolean
   status: number | null
   miss: string | null
@@ -203,22 +214,18 @@ function withEnd(clock: SearchClock, originMs: number): SearchClock {
 }
 
 async function discard(res: Response) {
-  try {
-    await res.body?.cancel()
-  } catch {
-    // Status only.
-  }
+  await cancelResponseBody(res)
 }
 
 function notFound(): Response {
   return json(404, { error: 'Not found' })
 }
 
-/** Searched-question cap. Any integer from 1 through 6. */
+/** Searched-question cap. `0` skips searched calls. Otherwise 1 through 6. */
 export function parseProbeCap(raw: string | null): number | null {
   if (raw === null || raw.trim() === '') return null
   const n = Number(raw)
-  if (!Number.isInteger(n) || n < 1 || n > 6) return null
+  if (!Number.isInteger(n) || n < 0 || n > 6) return null
   return n
 }
 
@@ -243,23 +250,49 @@ function statusOf(miss: SearchMiss | undefined): number | null {
   return 200
 }
 
-/** Delay before fetch is invoked. The Workers connection queue is inside fetch. */
-export function rowLateStart(tCreated: number, tStart: number): boolean {
-  return tStart - tCreated > 2000
+/** True when the call waited more than 2s for a slot. `t_slot - t_queued`. */
+export function rowLateStart(tQueued: number, tSlot: number): boolean {
+  return tSlot - tQueued > 2000
 }
 
-function clockFields(clock: SearchClock): Pick<
+export function queueMs(tQueued: number, tSlot: number): number {
+  return Math.max(0, tSlot - tQueued)
+}
+
+export function runMs(tSlot: number, tEnd: number): number {
+  return Math.max(0, tEnd - tSlot)
+}
+
+function clockFields(
+  clock: SearchClock,
+  tQueued: number,
+  tSlot: number,
+): Pick<
   ProbeRow,
-  't_created' | 't_start' | 't_headers' | 't_end' | 'ms_total' | 'ms_waiting_estimate' | 'late_start'
+  | 't_created'
+  | 't_queued'
+  | 't_slot'
+  | 't_start'
+  | 't_headers'
+  | 't_end'
+  | 'ms_total'
+  | 'ms_waiting_estimate'
+  | 'queue_ms'
+  | 'run_ms'
+  | 'late_start'
 > {
   return {
     t_created: clock.t_created,
+    t_queued: tQueued,
+    t_slot: tSlot,
     t_start: clock.t_start,
     t_headers: clock.t_headers,
     t_end: clock.t_end,
     ms_total: clockTotalMs(clock),
     ms_waiting_estimate: clockWaitingMs(clock),
-    late_start: rowLateStart(clock.t_created, clock.t_start),
+    queue_ms: queueMs(tQueued, tSlot),
+    run_ms: runMs(tSlot, clock.t_end),
+    late_start: rowLateStart(tQueued, tSlot),
   }
 }
 
@@ -269,11 +302,12 @@ function idleClock(originMs: number): SearchClock {
 }
 
 function missedRow(engine: string, kind: string, index: number, originMs: number, miss: string): ProbeRow {
+  const clock = idleClock(originMs)
   return {
     engine,
     kind,
     index,
-    ...clockFields(idleClock(originMs)),
+    ...clockFields(clock, clock.t_created, clock.t_created),
     status: null,
     miss,
     tokensIn: 0,
@@ -300,25 +334,30 @@ async function readOutcome(
   if (sent.miss || !sent.response) {
     return { status: null, miss: 'timeout', clock: sent.clock, text: '', tokensIn: 0, tokensOut: 0 }
   }
-  if (!sent.response.ok) {
-    const status = sent.response.status
-    await discard(sent.response)
-    return { status, miss: 'http_reject', clock: withEnd(sent.clock, originMs), text: '', tokensIn: 0, tokensOut: 0 }
-  }
+  const response = sent.response
   let payload: unknown
+  let unreadable = false
   try {
-    payload = await sent.response.json()
+    if (response.ok) payload = await response.json()
   } catch {
-    return { status: sent.response.status, miss: 'bad_json', clock: withEnd(sent.clock, originMs), text: '', tokensIn: 0, tokensOut: 0 }
+    unreadable = true
+  } finally {
+    await discard(response)
+  }
+  const clock = withEnd(sent.clock, originMs)
+  if (!response.ok) {
+    return { status: response.status, miss: 'http_reject', clock, text: '', tokensIn: 0, tokensOut: 0 }
+  }
+  if (unreadable) {
+    return { status: response.status, miss: 'bad_json', clock, text: '', tokensIn: 0, tokensOut: 0 }
   }
   const picked = pick(payload)
-  const clock = withEnd(sent.clock, originMs)
-  if (!picked) return { status: sent.response.status, miss: 'bad_json', clock, text: '', tokensIn: 0, tokensOut: 0 }
+  if (!picked) return { status: response.status, miss: 'bad_json', clock, text: '', tokensIn: 0, tokensOut: 0 }
   const text = scrubKeys(picked.text, secrets)
   if (!text.trim()) {
-    return { status: sent.response.status, miss: 'empty', clock, text: '', tokensIn: picked.tokensIn, tokensOut: picked.tokensOut }
+    return { status: response.status, miss: 'empty', clock, text: '', tokensIn: picked.tokensIn, tokensOut: picked.tokensOut }
   }
-  return { status: sent.response.status, miss: null, clock, text, tokensIn: picked.tokensIn, tokensOut: picked.tokensOut }
+  return { status: response.status, miss: null, clock, text, tokensIn: picked.tokensIn, tokensOut: picked.tokensOut }
 }
 
 function pickGemini(payload: unknown): Picked | null {
@@ -409,7 +448,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
   const domain = canonicalHostname(url.searchParams.get('domain'))
   if (!domain) return json(400, { error: 'domain must be a simple public hostname' })
   const cap = parseProbeCap(url.searchParams.get('cap'))
-  if (!cap) return json(400, { error: 'cap must be an integer from 1 to 6' })
+  if (cap === null) return json(400, { error: 'cap must be an integer from 0 to 6' })
   const n = parseCount(url.searchParams.get('n'))
   if (!n) return json(400, { error: 'n must be an integer from 1 to 40' })
   const order = parseOrder(url.searchParams.get('order'))
@@ -430,8 +469,10 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
 
   let plainThinkingRejected = false
   let claudeUsesFallback = false
-  const gates: { done: () => void }[] = []
+  const slots = createOutboundSlots(OUTBOUND_SLOT_LIMIT)
+  const now = () => elapsedSince(originMs)
   const tasks: Promise<ProbeRow>[] = []
+  const held = (clock: SearchClock, slot: HeldSlot) => clockFields(clock, slot.t_queued, slot.t_slot)
 
   const track = (work: Promise<ProbeRow>) => {
     tasks.push(
@@ -442,11 +483,11 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
     )
   }
 
-  const timeGemini = (index: number, chunk: string[], maxOutputTokens: number, signal: AbortSignal) => {
+  const timeGemini = (index: number, chunk: string[], maxOutputTokens: number) => {
     const tCreated = elapsedSince(originMs)
     if (!geminiKey) return Promise.resolve(missedRow('gemini', 'plain', index, originMs, 'missing_key'))
     const prompt = geminiAnswerPrompt(chunk.map(scrub))
-    const run = async (): Promise<ProbeRow> => {
+    return slots.use({ timeoutMs: GEMINI_TIMEOUT_CAP_MS, now }, async (slot) => {
       const allow = !plainThinkingRejected
       const built = plainGeminiBody(geminiModel, prompt, chunk.length, maxOutputTokens, allow)
       const post = (body: unknown) =>
@@ -457,7 +498,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-goog-api-key': geminiKey },
           body: JSON.stringify(body),
-          signal,
+          signal: slot.signal,
         })
       let attempts = 1
       let sent = await post(built.body)
@@ -475,7 +516,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
         engine: 'gemini',
         kind: 'plain',
         index,
-        ...clockFields(outcome.clock),
+        ...held(outcome.clock, slot),
         status: outcome.status,
         miss: outcome.miss,
         tokensIn: outcome.tokensIn,
@@ -485,15 +526,14 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
         attempts,
         ...textField(outcome.text, secrets),
       }
-    }
-    return run()
+    })
   }
 
-  const timeClaude = (index: number, chunk: string[], shape: 'single' | 'chunk', signal: AbortSignal) => {
+  const timeClaude = (index: number, chunk: string[], shape: 'single' | 'chunk') => {
     const tCreated = elapsedSince(originMs)
     if (!claudeKey) return Promise.resolve(missedRow('claude', 'plain', index, originMs, 'missing_key'))
     const prompt = geminiAnswerPrompt(chunk.map(scrub))
-    const run = async (): Promise<ProbeRow> => {
+    return slots.use({ timeoutMs: CLAUDE_TIMEOUT_CAP_MS, now }, async (slot) => {
       const post = (model: string) =>
         timedFetch({
           originMs,
@@ -506,7 +546,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
             'content-type': 'application/json',
           },
           body: JSON.stringify(claudeMessageBody(model, prompt, chunk.length, shape)),
-          signal,
+          signal: slot.signal,
         })
       let model = claudeUsesFallback && claudeModel !== CLAUDE_MODEL_FALLBACK ? CLAUDE_MODEL_FALLBACK : claudeModel
       let attempts = 1
@@ -530,7 +570,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
         engine: 'claude',
         kind: 'plain',
         index,
-        ...clockFields(outcome.clock),
+        ...held(outcome.clock, slot),
         status: outcome.status,
         miss: outcome.miss,
         tokensIn: outcome.tokensIn,
@@ -540,113 +580,117 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
         attempts,
         ...textField(outcome.text, secrets),
       }
-    }
-    return run()
+    })
   }
 
   const timeChatBatch = (index: number, batch: string[]) => {
     const tCreated = elapsedSince(originMs)
     if (!openaiKey) return Promise.resolve(missedRow('chatgpt', 'plain', index, originMs, 'missing_key'))
-    const gate = engineAbort(CHATGPT_BATCH_TIMEOUT_MS)
-    gates.push(gate)
     const prompt = ownedAnswerPrompt(
       domain,
       [{ id: 'problems', title: 'Problems you solve', questions: batch.map(scrub) }],
       null,
     )
-    const run = async (): Promise<ProbeRow> => {
-      try {
-        const sent = await timedFetch({
-          originMs,
-          tCreated,
-          url: CHATGPT_COMPLETIONS_URL,
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${openaiKey}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: CHATGPT_BATCH_MODEL,
-            temperature: 0.3,
-            max_tokens: Math.min(4500, 350 + batch.length * 130),
-            response_format: { type: 'json_object' },
-            messages: [
-              { role: 'system', content: FULL_REPORT_SYSTEM_PROMPT },
-              { role: 'user', content: prompt },
-            ],
-          }),
-          signal: gate.signal,
-        })
-        const outcome = await readOutcome(sent, originMs, secrets, pickChat)
-        return {
-          engine: 'chatgpt',
-          kind: 'plain',
-          index,
-          ...clockFields(outcome.clock),
-          status: outcome.status,
-          miss: outcome.miss,
-          tokensIn: outcome.tokensIn,
-          tokensOut: outcome.tokensOut,
-          searchCount: 0,
-          citationCount: 0,
-          attempts: 1,
-          ...textField(outcome.text, secrets),
-        }
-      } finally {
-        gate.done()
+    return slots.use({ timeoutMs: CHATGPT_BATCH_TIMEOUT_MS, now }, async (slot) => {
+      const sent = await timedFetch({
+        originMs,
+        tCreated,
+        url: CHATGPT_COMPLETIONS_URL,
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${openaiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: CHATGPT_BATCH_MODEL,
+          temperature: 0.3,
+          max_tokens: Math.min(4500, 350 + batch.length * 130),
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: FULL_REPORT_SYSTEM_PROMPT },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal: slot.signal,
+      })
+      const outcome = await readOutcome(sent, originMs, secrets, pickChat)
+      return {
+        engine: 'chatgpt',
+        kind: 'plain',
+        index,
+        ...held(outcome.clock, slot),
+        status: outcome.status,
+        miss: outcome.miss,
+        tokensIn: outcome.tokensIn,
+        tokensOut: outcome.tokensOut,
+        searchCount: 0,
+        citationCount: 0,
+        attempts: 1,
+        ...textField(outcome.text, secrets),
       }
-    }
-    return run()
+    })
   }
 
   const timeSearch = (index: number, question: string) => {
+    const tCreated = elapsedSince(originMs)
     if (!openaiKey) return Promise.resolve(missedRow('chatgpt', 'search', index, originMs, 'missing_key'))
-    return chatgptWebSearch({
-      apiKey: openaiKey,
-      model: searchModel,
-      question,
-      domain,
-      originMs,
-      scrub: secrets,
-    }).then((result) => ({
-      engine: 'chatgpt',
-      kind: 'search',
-      index,
-      ...clockFields(result.clock),
-      status: statusOf(result.miss),
-      miss: result.miss?.class ?? null,
-      tokensIn: result.usage.inputTokens,
-      tokensOut: result.usage.outputTokens,
-      searchCount: result.searchCount,
-      citationCount: result.citations.length,
-      attempts: result.attempts,
-      ...textField(result.text, secrets),
-    }))
+    return slots.use({ timeoutMs: SEARCH_TIMEOUT_MS, now }, async (slot) => {
+      const result = await chatgptWebSearch({
+        apiKey: openaiKey,
+        model: searchModel,
+        question,
+        domain,
+        originMs,
+        timeoutMs: SEARCH_TIMEOUT_MS,
+        signal: slot.signal,
+        scrub: secrets,
+      })
+      return {
+        engine: 'chatgpt',
+        kind: 'search',
+        index,
+        ...held({ ...result.clock, t_created: tCreated }, slot),
+        status: statusOf(result.miss),
+        miss: result.miss?.class ?? null,
+        tokensIn: result.usage.inputTokens,
+        tokensOut: result.usage.outputTokens,
+        searchCount: result.searchCount,
+        citationCount: result.citations.length,
+        attempts: result.attempts,
+        ...textField(result.text, secrets),
+      }
+    })
   }
 
   const timeGrounded = (index: number, question: string) => {
+    const tCreated = elapsedSince(originMs)
     if (!geminiKey) return Promise.resolve(missedRow('gemini', 'grounded', index, originMs, 'missing_key'))
-    return geminiGrounded({
-      apiKey: geminiKey,
-      model: geminiModel,
-      question,
-      originMs,
-      scrub: secrets,
-    }).then((result) => ({
-      engine: 'gemini',
-      kind: 'grounded',
-      index,
-      ...clockFields(result.clock),
-      status: statusOf(result.miss),
-      miss: result.miss?.class ?? null,
-      tokensIn: result.usage.inputTokens,
-      tokensOut: result.usage.outputTokens,
-      searchCount: result.searchCount,
-      citationCount: result.chunks.length,
-      attempts: result.attempts,
-      hasSearchEntryPoint: result.hasSearchEntryPoint,
-      ...textField(result.text, secrets),
-    }))
+    return slots.use({ timeoutMs: SEARCH_TIMEOUT_MS, now }, async (slot) => {
+      const result = await geminiGrounded({
+        apiKey: geminiKey,
+        model: geminiModel,
+        question,
+        originMs,
+        timeoutMs: SEARCH_TIMEOUT_MS,
+        signal: slot.signal,
+        scrub: secrets,
+      })
+      return {
+        engine: 'gemini',
+        kind: 'grounded',
+        index,
+        ...held({ ...result.clock, t_created: tCreated }, slot),
+        status: statusOf(result.miss),
+        miss: result.miss?.class ?? null,
+        tokensIn: result.usage.inputTokens,
+        tokensOut: result.usage.outputTokens,
+        searchCount: result.searchCount,
+        citationCount: result.chunks.length,
+        attempts: result.attempts,
+        hasSearchEntryPoint: result.hasSearchEntryPoint,
+        ...textField(result.text, secrets),
+      }
+    })
   }
 
   const startSearched = () => {
@@ -655,18 +699,15 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
   }
 
   const startExisting = () => {
-    const geminiGate = engineAbort(GEMINI_TIMEOUT_CAP_MS)
-    const claudeGate = engineAbort(CLAUDE_TIMEOUT_CAP_MS)
-    gates.push(geminiGate, claudeGate)
     const maxOutputTokens = geminiChunkMaxOutputTokens(geminiChunkSize(questions.length))
     geminiQuestionChunks(questions).forEach((chunk, index) => {
-      track(timeGemini(index, chunk, maxOutputTokens, geminiGate.signal))
+      track(timeGemini(index, chunk, maxOutputTokens))
     })
     if (questions.length === 1) {
-      track(timeClaude(0, questions, 'single', claudeGate.signal))
+      track(timeClaude(0, questions, 'single'))
     } else {
       claudeQuestionChunks(questions).forEach((chunk, index) => {
-        track(timeClaude(index, chunk, 'chunk', claudeGate.signal))
+        track(timeClaude(index, chunk, 'chunk'))
       })
     }
     chatgptBatches(questions).forEach((batch, index) => {
@@ -684,23 +725,21 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
     let supabaseMs: number | undefined
     if (sb) {
       const tCreated = elapsedSince(originMs)
-      const gate = engineAbort(GEMINI_TIMEOUT_CAP_MS)
-      gates.push(gate)
-      try {
+      const row = await slots.use({ timeoutMs: GEMINI_TIMEOUT_CAP_MS, now }, async (slot) => {
         const sent = await timedFetch({
           originMs,
           tCreated,
           url: `${sb.url}/rest/v1/checks?select=id&limit=1`,
           method: 'GET',
           headers: serviceHeaders(sb.serviceRole),
-          signal: gate.signal,
+          signal: slot.signal,
         })
         const outcome = await readOutcome(sent, originMs, secrets, (payload) => (Array.isArray(payload) || isRecord(payload) ? { text: '', tokensIn: 0, tokensOut: 0 } : null))
-        const row: ProbeRow = {
+        const built: ProbeRow = {
           engine: 'supabase',
           kind: 'select',
           index: 0,
-          ...clockFields(outcome.clock),
+          ...held(outcome.clock, slot),
           status: outcome.status,
           miss: outcome.miss === 'empty' ? null : outcome.miss,
           tokensIn: 0,
@@ -709,24 +748,25 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
           citationCount: 0,
           attempts: 1,
         }
-        console.info(probeLogLine(row))
-        calls.push(row)
-        supabaseMs = row.ms_total
-      } finally {
-        gate.done()
-      }
+        return built
+      })
+      console.info(probeLogLine(row))
+      calls.push(row)
+      supabaseMs = row.ms_total
     }
 
     const engineCalls = calls.filter((row) => row.engine !== 'supabase')
     const misses = { missing_key: 0, http_reject: 0, timeout: 0, bad_json: 0, empty: 0 }
     const missingKeys: string[] = []
-    let over8s = 0
+    let maxRunMs = 0
+    let over8sFromSlot = 0
     let totalSearches = 0
     let plainLateStarts = 0
     let plainTimeouts = 0
     for (const row of engineCalls) {
       totalSearches += row.searchCount
-      if (row.ms_total > GEMINI_TIMEOUT_CAP_MS) over8s += 1
+      if (row.run_ms > maxRunMs) maxRunMs = row.run_ms
+      if (row.run_ms > GEMINI_TIMEOUT_CAP_MS) over8sFromSlot += 1
       if (row.kind === 'plain' && row.late_start) plainLateStarts += 1
       if (row.kind === 'plain' && row.miss === 'timeout') plainTimeouts += 1
       if (row.miss && row.miss in misses) misses[row.miss as keyof typeof misses] += 1
@@ -738,8 +778,8 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
 
     const note =
       order === 'last'
-        ? 'Existing engines start first: Gemini chunks, then Claude chunks, then the ChatGPT batch. Searched calls start after those, so the plain blocks are first in the 6-connection queue. The homepage excerpt is not fetched. A Supabase select, when the service role is set, runs after the model calls. totals omit that select.'
-        : 'Searched calls start first, then Gemini chunks, Claude chunks, and the ChatGPT batch. The homepage excerpt is not fetched. A Supabase select, when the service role is set, runs after the model calls. totals omit that select.'
+        ? 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Existing engines ask first: Gemini chunks, then Claude chunks, then the ChatGPT batch. Searched calls ask after those. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, asks after the model calls. totals omit that select.'
+        : 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Searched calls ask first, then Gemini chunks, Claude chunks, and the ChatGPT batch. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, asks after the model calls. totals omit that select.'
 
     const body: Record<string, unknown> = {
       ok: true,
@@ -758,7 +798,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
       },
       timeouts: { chatgptMs: CHATGPT_BATCH_TIMEOUT_MS, engineMs: GEMINI_TIMEOUT_CAP_MS },
       calls,
-      totals: { wallMs, over8s, misses, totalSearches, plainLateStarts, plainTimeouts },
+      totals: { wallMs, maxRunMs, over8sFromSlot, misses, totalSearches, plainLateStarts, plainTimeouts },
       ...(supabaseMs !== undefined ? { supabaseMs } : {}),
       ...(missingKeys.length > 0 ? { missing_keys: missingKeys } : {}),
     }
@@ -772,7 +812,5 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
     })
   } catch {
     return json(500, { error: 'Could not build the timing probe.' })
-  } finally {
-    for (const gate of gates) gate.done()
   }
 }
