@@ -9,10 +9,12 @@ import { resetClaudeModelMemo } from '../functions/api/claude.ts'
 import { onRequest as probe } from '../functions/api/citations-timing.ts'
 import {
   citationsProbeBranchOpen,
+  parseProbeCap,
   probeLogLine,
   probeQuestions,
   probeTokenFromEnv,
   probeTokensEqual,
+  rowLateStart,
   PROBE_QUESTION_BANK,
   type ProbeRow,
 } from '../functions/api/citations-timing.ts'
@@ -489,7 +491,14 @@ describe('probe guard', { concurrency: false }, () => {
         order?: string
         domain?: string
         calls?: ProbeRow[]
-        totals?: { wallMs: number; over8s: number; totalSearches: number; misses: Record<string, number> }
+        totals?: {
+          wallMs: number
+          over8s: number
+          totalSearches: number
+          misses: Record<string, number>
+          plainLateStarts: number
+          plainTimeouts: number
+        }
         supabaseMs?: number
         missing_keys?: string[]
         text?: string
@@ -506,7 +515,10 @@ describe('probe guard', { concurrency: false }, () => {
       assert.equal(body.totals.over8s, 0)
       assert.equal(body.totals.totalSearches, 4 * 2 + 4 * 2)
       assert.equal(body.totals.misses.missing_key, 0)
+      assert.equal(body.totals.plainLateStarts, 0)
+      assert.equal(body.totals.plainTimeouts, 0)
       const calls = body.calls ?? []
+      assert.equal(calls.every((row) => row.late_start === false), true)
       assert.equal(calls.filter((row) => row.engine === 'gemini' && row.kind === 'plain').length, 2)
       assert.equal(calls.filter((row) => row.engine === 'claude' && row.kind === 'plain').length, 3)
       assert.equal(calls.filter((row) => row.engine === 'chatgpt' && row.kind === 'plain').length, 1)
@@ -612,6 +624,55 @@ describe('probe guard', { concurrency: false }, () => {
       mock.restore()
     }
   })
+
+  it('accepts cap 1 through 6 and counts plain late starts and timeouts', async () => {
+    assert.equal(parseProbeCap('3'), 3)
+    assert.equal(parseProbeCap('1'), 1)
+    assert.equal(parseProbeCap('6'), 6)
+    assert.equal(parseProbeCap('0'), null)
+    assert.equal(parseProbeCap('7'), null)
+    assert.equal(parseProbeCap('3.5'), null)
+    assert.equal(parseProbeCap(null), null)
+    assert.equal(rowLateStart(0, 2000), false)
+    assert.equal(rowLateStart(10, 2010), false)
+    assert.equal(rowLateStart(0, 2001), true)
+    const mock = install(() => {
+      throw new Error('fetch leaked')
+    })
+    try {
+      const low = await ask('cap=0&domain=linear.app')
+      assert.equal(low.status, 400)
+      assert.equal((await low.json()).error, 'cap must be an integer from 1 to 6')
+      const high = await ask('cap=7&domain=linear.app')
+      assert.equal(high.status, 400)
+      const res = await ask('cap=3&domain=linear.app&n=12', TOKEN, {
+        OPENAI_API_KEY: '',
+        GEMINI_API_KEY: '',
+        ANTHROPIC_API_KEY: '',
+      })
+      assert.equal(res.status, 200)
+      const body = (await res.json()) as {
+        cap?: number
+        searched?: number
+        calls?: ProbeRow[]
+        totals?: { plainLateStarts: number; plainTimeouts: number }
+      }
+      assert.equal(body.cap, 3)
+      assert.equal(body.searched, 3)
+      const calls = body.calls ?? []
+      assert.equal(calls.filter((row) => row.kind === 'search').length, 3)
+      assert.equal(calls.filter((row) => row.kind === 'grounded').length, 3)
+      assert.equal(calls.every((row) => row.late_start === false), true)
+      const plain = calls.filter((row) => row.kind === 'plain')
+      assert.ok(plain.length > 0)
+      assert.equal(plain.every((row) => row.miss === 'missing_key'), true)
+      assert.equal(body.totals?.plainLateStarts, 0)
+      assert.equal(body.totals?.plainTimeouts, 0)
+      assert.equal(mock.calls.length, 0)
+    } finally {
+      mock.restore()
+    }
+  })
 })
 
 describe('probe question list', () => {
@@ -631,6 +692,7 @@ describe('probe question list', () => {
       t_end: 4,
       ms_total: 3,
       ms_waiting_estimate: 1,
+      late_start: false,
       status: 429,
       miss: 'http_reject',
       tokensIn: 1,

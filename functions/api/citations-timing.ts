@@ -1,7 +1,7 @@
 /**
  * TEMPORARY preview probe. DELETE before launch. Not part of the product UI.
  *
- * GET /api/citations-timing?cap=6|4&domain=...&n=12&order=last|first
+ * GET /api/citations-timing?cap=1..6&domain=...&n=12&order=last|first
  * Header: `x-probe-token: <PROBE_TOKEN>`
  *
  * 404 when `CF_PAGES_BRANCH` is `main` or unset, when `PROBE_TOKEN` is unset
@@ -26,8 +26,14 @@
  * A Supabase `checks` select runs only after the model calls, and only when
  * `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set.
  *
- * `t_headers - t_start` is the wait inside `fetch`, including the queue past
- * six connections. Stamps are milliseconds since this request started.
+ * Stamps are milliseconds since this request started. `t_start` is when
+ * `fetch` is invoked, and `t_created` is when the call was constructed.
+ * `late_start` is `(t_start - t_created) > 2000`. Workers queue past 6
+ * simultaneous outbound connections inside `fetch`, so that queue wait shows
+ * in `ms_waiting_estimate` (`t_headers - t_start`, or until the call ends if
+ * headers never arrive), not in `t_start - t_created`.
+ * `totals.plainLateStarts` counts plain rows with `late_start`.
+ * `totals.plainTimeouts` counts plain rows whose miss is `timeout`.
  */
 
 import { FULL_REPORT_SYSTEM_PROMPT } from '../../src/fullReport.ts'
@@ -115,6 +121,8 @@ export type ProbeRow = {
   t_end: number
   ms_total: number
   ms_waiting_estimate: number
+  /** `(t_start - t_created) > 2000`. Queue time inside fetch is not included. */
+  late_start: boolean
   status: number | null
   miss: string | null
   tokensIn: number
@@ -206,9 +214,12 @@ function notFound(): Response {
   return json(404, { error: 'Not found' })
 }
 
-function parseCap(raw: string | null): 4 | 6 | null {
-  if (raw === '4' || raw === '6') return Number(raw) as 4 | 6
-  return null
+/** Searched-question cap. Any integer from 1 through 6. */
+export function parseProbeCap(raw: string | null): number | null {
+  if (raw === null || raw.trim() === '') return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 6) return null
+  return n
 }
 
 function parseCount(raw: string | null): number | null {
@@ -232,9 +243,14 @@ function statusOf(miss: SearchMiss | undefined): number | null {
   return 200
 }
 
+/** Delay before fetch is invoked. The Workers connection queue is inside fetch. */
+export function rowLateStart(tCreated: number, tStart: number): boolean {
+  return tStart - tCreated > 2000
+}
+
 function clockFields(clock: SearchClock): Pick<
   ProbeRow,
-  't_created' | 't_start' | 't_headers' | 't_end' | 'ms_total' | 'ms_waiting_estimate'
+  't_created' | 't_start' | 't_headers' | 't_end' | 'ms_total' | 'ms_waiting_estimate' | 'late_start'
 > {
   return {
     t_created: clock.t_created,
@@ -243,6 +259,7 @@ function clockFields(clock: SearchClock): Pick<
     t_end: clock.t_end,
     ms_total: clockTotalMs(clock),
     ms_waiting_estimate: clockWaitingMs(clock),
+    late_start: rowLateStart(clock.t_created, clock.t_start),
   }
 }
 
@@ -391,8 +408,8 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
   const url = new URL(request.url)
   const domain = canonicalHostname(url.searchParams.get('domain'))
   if (!domain) return json(400, { error: 'domain must be a simple public hostname' })
-  const cap = parseCap(url.searchParams.get('cap'))
-  if (!cap) return json(400, { error: 'cap must be 4 or 6' })
+  const cap = parseProbeCap(url.searchParams.get('cap'))
+  if (!cap) return json(400, { error: 'cap must be an integer from 1 to 6' })
   const n = parseCount(url.searchParams.get('n'))
   if (!n) return json(400, { error: 'n must be an integer from 1 to 40' })
   const order = parseOrder(url.searchParams.get('order'))
@@ -705,9 +722,13 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
     const missingKeys: string[] = []
     let over8s = 0
     let totalSearches = 0
+    let plainLateStarts = 0
+    let plainTimeouts = 0
     for (const row of engineCalls) {
       totalSearches += row.searchCount
       if (row.ms_total > GEMINI_TIMEOUT_CAP_MS) over8s += 1
+      if (row.kind === 'plain' && row.late_start) plainLateStarts += 1
+      if (row.kind === 'plain' && row.miss === 'timeout') plainTimeouts += 1
       if (row.miss && row.miss in misses) misses[row.miss as keyof typeof misses] += 1
       if (row.miss !== 'missing_key') continue
       const name =
@@ -737,7 +758,7 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
       },
       timeouts: { chatgptMs: CHATGPT_BATCH_TIMEOUT_MS, engineMs: GEMINI_TIMEOUT_CAP_MS },
       calls,
-      totals: { wallMs, over8s, misses, totalSearches },
+      totals: { wallMs, over8s, misses, totalSearches, plainLateStarts, plainTimeouts },
       ...(supabaseMs !== undefined ? { supabaseMs } : {}),
       ...(missingKeys.length > 0 ? { missing_keys: missingKeys } : {}),
     }
