@@ -4,9 +4,20 @@
  * GET /api/citations-timing?cap=0..6&domain=...&n=12&order=last|first
  * Header: `x-probe-token: <PROBE_TOKEN>`
  *
- * 404 when `CF_PAGES_BRANCH` is `main` or unset, when `PROBE_TOKEN` is unset
- * or blank, or when the header does not match. The token is never echoed.
- * There is no `CITATIONS_TIMING_PROBE` flag.
+ * This file is the route. `functions/api/<name>.ts` exporting `onRequest` is
+ * `/api/<name>`, the same file routing as `/api/visibility` and the other
+ * handlers. There is no wrangler route table and no `_routes.json`. A Worker
+ * build that compiles the `functions/` directory includes this file.
+ * `functions/lib/slots.ts` is not a route.
+ *
+ * 404 unless both of these hold. The token is never echoed. There is no
+ * `CITATIONS_TIMING_PROBE` flag and no `CF_PAGES_BRANCH` check (that variable
+ * is unset on Workers).
+ * - `PROBE_TOKEN` is set and `x-probe-token` matches it (constant-time).
+ * - The host is a Workers version preview URL:
+ *   `<version-prefix>-grank.<account>.workers.dev`
+ *   Closed hosts: `grank.pages.dev`, any custom domain, and the production
+ *   workers.dev host `grank.<account>.workers.dev` (no version prefix).
  *
  * Measures a signed-in Run again plus searched answers under Cloudflare Pages'
  * 6 simultaneous outbound connections. Gemini grounding is always on here
@@ -29,8 +40,9 @@
  *
  * `order=last` (default) asks for slots for the existing engines first, so the
  * plain blocks are ahead of the searched calls. `order=first` asks for the
- * searched calls first. A Supabase `checks` select asks only after the model
- * calls, and only when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set.
+ * searched calls first. A Supabase `checks` select (GET `select=id&limit=1`
+ * only; no insert, update, or delete) asks only after the model calls, and
+ * only when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set.
  *
  * Stamps are milliseconds since this request started. `t_start` is when `fetch`
  * is invoked. `t_headers` is when response headers arrive.
@@ -104,7 +116,6 @@ const QUESTION_BANK = [
 export const PROBE_QUESTION_BANK = QUESTION_BANK
 
 type ProbeEnv = {
-  CF_PAGES_BRANCH?: string
   PROBE_TOKEN?: string
   OPENAI_API_KEY?: string
   GEMINI_API_KEY?: string
@@ -145,10 +156,24 @@ export type ProbeRow = {
   hasSearchEntryPoint?: boolean
 }
 
-/** Open only on a named preview branch. Production (`main`) and an unset branch stay closed. */
-export function citationsProbeBranchOpen(env: { CF_PAGES_BRANCH?: string } | undefined): boolean {
-  const branch = typeof env?.CF_PAGES_BRANCH === 'string' ? env.CF_PAGES_BRANCH.trim() : ''
-  return branch !== '' && branch !== 'main'
+/**
+ * Open only on a Workers version preview URL for the `grank` worker:
+ * `<version-prefix>-grank.<account>.workers.dev`.
+ *
+ * Closed: `grank.pages.dev`, any custom domain (and any other non-matching
+ * host), and the production workers.dev host `grank.<account>.workers.dev`.
+ */
+export function citationsProbeHostOpen(host: string): boolean {
+  const name = host.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.+$/, '')
+  const labels = name.split('.')
+  if (labels.length !== 4 || labels[2] !== 'workers' || labels[3] !== 'dev') return false
+  const account = labels[1] ?? ''
+  const left = labels[0] ?? ''
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(account)) return false
+  if (!left.endsWith('-grank')) return false
+  const prefix = left.slice(0, -'-grank'.length)
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(prefix)) return false
+  return true
 }
 
 export function probeTokenFromEnv(env: { PROBE_TOKEN?: string } | undefined): string {
@@ -439,7 +464,8 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
   const { request } = context
   const env = context.env
   const token = probeTokenFromEnv(env)
-  if (!citationsProbeBranchOpen(env) || !token || !probeTokensEqual(token, request.headers.get('x-probe-token') ?? '')) {
+  const host = new URL(request.url).hostname
+  if (!citationsProbeHostOpen(host) || !token || !probeTokensEqual(token, request.headers.get('x-probe-token') ?? '')) {
     return notFound()
   }
   if (request.method !== 'GET') return json(405, { error: 'Use GET' })
@@ -778,8 +804,8 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
 
     const note =
       order === 'last'
-        ? 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Existing engines ask first: Gemini chunks, then Claude chunks, then the ChatGPT batch. Searched calls ask after those. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, asks after the model calls. totals omit that select.'
-        : 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Searched calls ask first, then Gemini chunks, Claude chunks, and the ChatGPT batch. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, asks after the model calls. totals omit that select.'
+        ? 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Existing engines ask first: Gemini chunks, then Claude chunks, then the ChatGPT batch. Searched calls ask after those. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, is a GET of checks.id only and asks after the model calls. totals omit that select.'
+        : 'A 6-slot limiter wraps every outbound fetch, and the timeout starts when a slot is granted. Searched calls ask first, then Gemini chunks, Claude chunks, and the ChatGPT batch. Cap 0 skips searched calls. The homepage excerpt is not fetched. A Supabase select, when the service role is set, is a GET of checks.id only and asks after the model calls. totals omit that select.'
 
     const body: Record<string, unknown> = {
       ok: true,
@@ -788,7 +814,6 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
       searched,
       domain,
       order,
-      branch: typeof env?.CF_PAGES_BRANCH === 'string' ? env.CF_PAGES_BRANCH.trim() : '',
       note,
       models: {
         chatgpt: CHATGPT_BATCH_MODEL,

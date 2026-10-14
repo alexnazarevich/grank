@@ -1,14 +1,14 @@
 /**
  * Citations timing probe. Parsing, miss classes, and the preview guard.
- * The probe is not a production route: main and an unset branch are 404,
- * and a request without the preview token is 404.
+ * The probe is closed on production hosts. It opens only on a Workers version
+ * preview URL when `x-probe-token` matches `PROBE_TOKEN`.
  */
 import assert from 'node:assert/strict'
 import { beforeEach, describe, it } from 'node:test'
 import { resetClaudeModelMemo } from '../functions/api/claude.ts'
 import { onRequest as probe } from '../functions/api/citations-timing.ts'
 import {
-  citationsProbeBranchOpen,
+  citationsProbeHostOpen,
   parseProbeCap,
   probeLogLine,
   probeQuestions,
@@ -36,7 +36,7 @@ const GEMINI = 'gemini-timing-probe-secret'
 const ANTHROPIC = 'sk-ant-timing-probe-secret'
 const TOKEN = 'probe-token-should-not-leak-xyz'
 const SERVICE = 'service-role-timing-probe-secret'
-const BRANCH = 'cursor/citations-timing-probe'
+const PREVIEW_HOST = 'a1b2c3d4-grank.example.workers.dev'
 
 type Call = { url: string; method: string; body: string; headers: Record<string, string> }
 
@@ -138,7 +138,6 @@ function groundingPayload(text = 'A grounded answer for a software buyer.') {
 
 function env(extra: Record<string, string | undefined> = {}) {
   return {
-    CF_PAGES_BRANCH: BRANCH,
     PROBE_TOKEN: TOKEN,
     OPENAI_API_KEY: OPENAI,
     GEMINI_API_KEY: GEMINI,
@@ -147,11 +146,16 @@ function env(extra: Record<string, string | undefined> = {}) {
   }
 }
 
-function ask(query: string, token: string | null = TOKEN, extra?: Record<string, string | undefined>) {
+function ask(
+  query: string,
+  token: string | null = TOKEN,
+  extra?: Record<string, string | undefined>,
+  host = PREVIEW_HOST,
+) {
   const headers = new Headers()
   if (token !== null) headers.set('x-probe-token', token)
   return probe({
-    request: new Request(`https://grank.pages.dev/api/citations-timing?${query}`, { headers }),
+    request: new Request(`https://${host}/api/citations-timing?${query}`, { headers }),
     env: env(extra),
   })
 }
@@ -376,12 +380,19 @@ describe('probe guard', { concurrency: false }, () => {
     assert.equal(probeTokenFromEnv(undefined), '')
     assert.equal(probeTokenFromEnv({ PROBE_TOKEN: '   ' }), '')
     assert.equal(probeTokenFromEnv({ PROBE_TOKEN: `  ${TOKEN}  ` }), TOKEN)
-    assert.equal(citationsProbeBranchOpen(undefined), false)
-    assert.equal(citationsProbeBranchOpen({}), false)
-    assert.equal(citationsProbeBranchOpen({ CF_PAGES_BRANCH: '   ' }), false)
-    assert.equal(citationsProbeBranchOpen({ CF_PAGES_BRANCH: 'main' }), false)
-    assert.equal(citationsProbeBranchOpen({ CF_PAGES_BRANCH: ' main ' }), false)
-    assert.equal(citationsProbeBranchOpen({ CF_PAGES_BRANCH: BRANCH }), true)
+    assert.equal(citationsProbeHostOpen(PREVIEW_HOST), true)
+    assert.equal(citationsProbeHostOpen('A1B2C3D4-GRANK.Example.workers.dev'), true)
+    assert.equal(citationsProbeHostOpen('staging-grank.example.workers.dev'), true)
+    assert.equal(citationsProbeHostOpen('grank.pages.dev'), false)
+    assert.equal(citationsProbeHostOpen('www.grank.pages.dev'), false)
+    assert.equal(citationsProbeHostOpen('cursor-citations-timing-prob.grank.pages.dev'), false)
+    assert.equal(citationsProbeHostOpen('grank.example.workers.dev'), false)
+    assert.equal(citationsProbeHostOpen('grank.com'), false)
+    assert.equal(citationsProbeHostOpen('www.grank.com'), false)
+    assert.equal(citationsProbeHostOpen('app.grank.dev'), false)
+    assert.equal(citationsProbeHostOpen('localhost'), false)
+    assert.equal(citationsProbeHostOpen('-grank.example.workers.dev'), false)
+    assert.equal(citationsProbeHostOpen('a1b2c3d4-other.example.workers.dev'), false)
   })
 
   it('returns 404 when the token env is missing', async () => {
@@ -416,24 +427,30 @@ describe('probe guard', { concurrency: false }, () => {
     }
   })
 
-  it('returns 404 on main even with the correct token', async () => {
+  it('returns 404 on production hosts even with the correct token', async () => {
     const mock = install(() => {
       throw new Error('fetch leaked')
     })
     try {
-      const res = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: 'main' })
-      assert.equal(res.status, 404)
-      const unset = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: undefined })
-      assert.equal(unset.status, 404)
-      const padded = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: ' main ' })
-      assert.equal(padded.status, 404)
+      for (const host of [
+        'grank.pages.dev',
+        'www.grank.com',
+        'grank.example.workers.dev',
+        'cursor-citations-timing-prob.grank.pages.dev',
+      ]) {
+        const res = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: 'main' }, host)
+        assert.equal(res.status, 404, host)
+        const body = (await res.json()) as { error?: string }
+        assert.equal(body.error, 'Not found')
+        assert.equal(JSON.stringify(body).includes(TOKEN), false)
+      }
       assert.equal(mock.calls.length, 0)
     } finally {
       mock.restore()
     }
   })
 
-  it('runs on a non-main branch when the token matches', async () => {
+  it('runs on a version preview host when the token matches', async () => {
     const mock = install((call) => {
       if (call.url.includes('/v1/responses')) {
         return new Response(JSON.stringify(searchPayload(`Search answer ${OPENAI} ${TOKEN}`)), { status: 200 })
@@ -560,6 +577,11 @@ describe('probe guard', { concurrency: false }, () => {
         if (call.url.includes('/rest/v1/checks')) return 'supabase'
         return call.url
       })
+      const checks = mock.calls.filter((call) => call.url.includes('/rest/v1/checks'))
+      assert.equal(checks.length, 1)
+      assert.equal(checks[0]?.method, 'GET')
+      assert.match(checks[0]?.url || '', /\/rest\/v1\/checks\?select=id&limit=1$/)
+      assert.equal(mock.calls.some((call) => /supabase\.co/.test(call.url) && call.method !== 'GET'), false)
       assert.deepEqual(kinds, [
         'gemini',
         'gemini',
