@@ -4,21 +4,18 @@
  * GET /api/citations-timing?cap=0..6&domain=...&n=12&order=last|first
  * Header: `x-probe-token: <PROBE_TOKEN>`
  *
- * This file is the route. `functions/api/<name>.ts` exporting `onRequest` is
- * `/api/<name>`, the same file routing as `/api/visibility` and the other
- * handlers. There is no wrangler route table and no `_routes.json`. A Worker
- * build that compiles the `functions/` directory includes this file.
+ * This file is the route. Cloudflare Pages maps `functions/api/<name>.ts`
+ * exporting `onRequest` to `/api/<name>`, the same way as `/api/visibility`.
  * `functions/lib/slots.ts` is not a route.
  *
- * 404 unless both of these hold. The token is never echoed. There is no
- * `CITATIONS_TIMING_PROBE` flag and no `CF_PAGES_BRANCH` check (that variable
- * is unset on Workers).
+ * 404 unless all of these hold. The token is never echoed. There is no
+ * `CITATIONS_TIMING_PROBE` flag.
  * - `PROBE_TOKEN` is set and `x-probe-token` matches it (constant-time).
- * - The host matches the allowlist
- *   `^[a-z0-9]+-grank\.[a-z0-9-]+\.workers\.dev$`
- *   (`<version-prefix>-grank.<subdomain>.workers.dev`).
- *   Everything else is 404, including `grank.<subdomain>.workers.dev`,
- *   `pages.dev`, and any custom domain.
+ * - The host matches the allowlist `^[a-z0-9-]+\.grank\.pages\.dev$`
+ *   (a Pages hash or branch-alias preview). Bare `grank.pages.dev`, any
+ *   other host, `workers.dev`, and custom domains are 404.
+ * - `CF_PAGES_BRANCH` is not `main`. Any other branch is allowed. When the
+ *   variable is unset, the host and token are enough.
  *
  * Measures a signed-in Run again plus searched answers under Cloudflare Pages'
  * 6 simultaneous outbound connections. Gemini grounding is always on here
@@ -117,6 +114,7 @@ const QUESTION_BANK = [
 export const PROBE_QUESTION_BANK = QUESTION_BANK
 
 type ProbeEnv = {
+  CF_PAGES_BRANCH?: string
   PROBE_TOKEN?: string
   OPENAI_API_KEY?: string
   GEMINI_API_KEY?: string
@@ -157,12 +155,21 @@ export type ProbeRow = {
   hasSearchEntryPoint?: boolean
 }
 
-/** Allowlist. `<version-prefix>-grank.<subdomain>.workers.dev` only. */
-export const CITATIONS_PROBE_HOST = /^[a-z0-9]+-grank\.[a-z0-9-]+\.workers\.dev$/
+/** Allowlist. Pages hash or branch-alias preview: `<prefix>.grank.pages.dev`. */
+export const CITATIONS_PROBE_HOST = /^[a-z0-9-]+\.grank\.pages\.dev$/
 
 /** True only when `host` matches `CITATIONS_PROBE_HOST`. Every other host is closed. */
 export function citationsProbeHostOpen(host: string): boolean {
   return CITATIONS_PROBE_HOST.test(host.trim().toLowerCase())
+}
+
+/**
+ * Production (`main`) stays closed. Any other branch is open. An unset or
+ * blank branch does not close the probe; the host and token still have to match.
+ */
+export function citationsProbeBranchClosed(env: { CF_PAGES_BRANCH?: string } | undefined): boolean {
+  const branch = typeof env?.CF_PAGES_BRANCH === 'string' ? env.CF_PAGES_BRANCH.trim() : ''
+  return branch === 'main'
 }
 
 export function probeTokenFromEnv(env: { PROBE_TOKEN?: string } | undefined): string {
@@ -454,7 +461,12 @@ export async function onRequest(context: { request: Request; env?: ProbeEnv }): 
   const env = context.env
   const token = probeTokenFromEnv(env)
   const host = new URL(request.url).hostname
-  if (!citationsProbeHostOpen(host) || !token || !probeTokensEqual(token, request.headers.get('x-probe-token') ?? '')) {
+  if (
+    !citationsProbeHostOpen(host) ||
+    citationsProbeBranchClosed(env) ||
+    !token ||
+    !probeTokensEqual(token, request.headers.get('x-probe-token') ?? '')
+  ) {
     return notFound()
   }
   if (request.method !== 'GET') return json(405, { error: 'Use GET' })

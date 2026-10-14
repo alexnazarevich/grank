@@ -1,7 +1,7 @@
 /**
  * Citations timing probe. Parsing, miss classes, and the preview guard.
- * The probe is closed on production hosts. It opens only on a Workers version
- * preview URL when `x-probe-token` matches `PROBE_TOKEN`.
+ * The probe opens only on a Pages preview host (`*.grank.pages.dev`) when
+ * `x-probe-token` matches `PROBE_TOKEN`. `CF_PAGES_BRANCH=main` is 404.
  */
 import assert from 'node:assert/strict'
 import { beforeEach, describe, it } from 'node:test'
@@ -9,6 +9,7 @@ import { resetClaudeModelMemo } from '../functions/api/claude.ts'
 import { onRequest as probe } from '../functions/api/citations-timing.ts'
 import {
   CITATIONS_PROBE_HOST,
+  citationsProbeBranchClosed,
   citationsProbeHostOpen,
   parseProbeCap,
   probeLogLine,
@@ -37,7 +38,8 @@ const GEMINI = 'gemini-timing-probe-secret'
 const ANTHROPIC = 'sk-ant-timing-probe-secret'
 const TOKEN = 'probe-token-should-not-leak-xyz'
 const SERVICE = 'service-role-timing-probe-secret'
-const PREVIEW_HOST = 'a1b2c3d4-grank.example.workers.dev'
+const PREVIEW_HOST = '9753f4bb.grank.pages.dev'
+const BRANCH_ALIAS = 'cursor-citations-timing-prob.grank.pages.dev'
 
 type Call = { url: string; method: string; body: string; headers: Record<string, string> }
 
@@ -383,27 +385,32 @@ describe('probe guard', { concurrency: false }, () => {
     assert.equal(probeTokenFromEnv({ PROBE_TOKEN: `  ${TOKEN}  ` }), TOKEN)
   })
 
-  it('allows only version preview hosts', () => {
-    assert.equal(String(CITATIONS_PROBE_HOST), '/^[a-z0-9]+-grank\\.[a-z0-9-]+\\.workers\\.dev$/')
-    for (const host of [PREVIEW_HOST, 'A1B2C3D4-GRANK.Example.workers.dev', 'staging-grank.my-account.workers.dev']) {
+  it('allows only Pages preview hosts', () => {
+    assert.equal(String(CITATIONS_PROBE_HOST), '/^[a-z0-9-]+\\.grank\\.pages\\.dev$/')
+    for (const host of [PREVIEW_HOST, '9753F4BB.GRANK.PAGES.DEV', BRANCH_ALIAS, 'www.grank.pages.dev']) {
       assert.equal(citationsProbeHostOpen(host), true, host)
     }
     for (const host of [
-      'grank.example.workers.dev',
       'grank.pages.dev',
-      'www.grank.pages.dev',
-      'cursor-citations-timing-prob.grank.pages.dev',
+      'other.pages.dev',
+      'a1b2c3d4-grank.example.workers.dev',
+      'grank.example.workers.dev',
       'grank.com',
       'www.grank.com',
       'app.grank.dev',
       'localhost',
-      '-grank.example.workers.dev',
-      'ab-cd-grank.example.workers.dev',
-      'a1b2c3d4-other.example.workers.dev',
-      'a1b2c3d4-grank.example.workers.dev.evil.com',
+      '9753f4bb.grank.pages.dev.evil.com',
+      'foo.bar.grank.pages.dev',
     ]) {
       assert.equal(citationsProbeHostOpen(host), false, host)
     }
+    assert.equal(citationsProbeBranchClosed(undefined), false)
+    assert.equal(citationsProbeBranchClosed({}), false)
+    assert.equal(citationsProbeBranchClosed({ CF_PAGES_BRANCH: '' }), false)
+    assert.equal(citationsProbeBranchClosed({ CF_PAGES_BRANCH: '   ' }), false)
+    assert.equal(citationsProbeBranchClosed({ CF_PAGES_BRANCH: 'cursor/citations-timing-probe' }), false)
+    assert.equal(citationsProbeBranchClosed({ CF_PAGES_BRANCH: 'main' }), true)
+    assert.equal(citationsProbeBranchClosed({ CF_PAGES_BRANCH: ' main ' }), true)
   })
 
   it('returns 404 when the token env is missing', async () => {
@@ -438,23 +445,41 @@ describe('probe guard', { concurrency: false }, () => {
     }
   })
 
-  it('returns 404 on production hosts even with the correct token', async () => {
+  it('returns 404 on production hosts and on main even with the correct token', async () => {
     const mock = install(() => {
       throw new Error('fetch leaked')
     })
     try {
-      for (const host of [
-        'grank.pages.dev',
-        'www.grank.com',
-        'grank.example.workers.dev',
-        'cursor-citations-timing-prob.grank.pages.dev',
-      ]) {
-        const res = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: 'main' }, host)
+      for (const host of ['grank.pages.dev', 'www.grank.com', 'a1b2c3d4-grank.example.workers.dev', 'grank.example.workers.dev']) {
+        const res = await ask('cap=6&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: 'cursor/citations-timing-probe' }, host)
         assert.equal(res.status, 404, host)
         const body = (await res.json()) as { error?: string }
         assert.equal(body.error, 'Not found')
         assert.equal(JSON.stringify(body).includes(TOKEN), false)
       }
+      const main = await ask('cap=0&domain=linear.app', TOKEN, {
+        CF_PAGES_BRANCH: 'main',
+        OPENAI_API_KEY: '',
+        GEMINI_API_KEY: '',
+        ANTHROPIC_API_KEY: '',
+      })
+      assert.equal(main.status, 404)
+      const padded = await ask('cap=0&domain=linear.app', TOKEN, { CF_PAGES_BRANCH: ' main ' })
+      assert.equal(padded.status, 404)
+      const other = await ask('cap=0&domain=linear.app', TOKEN, {
+        CF_PAGES_BRANCH: 'cursor/citations-timing-probe',
+        OPENAI_API_KEY: '',
+        GEMINI_API_KEY: '',
+        ANTHROPIC_API_KEY: '',
+      })
+      assert.equal(other.status, 200)
+      const unset = await ask('cap=0&domain=linear.app', TOKEN, {
+        CF_PAGES_BRANCH: undefined,
+        OPENAI_API_KEY: '',
+        GEMINI_API_KEY: '',
+        ANTHROPIC_API_KEY: '',
+      })
+      assert.equal(unset.status, 200)
       assert.equal(mock.calls.length, 0)
     } finally {
       mock.restore()
