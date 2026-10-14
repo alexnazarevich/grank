@@ -14,10 +14,11 @@
  * `CITATIONS_TIMING_PROBE` flag and no `CF_PAGES_BRANCH` check (that variable
  * is unset on Workers).
  * - `PROBE_TOKEN` is set and `x-probe-token` matches it (constant-time).
- * - The host is a Workers version preview URL:
- *   `<version-prefix>-grank.<account>.workers.dev`
- *   Closed hosts: `grank.pages.dev`, any custom domain, and the production
- *   workers.dev host `grank.<account>.workers.dev` (no version prefix).
+ * - The host matches the allowlist
+ *   `^[a-z0-9]+-grank\.[a-z0-9-]+\.workers\.dev$`
+ *   (`<version-prefix>-grank.<subdomain>.workers.dev`).
+ *   Everything else is 404, including `grank.<subdomain>.workers.dev`,
+ *   `pages.dev`, and any custom domain.
  *
  * Measures a signed-in Run again plus searched answers under Cloudflare Pages'
  * 6 simultaneous outbound connections. Gemini grounding is always on here
@@ -156,24 +157,12 @@ export type ProbeRow = {
   hasSearchEntryPoint?: boolean
 }
 
-/**
- * Open only on a Workers version preview URL for the `grank` worker:
- * `<version-prefix>-grank.<account>.workers.dev`.
- *
- * Closed: `grank.pages.dev`, any custom domain (and any other non-matching
- * host), and the production workers.dev host `grank.<account>.workers.dev`.
- */
+/** Allowlist. `<version-prefix>-grank.<subdomain>.workers.dev` only. */
+export const CITATIONS_PROBE_HOST = /^[a-z0-9]+-grank\.[a-z0-9-]+\.workers\.dev$/
+
+/** True only when `host` matches `CITATIONS_PROBE_HOST`. Every other host is closed. */
 export function citationsProbeHostOpen(host: string): boolean {
-  const name = host.trim().toLowerCase().replace(/:\d+$/, '').replace(/\.+$/, '')
-  const labels = name.split('.')
-  if (labels.length !== 4 || labels[2] !== 'workers' || labels[3] !== 'dev') return false
-  const account = labels[1] ?? ''
-  const left = labels[0] ?? ''
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(account)) return false
-  if (!left.endsWith('-grank')) return false
-  const prefix = left.slice(0, -'-grank'.length)
-  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(prefix)) return false
-  return true
+  return CITATIONS_PROBE_HOST.test(host.trim().toLowerCase())
 }
 
 export function probeTokenFromEnv(env: { PROBE_TOKEN?: string } | undefined): string {

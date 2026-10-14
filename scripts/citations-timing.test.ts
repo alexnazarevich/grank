@@ -8,6 +8,7 @@ import { beforeEach, describe, it } from 'node:test'
 import { resetClaudeModelMemo } from '../functions/api/claude.ts'
 import { onRequest as probe } from '../functions/api/citations-timing.ts'
 import {
+  CITATIONS_PROBE_HOST,
   citationsProbeHostOpen,
   parseProbeCap,
   probeLogLine,
@@ -380,19 +381,29 @@ describe('probe guard', { concurrency: false }, () => {
     assert.equal(probeTokenFromEnv(undefined), '')
     assert.equal(probeTokenFromEnv({ PROBE_TOKEN: '   ' }), '')
     assert.equal(probeTokenFromEnv({ PROBE_TOKEN: `  ${TOKEN}  ` }), TOKEN)
-    assert.equal(citationsProbeHostOpen(PREVIEW_HOST), true)
-    assert.equal(citationsProbeHostOpen('A1B2C3D4-GRANK.Example.workers.dev'), true)
-    assert.equal(citationsProbeHostOpen('staging-grank.example.workers.dev'), true)
-    assert.equal(citationsProbeHostOpen('grank.pages.dev'), false)
-    assert.equal(citationsProbeHostOpen('www.grank.pages.dev'), false)
-    assert.equal(citationsProbeHostOpen('cursor-citations-timing-prob.grank.pages.dev'), false)
-    assert.equal(citationsProbeHostOpen('grank.example.workers.dev'), false)
-    assert.equal(citationsProbeHostOpen('grank.com'), false)
-    assert.equal(citationsProbeHostOpen('www.grank.com'), false)
-    assert.equal(citationsProbeHostOpen('app.grank.dev'), false)
-    assert.equal(citationsProbeHostOpen('localhost'), false)
-    assert.equal(citationsProbeHostOpen('-grank.example.workers.dev'), false)
-    assert.equal(citationsProbeHostOpen('a1b2c3d4-other.example.workers.dev'), false)
+  })
+
+  it('allows only version preview hosts', () => {
+    assert.equal(String(CITATIONS_PROBE_HOST), '/^[a-z0-9]+-grank\\.[a-z0-9-]+\\.workers\\.dev$/')
+    for (const host of [PREVIEW_HOST, 'A1B2C3D4-GRANK.Example.workers.dev', 'staging-grank.my-account.workers.dev']) {
+      assert.equal(citationsProbeHostOpen(host), true, host)
+    }
+    for (const host of [
+      'grank.example.workers.dev',
+      'grank.pages.dev',
+      'www.grank.pages.dev',
+      'cursor-citations-timing-prob.grank.pages.dev',
+      'grank.com',
+      'www.grank.com',
+      'app.grank.dev',
+      'localhost',
+      '-grank.example.workers.dev',
+      'ab-cd-grank.example.workers.dev',
+      'a1b2c3d4-other.example.workers.dev',
+      'a1b2c3d4-grank.example.workers.dev.evil.com',
+    ]) {
+      assert.equal(citationsProbeHostOpen(host), false, host)
+    }
   })
 
   it('returns 404 when the token env is missing', async () => {
