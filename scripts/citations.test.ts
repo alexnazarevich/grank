@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { purgeGeminiCitations, searchOneQuestion } from '../functions/api/citations.ts'
+import { ownedReportProgressStream, settleSearches } from '../functions/lib/searchProgress.ts'
+import { readOwnedReportResponse } from '../src/fullReportClient.ts'
 import { citationsFromWebSearchPayload, chatgptWebSearchBody, groundingFromGeminiPayload } from '../functions/api/searched.ts'
 import { createOutboundSlots } from '../functions/lib/slots.ts'
 import { onRequest as onVisibility } from '../functions/api/visibility.ts'
@@ -181,17 +183,105 @@ describe('citations', () => {
     assert.equal(/ChatGPT|Gemini|Claude|\d|question/i.test(CITATION_COPY.searching), false)
     const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
     const guestHome = app.slice(app.indexOf("phase !== 'result'"), app.indexOf('!screen && reportPhase'))
-    assert.equal(guestHome.includes('citationSearchBusy'), false)
+    assert.equal(guestHome.includes('searchingSources'), false)
     assert.equal(guestHome.includes('CITATION_COPY.searching'), false)
     assert.equal(guestHome.includes('Searching the web for sources'), false)
+    const ownedRun = app.slice(app.indexOf('async function runOwnedReport'), app.indexOf('async function runOwnedShort'))
+    assert.equal(ownedRun.includes('setSearchingSources(true)'), true)
+    assert.equal(ownedRun.includes('onSearchesSettled'), true)
     const reportAgain = app.slice(app.indexOf('screen && fullReport && reportOnly'), app.indexOf(') : screen ?'))
-    assert.equal(reportAgain.includes('citationSearchBusy'), true)
+    assert.equal(reportAgain.includes('searchingSources'), true)
     assert.equal(reportAgain.includes('CITATION_COPY.searching'), true)
     const landAgain = app.slice(app.indexOf(') : screen ?'), app.indexOf('full-report-door'))
     assert.equal(landAgain.includes('CITATION_COPY.searching'), false)
     const visibility = readFileSync(new URL('../functions/api/visibility.ts', import.meta.url), 'utf8')
     assert.equal(visibility.includes('Searching the web for sources'), false)
     assert.equal(visibility.includes('CITATION_COPY'), false)
+  })
+
+  async function until(label: string, predicate: () => boolean) {
+    const start = Date.now()
+    while (Date.now() - start < 1000) {
+      if (predicate()) return
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    throw new Error(label)
+  }
+
+  it('shows the searching line while searched calls run and hides when they finish', async () => {
+    let releaseReport: () => void = () => {}
+    const reportHeld = new Promise<void>((resolve) => {
+      releaseReport = resolve
+    })
+    let visible = false
+    const res = ownedReportProgressStream(async (onSettled) => {
+      visible = true
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      onSettled()
+      await reportHeld
+      return new Response(JSON.stringify({ ok: true, report: 'full' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    let finished = false
+    const pending = readOwnedReportResponse(res, () => {
+      visible = false
+    }).then((result) => {
+      finished = true
+      return result
+    })
+    await until('line shows while searches run', () => visible)
+    assert.equal(visible, true)
+    await until('line hides when searches finish', () => visible === false)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(finished, false)
+    assert.equal(visible, false)
+    releaseReport()
+    const result = await pending
+    assert.equal(visible, false)
+    assert.equal(result.status, 200)
+    assert.equal(finished, true)
+  })
+
+  it('hides the searching line when every searched call misses', async () => {
+    const missed = [{ engine: 'chatgpt', text: '', sources: [], miss: { class: 'timeout' } }]
+    let noted = false
+    await settleSearches(Promise.reject(new Error('search failed')), () => {
+      noted = true
+    }).catch(() => {})
+    assert.equal(noted, true)
+    let releaseReport: () => void = () => {}
+    const reportHeld = new Promise<void>((resolve) => {
+      releaseReport = resolve
+    })
+    let visible = false
+    const res = ownedReportProgressStream(async (onSettled) => {
+      visible = true
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      await settleSearches(Promise.resolve(new Map([['q', missed]])), onSettled)
+      await reportHeld
+      return new Response(
+        JSON.stringify({ ok: true, report: 'full', themes: [{ questions: [{ searches: missed }] }] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    let finished = false
+    const pending = readOwnedReportResponse(res, () => {
+      visible = false
+    }).then((result) => {
+      finished = true
+      return result
+    })
+    await until('line shows before the miss settles', () => visible)
+    assert.equal(visible, true)
+    await until('line hides on a miss', () => visible === false)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    assert.equal(finished, false)
+    releaseReport()
+    const result = await pending
+    assert.equal(visible, false)
+    assert.equal(JSON.stringify(result.data).includes('timeout'), true)
   })
 
   it('does not call Gemini grounding when the switch is off', async () => {

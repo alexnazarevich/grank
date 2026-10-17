@@ -325,6 +325,7 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<VisibilityMode>('unbranded')
   const [digStatus, setDigStatus] = useState<DigStatus>('idle')
   const [busy, setBusy] = useState(false)
+  const [searchingSources, setSearchingSources] = useState(false)
   const [config, setConfig] = useState<ProductConfig>(PRODUCT_DEFAULTS)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [email, setEmail] = useState('')
@@ -1276,7 +1277,12 @@ export default function App() {
       setQuestionsDirty(false)
       setOwnedSet(true)
     }
-    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions, savedId)
+    const willSearch = !openaiPaused && unbrandedQuestionTexts(fullReport.themes).length > 0
+    if (willSearch) setSearchingSources(true)
+    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions, savedId, {
+      onSearchesSettled: () => setSearchingSources(false),
+    })
+    setSearchingSources(false)
     setBusy(false)
     if (result.ok) {
       setOwnedSet(true)
@@ -1396,12 +1402,6 @@ export default function App() {
   const pinRunMatches = pinSignature() === (ranPins ?? '')
   const ownedCount = fullReport ? ownedFromReport(fullReport).length : (activeBeat()?.questions.length ?? 0)
   const questionToolsBusy = busy || questionsSaving
-  const citationSearchBusy =
-    busy &&
-    reportOnly &&
-    Boolean(session) &&
-    !openaiPaused &&
-    unbrandedQuestionTexts(fullReport?.themes ?? []).length > 0
   const showDelta = owning && (ownedSet || runs.length > 0)
   const runPreview: CheckRun | null = (() => {
     if (runs.length > 0) return null
@@ -1688,7 +1688,7 @@ export default function App() {
                     {busy ? 'Generating…' : config.copy.runAgainCta}
                   </button>
                 </div>
-                {citationSearchBusy ? (
+                {searchingSources ? (
                   <p className="status" role="status">
                     {CITATION_COPY.searching}
                   </p>

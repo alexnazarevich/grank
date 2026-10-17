@@ -93,6 +93,7 @@ import {
   searchQuestionList,
 } from './citations.ts'
 import type { OutboundSlots } from '../lib/slots.ts'
+import { ownedReportProgressStream, settleSearches, wantsSearchProgress } from '../lib/searchProgress.ts'
 import type { QuestionSearch } from '../../src/fullReport.ts'
 
 const MODEL = 'gpt-4o-mini'
@@ -799,6 +800,7 @@ async function answerOwnedReport(opts: {
   request: Request
   checkId: string | null
   env?: ReportEnv
+  onSearchesSettled?: () => void
 }): Promise<Response> {
   await ensureProfile(opts.sb, opts.userId).catch(() => {})
   const planName = await readPlan(opts.sb, opts.userId, opts.config)
@@ -829,16 +831,19 @@ async function answerOwnedReport(opts: {
   const geminiOn = citationsGeminiEnabled(opts.env)
   const geminiTask = softGemini(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
   const claudeTask = softClaude(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
-  const searchTask = preview
-    ? searchQuestionList({
-        questions: cappedQuestions(preview),
-        domain: opts.domain,
-        env: opts.env,
-        slots,
-        scrub,
-        apiKey: opts.apiKey,
-      })
-    : Promise.resolve(new Map<string, QuestionSearch[]>())
+  const searchTask = settleSearches(
+    preview
+      ? searchQuestionList({
+          questions: cappedQuestions(preview),
+          domain: opts.domain,
+          env: opts.env,
+          slots,
+          scrub,
+          apiKey: opts.apiKey,
+        })
+      : Promise.resolve(new Map<string, QuestionSearch[]>()),
+    opts.onSearchesSettled,
+  )
 
   const excerpt = await homepageExcerpt(opts.domain, slots)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, opts.apiKey) : null
@@ -1024,7 +1029,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       })
     }
     if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
-    return answerOwnedReport({
+    const ownedArgs = {
       sb,
       userId: authed.user.id,
       domain,
@@ -1034,7 +1039,11 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       request,
       checkId: incoming.checkId,
       env: context.env,
-    })
+    }
+    if (wantsSearchProgress(request)) {
+      return ownedReportProgressStream((onSearchesSettled) => answerOwnedReport({ ...ownedArgs, onSearchesSettled }))
+    }
+    return answerOwnedReport(ownedArgs)
   }
 
   if (paused) return json(503, { error: FULL_REPORT_PAUSED_ERROR, openaiPaused: true })
