@@ -13,7 +13,10 @@ import {
   type QuestionSearch,
 } from './fullReport.ts'
 
-/** Locked. First this many unbranded questions are searched on a full run. */
+/**
+ * How many unbranded questions a full run searches.
+ * Drop the cap by changing this number. The 8s slot timeout stays.
+ */
 export const CITATIONS_CAP = 3
 
 export const CITATION_COPY = {
@@ -36,6 +39,7 @@ export const CITATION_COPY = {
   suggestions: 'Google searches behind this answer',
   before: 'This report was saved before Citations. Run again to add sources.',
   unbrandedOnly: 'Citations cover unbranded questions only.',
+  searching: 'Searching the web for sources…',
 } as const
 
 const MISS_PLAIN = new Set(['missing_key', 'timeout', 'bad_json', 'empty'])
@@ -447,6 +451,7 @@ export function citationCopyCorpus(): string[] {
     CITATION_COPY.suggestions,
     CITATION_COPY.before,
     CITATION_COPY.unbrandedOnly,
+    CITATION_COPY.searching,
     summaryLine('chatgpt', 1, 0),
     summaryLine('chatgpt', 2, 1),
     summaryLine('gemini', 1, 'miss'),

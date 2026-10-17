@@ -36,8 +36,8 @@ import {
   type FullReportOk,
   type SignedGeminiMiss,
 } from './fullReportClient'
-import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, type FullReport, type RunPin } from './fullReport'
-import { patchQuestionSearches } from './citations'
+import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, unbrandedQuestionTexts, type FullReport, type RunPin } from './fullReport'
+import { CITATION_COPY, patchQuestionSearches } from './citations'
 import {
   fetchTestQuestion,
   patchTestAnswer,
@@ -1396,6 +1396,12 @@ export default function App() {
   const pinRunMatches = pinSignature() === (ranPins ?? '')
   const ownedCount = fullReport ? ownedFromReport(fullReport).length : (activeBeat()?.questions.length ?? 0)
   const questionToolsBusy = busy || questionsSaving
+  const citationSearchBusy =
+    busy &&
+    reportOnly &&
+    Boolean(session) &&
+    !openaiPaused &&
+    unbrandedQuestionTexts(fullReport?.themes ?? []).length > 0
   const showDelta = owning && (ownedSet || runs.length > 0)
   const runPreview: CheckRun | null = (() => {
     if (runs.length > 0) return null
@@ -1675,12 +1681,19 @@ export default function App() {
               testQuestionDisabled={questionToolsBusy}
             />
             {owning ? (
-              <div className="save-row">
-                {openaiPaused ? <ChatGptPausedNote /> : null}
-                <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
-                  {busy ? 'Generating…' : config.copy.runAgainCta}
-                </button>
-              </div>
+              <>
+                <div className="save-row">
+                  {openaiPaused ? <ChatGptPausedNote /> : null}
+                  <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
+                    {busy ? 'Generating…' : config.copy.runAgainCta}
+                  </button>
+                </div>
+                {citationSearchBusy ? (
+                  <p className="status" role="status">
+                    {CITATION_COPY.searching}
+                  </p>
+                ) : null}
+              </>
             ) : null}
             {reportPhase === 'error' && reportMessage ? <p className="err">{reportMessage}</p> : null}
             {questionsNote ? <p className={questionsNote === 'Questions saved.' ? 'status' : 'err'}>{questionsNote}</p> : null}

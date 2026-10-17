@@ -160,12 +160,35 @@ describe('citations', () => {
       [chat('asana.com')],
       [chat('monday.com')],
     ])
-    assert.equal(searchedQuestions(base, 'chatgpt').length, 3)
+    assert.equal(searchedQuestions(base, 'chatgpt').length, CITATIONS_CAP)
     const within = patchQuestionSearches(base, base.themes[0]!.questions[0]!.question, [chat('notion.com')], true)
-    assert.equal(searchedQuestions(within, 'chatgpt').length, 3)
-    const past = patchQuestionSearches(base, base.themes[0]!.questions[3]!.question, [chat('height.app')], true)
-    assert.equal(searchedQuestions(past, 'chatgpt').length, 4)
+    assert.equal(searchedQuestions(within, 'chatgpt').length, CITATIONS_CAP)
+    const past = patchQuestionSearches(
+      base,
+      base.themes[0]!.questions[CITATIONS_CAP]!.question,
+      [chat('height.app')],
+      true,
+    )
+    assert.equal(searchedQuestions(past, 'chatgpt').length, CITATIONS_CAP + 1)
     assert.equal(searchedQuestions(past, 'gemini').length, 0)
+  })
+
+  it('shows a searching line under signed-in Run again and not for guests', () => {
+    assert.equal(CITATION_COPY.searching, 'Searching the web for sources…')
+    assert.equal(/ChatGPT|Gemini|Claude|\d|question/i.test(CITATION_COPY.searching), false)
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    const guestHome = app.slice(app.indexOf("phase !== 'result'"), app.indexOf('!screen && reportPhase'))
+    assert.equal(guestHome.includes('citationSearchBusy'), false)
+    assert.equal(guestHome.includes('CITATION_COPY.searching'), false)
+    assert.equal(guestHome.includes('Searching the web for sources'), false)
+    const reportAgain = app.slice(app.indexOf('screen && fullReport && reportOnly'), app.indexOf(') : screen ?'))
+    assert.equal(reportAgain.includes('citationSearchBusy'), true)
+    assert.equal(reportAgain.includes('CITATION_COPY.searching'), true)
+    const landAgain = app.slice(app.indexOf(') : screen ?'), app.indexOf('full-report-door'))
+    assert.equal(landAgain.includes('CITATION_COPY.searching'), false)
+    const visibility = readFileSync(new URL('../functions/api/visibility.ts', import.meta.url), 'utf8')
+    assert.equal(visibility.includes('Searching the web for sources'), false)
+    assert.equal(visibility.includes('CITATION_COPY'), false)
   })
 
   it('does not call Gemini grounding when the switch is off', async () => {
