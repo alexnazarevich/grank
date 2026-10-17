@@ -17,6 +17,7 @@ import {
   type GeminiMiss,
   type GeminiMissClass,
 } from './visibility.ts'
+import type { OutboundSlots } from '../lib/slots.ts'
 
 export const CLAUDE_MODEL_DEFAULT = 'claude-haiku-5-5'
 export const CLAUDE_MODEL_FALLBACK = 'claude-haiku-4-5'
@@ -345,6 +346,8 @@ export async function claudeReplies(opts: {
   /** Clamped to CLAUDE_TIMEOUT_CAP_MS. Zero skips the call and reports timeout. */
   timeoutMs?: number
   signal?: AbortSignal
+  /** Signed-in Run again and Run test. The 8s abort starts when a slot is granted. */
+  slots?: OutboundSlots
 }): Promise<ClaudeReplySet> {
   const blank = () => opts.questions.map(() => '')
   if (opts.questions.length === 0) return { replies: [] }
@@ -354,6 +357,25 @@ export async function claudeReplies(opts: {
     typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) ? Math.floor(rawTimeout) : CLAUDE_TIMEOUT_CAP_MS
   const timeoutMs = Math.min(CLAUDE_TIMEOUT_CAP_MS, Math.max(0, requested))
   if (timeoutMs === 0 || opts.signal?.aborted) return noteClaudeMiss(blank(), { class: 'timeout' })
+  if (opts.slots) {
+    const slots = opts.slots
+    const run = (questions: string[], shape: 'single' | 'chunk') =>
+      slots.use({ timeoutMs, now: () => Date.now(), parent: opts.signal }, (slot) =>
+        claudeSlice({
+          apiKey: opts.apiKey,
+          model: opts.model,
+          questions,
+          scrub: opts.scrub,
+          signal: slot.signal,
+          shape,
+        }),
+      )
+    if (opts.questions.length === 1) return run(opts.questions, 'single')
+    const parts = await Promise.all(claudeQuestionChunks(opts.questions).map((questions) => run(questions, 'chunk')))
+    const replies = parts.flatMap((part) => part.replies)
+    const miss = claudeMissFromChunks(parts.map((part) => part.miss))
+    return miss ? { replies, miss } : { replies }
+  }
   const timed = claudeSignal(timeoutMs, opts.signal)
   try {
     if (opts.questions.length === 1) {

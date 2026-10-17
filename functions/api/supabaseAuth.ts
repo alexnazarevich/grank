@@ -4,6 +4,7 @@
  */
 
 import type { ProductConfig } from '../../src/config/productConfig.ts'
+import type { OutboundSlots } from '../lib/slots.ts'
 
 export const SERVER_AUTH_NOT_CONFIGURED =
   'Auth not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
@@ -44,8 +45,30 @@ export function serviceHeaders(serviceRole: string, prefer?: string): Headers {
   return headers
 }
 
-export async function sbFetch(sb: ServiceDb, path: string, init: RequestInit): Promise<Response> {
-  return fetch(`${sb.url}${path}`, init)
+export async function sbFetch(
+  sb: ServiceDb,
+  path: string,
+  init: RequestInit,
+  slots?: OutboundSlots,
+): Promise<Response> {
+  const url = `${sb.url}${path}`
+  if (!slots) return fetch(url, init)
+  const parent = init.signal ?? undefined
+  return slots.use({ timeoutMs: 8_000, now: () => Date.now(), parent }, async (slot) => {
+    const response = await fetch(url, { ...init, signal: slot.signal })
+    // 204, 205, and 304 cannot carry a body. An empty buffer still counts as one.
+    const nullBody = response.status === 204 || response.status === 205 || response.status === 304
+    const body = nullBody ? null : await response.arrayBuffer()
+    if (nullBody) await response.body?.cancel().catch(() => {})
+    const headers = new Headers(response.headers)
+    headers.delete('content-encoding')
+    headers.delete('content-length')
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  })
 }
 
 export async function userFromToken(

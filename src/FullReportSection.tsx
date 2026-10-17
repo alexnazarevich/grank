@@ -18,6 +18,8 @@ import { claudeMissLine, claudeRow, geminiMissLine, geminiRow } from './engineBl
 import type { SignedGeminiMiss } from './fullReportClient.ts'
 import type { TestQuestionInput, TestQuestionOutcome } from './testQuestionClient.ts'
 import { STORY } from './story.ts'
+import { CITATION_COPY } from './citations.ts'
+import { CitationAnswers, CitationsPanel } from './CitationsTab.tsx'
 
 const GENERATED = STORY.answerLabel
 
@@ -67,7 +69,7 @@ function TestQuestionControl({
     pending.current = true
     setBusy(true)
     setError('')
-    const result = await api.run({ question, engine, themeId })
+    const result = await api.run({ question, engine, themeId, framing })
     pending.current = false
     setBusy(false)
     if (!result.ok) {
@@ -110,6 +112,21 @@ function TestQuestionControl({
 type ShownEngines = { openai: boolean; gemini: boolean; claude: boolean }
 
 const ShownEnginesContext = createContext<ShownEngines>({ openai: true, gemini: true, claude: true })
+const CitationReportContext = createContext<FullReport | null>(null)
+
+function SearchedBlocks({ item, engine }: { item: FullReportQuestion; engine: 'chatgpt' | 'gemini' }) {
+  const report = useContext(CitationReportContext)
+  const shown = useContext(ShownEnginesContext)
+  if (!report) return null
+  return (
+    <CitationAnswers
+      report={report}
+      item={item}
+      showChatGpt={engine === 'chatgpt' && shown.openai}
+      showGemini={engine === 'gemini' && shown.gemini}
+    />
+  )
+}
 
 function themeFramingOf(theme: { framing?: Framing; questions: { framing: Framing }[] }): Framing | null {
   const first = theme.questions[0]?.framing
@@ -233,7 +250,9 @@ function ReportQuestion({
         <div id={panelId} className="report-q-panel">
           {names.length > 0 ? <NameList names={names} /> : null}
           <ChatGptAnswer text={text} paused={answerPaused} />
+          <SearchedBlocks item={item} engine="chatgpt" />
           {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+          <SearchedBlocks item={item} engine="gemini" />
           {item.framing === 'unbranded' ? <ClaudeBlock question={item.question} text={item.claude ?? ''} /> : null}
           <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
         </div>
@@ -310,7 +329,9 @@ function ThemeGridRow({
               </ul>
             ) : null}
             <ChatGptAnswer text={text} paused={answerPaused} />
+            <SearchedBlocks item={item} engine="chatgpt" />
             {item.framing === 'unbranded' ? <GeminiBlock text={item.gemini ?? ''} /> : null}
+            <SearchedBlocks item={item} engine="gemini" />
             {item.framing === 'unbranded' ? <ClaudeBlock question={item.question} text={item.claude ?? ''} /> : null}
             <TestQuestionControl question={item.question} themeId={themeId} framing={item.framing} />
           </div>
@@ -521,7 +542,7 @@ function CompetitorTopicBlock({
   )
 }
 
-type ReportTab = 'over-time' | 'competitors'
+type ReportTab = 'over-time' | 'competitors' | 'citations'
 
 function ratePercents(rate: ThemeMentionRate | undefined, runCount: number): Array<number | null | undefined> {
   if (runCount > 0) return rate?.byRun ?? []
@@ -754,6 +775,7 @@ export function FullReportSection({
     <GeminiMissContext.Provider value={geminiMiss}>
     <ClaudeMissContext.Provider value={claudeMiss}>
     <ClaudeTestMissContext.Provider value={claudeTestMisses}>
+    <CitationReportContext.Provider value={report}>
     <ShownEnginesContext.Provider value={engines}>
     <TestQuestionContext.Provider
       value={{
@@ -805,8 +827,22 @@ export function FullReportSection({
         >
           {copy.competitorsTab}
         </button>
+        <button
+          type="button"
+          role="tab"
+          id="report-tab-citations"
+          aria-selected={tab === 'citations'}
+          aria-controls="report-panel-citations"
+          onClick={() => setTab('citations')}
+        >
+          {CITATION_COPY.tab}
+        </button>
       </div>
-      {tab === 'over-time' ? (
+      {tab === 'citations' ? (
+        <div role="tabpanel" id="report-panel-citations" aria-labelledby="report-tab-citations">
+          <CitationsPanel report={report} />
+        </div>
+      ) : tab === 'over-time' ? (
         <div role="tabpanel" id="report-panel-over-time" aria-labelledby="report-tab-over-time">
           {report.themes.length === 0 ? (
             <p className="why">{copy.fullReportEmptyThemes}</p>
@@ -873,6 +909,7 @@ export function FullReportSection({
     </section>
     </TestQuestionContext.Provider>
     </ShownEnginesContext.Provider>
+    </CitationReportContext.Provider>
     </ClaudeTestMissContext.Provider>
     </ClaudeMissContext.Provider>
     </GeminiMissContext.Provider>

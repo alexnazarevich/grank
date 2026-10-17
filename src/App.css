@@ -399,6 +399,10 @@ body { margin: 0; background: var(--bg); color: var(--ink); }
   padding: 0.1rem 0.35rem; border-radius: 4px; vertical-align: middle; margin-left: 0.35rem;
 }
 .tag.plain { text-transform: none; letter-spacing: 0.01em; }
+.citation-site { margin: 0.6rem 0; }
+.citation-site-head, .citation-sources, .citation-link { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.citation-own { outline: 1px solid var(--line, #d7d2c8); padding: 0.4rem 0.55rem; }
+.citation-suggestions iframe { width: 100%; min-height: 8rem; border: 1px solid var(--line, #d7d2c8); background: white; }
 .tag.live { color: var(--yes); border-color: #065f46; }
 .badge.live { color: var(--yes); border-color: #065f46; }
 .site-badge {

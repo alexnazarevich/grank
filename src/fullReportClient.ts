@@ -83,6 +83,7 @@ export function reportFromPayload(data: unknown): FullReport | null {
       model: data.model,
       includesBranded: data.includesBranded === true,
       themes: data.themes,
+      citations: data.citations,
     },
   })
 }

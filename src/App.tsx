@@ -37,10 +37,12 @@ import {
   type SignedGeminiMiss,
 } from './fullReportClient'
 import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, type FullReport, type RunPin } from './fullReport'
+import { patchQuestionSearches } from './citations'
 import {
   fetchTestQuestion,
   patchTestAnswer,
   type TestQuestionInput,
+  type TestQuestionOk,
   type TestQuestionOutcome,
 } from './testQuestionClient'
 import {
@@ -1215,6 +1217,11 @@ export default function App() {
     })
   }
 
+  function applySearches(report: FullReport, question: string, result: TestQuestionOk): FullReport {
+    if (!result.searches) return report
+    return patchQuestionSearches(report, question, result.searches, result.citationsGemini === true)
+  }
+
   async function onRunTestQuestion(input: TestQuestionInput): Promise<TestQuestionOutcome> {
     if (!session || !fullReport) return { ok: false, error: 'Sign in to run a test question.' }
     const epoch = testEpoch.current
@@ -1223,9 +1230,7 @@ export default function App() {
     if (!result.ok) return { ok: false, error: result.error }
     if (result.engine === 'gemini') {
       const gemini = result.gemini
-      setFullReport((current) =>
-        current ? patchTestAnswer(current, input.question, { engine: 'gemini', gemini }) : current,
-      )
+      setFullReport((current) => (current ? applySearches(patchTestAnswer(current, input.question, { engine: 'gemini', gemini }), input.question, result) : current))
       return { ok: true }
     }
     if (result.engine === 'claude') {
@@ -1238,14 +1243,14 @@ export default function App() {
         return next
       })
       setFullReport((current) =>
-        current ? patchTestAnswer(current, input.question, { engine: 'claude', claude }) : current,
+        current ? applySearches(patchTestAnswer(current, input.question, { engine: 'claude', claude }), input.question, result) : current,
       )
       return { ok: true }
     }
     if ('openaiPaused' in result) return { ok: true, openaiPaused: true }
     const answer = result.answer
     setFullReport((current) =>
-      current ? patchTestAnswer(current, input.question, { engine: 'openai', answer }) : current,
+      current ? applySearches(patchTestAnswer(current, input.question, { engine: 'openai', answer }), input.question, result) : current,
     )
     return { ok: true }
   }

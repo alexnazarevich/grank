@@ -1,5 +1,5 @@
 /**
- * Searched answers for the Citations tab. Reused by the temporary timing probe.
+ * Searched answers for the Citations tab.
  * One call per question. Neither path changes the plain ChatGPT, Gemini, or Claude blocks.
  *
  * ChatGPT uses the Responses API `web_search` tool (not the retired
@@ -80,6 +80,8 @@ export type GeminiGroundedResult = {
   chunks: GroundingChunk[]
   searchCount: number
   hasSearchEntryPoint: boolean
+  /** Google's Search Suggestions HTML, unmodified. Empty when the payload has none. */
+  suggestionsHtml: string
   usage: SearchUsage
   /** 2 when a gemini-3 thinkingLevel HTTP 400 was retried once without that field. */
   attempts: number
@@ -280,6 +282,8 @@ export function groundingFromGeminiPayload(payload: unknown): {
   chunks: GroundingChunk[]
   searchCount: number
   hasSearchEntryPoint: boolean
+  /** `searchEntryPoint.renderedContent` unchanged. Blank when absent. */
+  suggestionsHtml: string
   usage: SearchUsage
 } | null {
   if (!isRecord(payload) || !Array.isArray(payload.candidates)) return null
@@ -290,7 +294,7 @@ export function groundingFromGeminiPayload(payload: unknown): {
   }
   const first = payload.candidates[0]
   if (!isRecord(first)) {
-    return { text: '', chunks: [], searchCount: 0, hasSearchEntryPoint: false, usage: tokens }
+    return { text: '', chunks: [], searchCount: 0, hasSearchEntryPoint: false, suggestionsHtml: '', usage: tokens }
   }
   const texts: string[] = []
   const content = isRecord(first.content) ? first.content : null
@@ -313,11 +317,13 @@ export function groundingFromGeminiPayload(payload: unknown): {
     chunks.push({ uri, title })
   }
   const entry = isRecord(meta.searchEntryPoint) ? meta.searchEntryPoint.renderedContent : undefined
+  const suggestionsHtml = typeof entry === 'string' ? entry : ''
   return {
     text: texts.join(' ').replace(/\s+/g, ' ').trim(),
     chunks,
     searchCount,
-    hasSearchEntryPoint: typeof entry === 'string' && entry.trim() !== '',
+    hasSearchEntryPoint: suggestionsHtml.trim() !== '',
+    suggestionsHtml,
     usage: tokens,
   }
 }
@@ -507,6 +513,7 @@ export async function geminiGrounded(opts: {
     chunks: [],
     searchCount: 0,
     hasSearchEntryPoint: false,
+    suggestionsHtml: '',
     usage: emptyUsage(),
     attempts: 0,
     clock: idle(),
@@ -583,6 +590,7 @@ export async function geminiGrounded(opts: {
         usage: parsed.usage,
         searchCount: parsed.searchCount,
         hasSearchEntryPoint: parsed.hasSearchEntryPoint,
+        suggestionsHtml: parsed.suggestionsHtml,
         miss: { class: 'empty' },
       }
     }
@@ -591,6 +599,7 @@ export async function geminiGrounded(opts: {
       chunks,
       searchCount: parsed.searchCount,
       hasSearchEntryPoint: parsed.hasSearchEntryPoint,
+      suggestionsHtml: parsed.suggestionsHtml,
       usage: parsed.usage,
       attempts,
       clock,

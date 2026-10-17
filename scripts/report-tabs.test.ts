@@ -135,8 +135,8 @@ describe('full report tabs', () => {
       assert.equal(overTime > 0 && overTime < competitors, true)
       assert.match(html, /id="report-tab-over-time"[^>]*aria-selected="true"/)
       assert.match(html, /id="report-tab-competitors"[^>]*aria-selected="false"/)
-      assert.equal((html.match(/role="tab"/g) || []).length, 2)
-      assert.equal(html.includes('>Citations<'), false)
+      assert.equal((html.match(/role="tab"/g) || []).length, 3)
+      assert.match(html, />Citations</)
       assert.equal(html.includes('>Glance<'), false)
       assert.equal(html.includes('>Overview<'), false)
       assert.equal(html.includes('Generated · ChatGPT'), false)
@@ -171,7 +171,7 @@ describe('full report tabs', () => {
       assert.equal(geminiOff.includes('Monday is named only in the Gemini reply.'), false)
       assert.match(geminiOff, /Generated · Claude/)
       assert.match(geminiOff, /aria-pressed="false"/)
-      assert.equal((geminiOff.match(/role="tab"/g) || []).length, 2)
+      assert.equal((geminiOff.match(/role="tab"/g) || []).length, 3)
 
       const openaiOff = renderToStaticMarkup(
         React.createElement(FullReportSection, {

@@ -84,6 +84,17 @@ import {
   UUID_RE,
   type ServiceDb,
 } from './supabaseAuth.ts'
+import {
+  CITATIONS_CAP,
+  attachSearches,
+  cappedQuestions,
+  citationsGeminiEnabled,
+  createOutboundSlots,
+  saveCitationRows,
+  searchQuestionList,
+} from './citations.ts'
+import type { OutboundSlots } from '../lib/slots.ts'
+import type { QuestionSearch } from '../../src/fullReport.ts'
 
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -121,6 +132,7 @@ async function softGemini(
   scrub: string[],
   timeoutMs: number,
   signal?: AbortSignal,
+  slots?: OutboundSlots,
 ): Promise<GeminiReplySet> {
   const blank = () => questions.map(() => '')
   try {
@@ -134,6 +146,7 @@ async function softGemini(
       timeoutMs,
       signal,
       report: true,
+      slots,
     })
   } catch {
     console.info(geminiMissLogLine({ class: 'timeout' }))
@@ -173,6 +186,7 @@ async function softClaude(
   scrub: string[],
   timeoutMs: number,
   signal?: AbortSignal,
+  slots?: OutboundSlots,
 ): Promise<ClaudeReplySet> {
   const blank = () => questions.map(() => '')
   try {
@@ -185,6 +199,7 @@ async function softClaude(
       scrub: secret ? [...scrub, secret] : scrub,
       timeoutMs,
       signal,
+      slots,
     })
   } catch {
     console.info(claudeMissLogLine({ class: 'timeout' }))
@@ -297,24 +312,34 @@ async function domainFromRequest(request: Request): Promise<{
   }
 }
 
-async function homepageExcerpt(domain: string): Promise<string | null> {
-  try {
+async function homepageExcerpt(domain: string, slots?: OutboundSlots): Promise<string | null> {
+  const load = async (signal: AbortSignal) => {
     const res = await fetch(`https://${domain}/`, {
       redirect: 'follow',
       headers: { 'user-agent': USER_AGENT, accept: 'text/html' },
-      signal: AbortSignal.timeout(EXCERPT_TIMEOUT_MS),
+      signal,
     })
-    if (!res.ok) return null
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {})
+      return null
+    }
     let finalHost: string | null = null
     try {
       finalHost = canonicalHostname(new URL(res.url || `https://${domain}/`).hostname)
     } catch {
       finalHost = null
     }
-    if (finalHost !== domain && finalHost !== `www.${domain}`) return null
+    if (finalHost !== domain && finalHost !== `www.${domain}`) {
+      await res.body?.cancel().catch(() => {})
+      return null
+    }
     const html = (await res.text()).slice(0, 200_000)
     const text = pageTextFromHtml(html).slice(0, 2_500).trim()
     return text.length >= 40 ? text : null
+  }
+  try {
+    if (!slots) return await load(AbortSignal.timeout(EXCERPT_TIMEOUT_MS))
+    return await slots.use({ timeoutMs: EXCERPT_TIMEOUT_MS, now: () => Date.now() }, (slot) => load(slot.signal))
   } catch {
     return null
   }
@@ -444,7 +469,9 @@ async function completeBatch(
   excerpt: string | null,
   batch: PlannedTheme[],
   pins: RunPin[],
+  slots?: OutboundSlots,
 ): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
+  const run = async (signal: AbortSignal): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> => {
   let res: Response
   try {
     res = await fetch(OPENAI_URL, {
@@ -453,7 +480,7 @@ async function completeBatch(
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
       body: JSON.stringify({
         model: MODEL,
         temperature: 0.3,
@@ -491,13 +518,17 @@ async function completeBatch(
   } catch {
     return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
+  }
+  if (!slots) return run(AbortSignal.timeout(TIMEOUT_MS))
+  return slots.use({ timeoutMs: TIMEOUT_MS, now: () => Date.now() }, (slot) => run(slot.signal))
 }
 
-async function listCheckIds(sb: ServiceDb, userId: string): Promise<CheckRow[]> {
+async function listCheckIds(sb: ServiceDb, userId: string, slots?: OutboundSlots): Promise<CheckRow[]> {
   const res = await sbFetch(
     sb,
     `/rest/v1/checks?user_id=eq.${userId}&select=id,created_at&order=created_at.desc`,
     { headers: serviceHeaders(sb.serviceRole) },
+    slots,
   )
   if (!res.ok) return []
   const rows = (await res.json()) as { id?: string; created_at?: string }[]
@@ -508,13 +539,18 @@ async function listCheckIds(sb: ServiceDb, userId: string): Promise<CheckRow[]> 
   )
 }
 
-async function deleteCheckIds(sb: ServiceDb, userId: string, ids: string[]): Promise<void> {
+async function deleteCheckIds(sb: ServiceDb, userId: string, ids: string[], slots?: OutboundSlots): Promise<void> {
   const safe = ids.filter((id) => UUID_RE.test(id))
   if (safe.length === 0) return
-  await sbFetch(sb, `/rest/v1/checks?user_id=eq.${userId}&id=in.(${safe.join(',')})`, {
-    method: 'DELETE',
-    headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-  })
+  await sbFetch(
+    sb,
+    `/rest/v1/checks?user_id=eq.${userId}&id=in.(${safe.join(',')})`,
+    {
+      method: 'DELETE',
+      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
+    },
+    slots,
+  )
 }
 
 async function saveReport(
@@ -526,6 +562,8 @@ async function saveReport(
   config: ProductConfig,
   plan: string,
   questionSetOwned = false,
+  slots?: OutboundSlots,
+  citations?: { cap: number; gemini: boolean },
 ): Promise<{ id: string; createdAt: string } | null> {
   const result = {
     report: 'full',
@@ -543,20 +581,26 @@ async function saveReport(
       model: MODEL,
       includesBranded,
       themes,
+      ...(citations ? { citations } : {}),
     },
   }
   let res: Response
   try {
-    res = await sbFetch(sb, '/rest/v1/checks', {
-      method: 'POST',
-      headers: serviceHeaders(sb.serviceRole, 'return=representation'),
-      body: JSON.stringify({
-        user_id: userId,
-        domain,
-        mode: 'unbranded',
-        result,
-      }),
-    })
+    res = await sbFetch(
+      sb,
+      '/rest/v1/checks',
+      {
+        method: 'POST',
+        headers: serviceHeaders(sb.serviceRole, 'return=representation'),
+        body: JSON.stringify({
+          user_id: userId,
+          domain,
+          mode: 'unbranded',
+          result,
+        }),
+      },
+      slots,
+    )
   } catch {
     return null
   }
@@ -572,14 +616,19 @@ async function saveReport(
   if (!UUID_RE.test(id)) return null
   const createdAt = row && typeof row.created_at === 'string' ? row.created_at : new Date().toISOString()
   try {
-    const rows = await listCheckIds(sb, userId)
-    await deleteCheckIds(sb, userId, idsBeyondCap(rows, historyCapForPlan(config, plan)))
+    const rows = await listCheckIds(sb, userId, slots)
+    await deleteCheckIds(sb, userId, idsBeyondCap(rows, historyCapForPlan(config, plan)), slots)
     const cutoff = retentionCutoffIso(config.checkRetentionDays)
     if (cutoff) {
-      await sbFetch(sb, `/rest/v1/checks?user_id=eq.${userId}&created_at=lt.${encodeURIComponent(cutoff)}`, {
-        method: 'DELETE',
-        headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-      })
+      await sbFetch(
+        sb,
+        `/rest/v1/checks?user_id=eq.${userId}&created_at=lt.${encodeURIComponent(cutoff)}`,
+        {
+          method: 'DELETE',
+          headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
+        },
+        slots,
+      )
     }
   } catch {
     // The row is saved. Trim is best-effort.
@@ -598,7 +647,9 @@ async function completeOwnedBatch(
   domain: string,
   excerpt: string | null,
   owned: OwnedQuestion[],
+  slots?: OutboundSlots,
 ): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> {
+  const run = async (signal: AbortSignal): Promise<{ ok: true; json: unknown } | { ok: false; error: string }> => {
   const prompt = ownedAnswerPrompt(domain, groupOwned(owned), excerpt)
   let res: Response
   try {
@@ -608,7 +659,7 @@ async function completeOwnedBatch(
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
       body: JSON.stringify({
         model: MODEL,
         temperature: 0.3,
@@ -646,6 +697,9 @@ async function completeOwnedBatch(
   } catch {
     return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
+  }
+  if (!slots) return run(AbortSignal.timeout(TIMEOUT_MS))
+  return slots.use({ timeoutMs: TIMEOUT_MS, now: () => Date.now() }, (slot) => run(slot.signal))
 }
 
 /** Answer a saved question set. Does not generate a new theme roster. */
@@ -657,6 +711,8 @@ async function updateOwnedReport(
   themes: FullReportTheme[],
   includesBranded: boolean,
   config: ProductConfig,
+  slots?: OutboundSlots,
+  citations?: { cap: number; gemini: boolean },
 ): Promise<{ id: string; createdAt: string; runs: CheckRun[] } | { error: string; status: number } | null> {
   let loaded: Response
   try {
@@ -664,6 +720,7 @@ async function updateOwnedReport(
       sb,
       `/rest/v1/checks?id=eq.${checkId}&user_id=eq.${userId}&select=id,domain,mode,result,created_at`,
       { headers: serviceHeaders(sb.serviceRole) },
+      slots,
     )
   } catch {
     return null
@@ -707,15 +764,21 @@ async function updateOwnedReport(
       model: MODEL,
       includesBranded,
       themes,
+      ...(citations ? { citations } : {}),
     },
   }
   let updated: Response
   try {
-    updated = await sbFetch(sb, `/rest/v1/checks?id=eq.${checkId}&user_id=eq.${userId}`, {
-      method: 'PATCH',
-      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-      body: JSON.stringify({ result }),
-    })
+    updated = await sbFetch(
+      sb,
+      `/rest/v1/checks?id=eq.${checkId}&user_id=eq.${userId}`,
+      {
+        method: 'PATCH',
+        headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
+        body: JSON.stringify({ result }),
+      },
+      slots,
+    )
   } catch {
     return null
   }
@@ -763,18 +826,30 @@ async function answerOwnedReport(opts: {
   const waitMs = sideWaitMs(opts.env, startedAt, startedAt)
   const stopSide = new AbortController()
   const scrub = [opts.apiKey, opts.sb.serviceRole]
-  const geminiTask = softGemini(asked, opts.env, scrub, waitMs, stopSide.signal)
-  const claudeTask = softClaude(asked, opts.env, scrub, waitMs, stopSide.signal)
+  const slots = createOutboundSlots()
+  const citations = { cap: CITATIONS_CAP, gemini: citationsGeminiEnabled(opts.env) }
+  const geminiTask = softGemini(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
+  const claudeTask = softClaude(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
+  const searchTask = preview
+    ? searchQuestionList({
+        questions: cappedQuestions(preview),
+        domain: opts.domain,
+        env: opts.env,
+        slots,
+        scrub,
+        apiKey: opts.apiKey,
+      })
+    : Promise.resolve(new Map<string, QuestionSearch[]>())
 
-  const excerpt = await homepageExcerpt(opts.domain)
+  const excerpt = await homepageExcerpt(opts.domain, slots)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, opts.apiKey) : null
   const parts = await Promise.all(
-    ownedBatches(opts.owned).map((batch) => completeOwnedBatch(opts.apiKey, opts.domain, safeExcerpt, batch)),
+    ownedBatches(opts.owned).map((batch) => completeOwnedBatch(opts.apiKey, opts.domain, safeExcerpt, batch, slots)),
   )
   const failed = parts.find((part) => !part.ok)
   if (failed && !failed.ok) {
     stopSide.abort()
-    await Promise.all([geminiTask, claudeTask])
+    await Promise.all([geminiTask, claudeTask, searchTask])
     await admitted.release()
     return json(502, { error: failed.error })
   }
@@ -785,13 +860,14 @@ async function answerOwnedReport(opts: {
   )
   if (!merged) {
     stopSide.abort()
-    await Promise.all([geminiTask, claudeTask])
+    await Promise.all([geminiTask, claudeTask, searchTask])
     await admitted.release()
     return json(502, { error: 'Couldn’t answer this question set — try again.' })
   }
   const gemini = themesWithGemini(merged, await geminiTask, asked)
   const claude = themesWithClaude(gemini.themes, await claudeTask, asked)
-  const themes = claude.themes
+  const searched = attachSearches(claude.themes, await searchTask)
+  const themes = searched
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,
@@ -801,6 +877,8 @@ async function answerOwnedReport(opts: {
         themes,
         includesBranded,
         opts.config,
+        slots,
+        citations,
       )
     : await saveReport(
         opts.sb,
@@ -811,6 +889,8 @@ async function answerOwnedReport(opts: {
         opts.config,
         planName,
         true,
+        slots,
+        citations,
       )
   if (!saved) {
     await admitted.release()
@@ -820,6 +900,7 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(saved.status, { error: saved.error })
   }
+  await saveCitationRows(opts.sb, slots, opts.userId, saved.id, themes)
   const body = withEngineMisses(
     {
       ok: true,
@@ -828,6 +909,7 @@ async function answerOwnedReport(opts: {
       model: MODEL,
       includesBranded,
       themes,
+      citations,
       check: { id: saved.id, domain: opts.domain, createdAt: saved.createdAt },
       ...('runs' in saved ? { runs: saved.runs } : {}),
     },
@@ -869,9 +951,10 @@ async function answerOwnedPaused(opts: {
   const asked = unbrandedQuestionTexts(preview)
   const startedAt = Date.now()
   const waitMs = sideWaitMs(opts.env, startedAt, startedAt)
+  const slots = createOutboundSlots()
   const [geminiResult, claudeResult] = await Promise.all([
-    softGemini(asked, opts.env, opts.scrub, waitMs),
-    softClaude(asked, opts.env, opts.scrub, waitMs),
+    softGemini(asked, opts.env, opts.scrub, waitMs, undefined, slots),
+    softClaude(asked, opts.env, opts.scrub, waitMs, undefined, slots),
   ])
   const gemini = themesWithGemini(preview, geminiResult, asked)
   const claude = themesWithClaude(gemini.themes, claudeResult, asked)
@@ -980,10 +1063,12 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     question: scrubSecret(pin.question, apiKey),
   }))
   const startedAt = Date.now()
-  const excerpt = await homepageExcerpt(domain)
+  const slots = createOutboundSlots()
+  const citations = { cap: CITATIONS_CAP, gemini: citationsGeminiEnabled(context.env) }
+  const excerpt = await homepageExcerpt(domain, slots)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
   const parts = await Promise.all(
-    batches(plan).map((batch) => completeBatch(apiKey, domain, safeExcerpt, batch, pins)),
+    batches(plan).map((batch) => completeBatch(apiKey, domain, safeExcerpt, batch, pins, slots)),
   )
   const failed = parts.find((part) => !part.ok)
   if (failed && !failed.ok) {
@@ -1007,13 +1092,21 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
   const waitMs = sideWaitMs(context.env, startedAt, Date.now())
   const asked = unbrandedQuestionTexts(shapedThemes)
   const scrub = [apiKey, sb.serviceRole]
-  const [geminiResult, claudeResult] = await Promise.all([
-    softGemini(asked, context.env, scrub, waitMs),
-    softClaude(asked, context.env, scrub, waitMs),
+  const [geminiResult, claudeResult, found] = await Promise.all([
+    softGemini(asked, context.env, scrub, waitMs, undefined, slots),
+    softClaude(asked, context.env, scrub, waitMs, undefined, slots),
+    searchQuestionList({
+      questions: cappedQuestions(shapedThemes),
+      domain,
+      env: context.env,
+      slots,
+      scrub,
+      apiKey,
+    }),
   ])
   const gemini = themesWithGemini(shapedThemes, geminiResult, asked)
   const claude = themesWithClaude(gemini.themes, claudeResult, asked)
-  const themes = claude.themes
+  const themes = attachSearches(claude.themes, found)
 
   const saved = await saveReport(
     sb,
@@ -1023,11 +1116,15 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     config.fullReportIncludesBranded,
     config,
     planName,
+    false,
+    slots,
+    citations,
   )
   if (!saved) {
     await reserved.release()
     return json(502, { error: 'Could not save this full report.' })
   }
+  await saveCitationRows(sb, slots, authed.user.id, saved.id, themes)
 
   const body = withEngineMisses(
     {
@@ -1037,6 +1134,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
       model: MODEL,
       includesBranded: config.fullReportIncludesBranded,
       themes,
+      citations,
       check: {
         id: saved.id,
         domain,

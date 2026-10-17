@@ -7,6 +7,7 @@
 
 import { historyCapForPlan, productConfigFromEnv, type ProductConfig } from '../../src/config/productConfig.ts'
 import { fullReportFromStored } from '../../src/fullReport.ts'
+import { citationsGeminiEnabled, stripGeminiFromStored } from '../../src/citations.ts'
 import {
   OWNED_QUESTION_MAX,
   SHORT_OWNED_MAX,
@@ -159,8 +160,8 @@ export async function onRequest(context: { request: Request; env?: ChecksEnv }):
   const authed = await userFromToken(sb, accessToken)
   if (!authed.ok) return json(authed.status, { error: publicError(authed.error, sb.serviceRole) })
 
-  if (request.method === 'GET') return listChecks(sb, authed.user.id, config)
-  if (request.method === 'PATCH') return updateQuestions(sb, authed.user.id, request, config)
+  if (request.method === 'GET') return listChecks(sb, authed.user.id, config, context.env)
+  if (request.method === 'PATCH') return updateQuestions(sb, authed.user.id, request, config, context.env)
 
   const raw = await request.text()
   if (raw.length > 100_000) return json(413, { error: 'Check body is too large.' })
@@ -170,10 +171,20 @@ export async function onRequest(context: { request: Request; env?: ChecksEnv }):
   } catch {
     return json(400, { error: 'Check body must be JSON' })
   }
-  return insertCheck(sb, authed.user.id, body, config, request)
+  return insertCheck(sb, authed.user.id, body, config, request, context.env)
 }
 
-async function listChecks(sb: ServiceDb, userId: string, config: ProductConfig): Promise<Response> {
+function clientResult(result: unknown, env: { CITATIONS_GEMINI?: string } | undefined): unknown {
+  if (citationsGeminiEnabled(env)) return result
+  return stripGeminiFromStored(result)
+}
+
+async function listChecks(
+  sb: ServiceDb,
+  userId: string,
+  config: ProductConfig,
+  env: { CITATIONS_GEMINI?: string } | undefined,
+): Promise<Response> {
   const cutoff = retentionCutoffIso(config.checkRetentionDays)
   if (cutoff) await deleteExpired(sb, userId, cutoff).catch(() => {})
   let res: Response
@@ -201,7 +212,7 @@ async function listChecks(sb: ServiceDb, userId: string, config: ProductConfig):
           domain: rec.domain,
           mode: rec.mode === 'branded' ? 'branded' : 'unbranded',
           createdAt: rec.created_at,
-          result: rec.result ?? {},
+          result: clientResult(rec.result ?? {}, env),
         }
       })
     : []
@@ -214,6 +225,7 @@ async function insertCheck(
   body: unknown,
   config: ProductConfig,
   request: Request,
+  env: { CITATIONS_GEMINI?: string } | undefined,
 ): Promise<Response> {
   const shaped = shapeStoredCheck(body, config, sb.serviceRole)
   if (!shaped.ok) return json(400, { error: shaped.error })
@@ -300,7 +312,7 @@ async function insertCheck(
       domain: shaped.domain,
       mode: shaped.mode,
       createdAt: row && typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
-      result: shaped.result,
+      result: clientResult(shaped.result, env),
     },
   })
   if (text.includes(sb.serviceRole)) {
@@ -332,6 +344,7 @@ async function updateQuestions(
   userId: string,
   request: Request,
   config: ProductConfig,
+  env: { CITATIONS_GEMINI?: string } | undefined,
 ): Promise<Response> {
   const raw = await request.text()
   if (raw.length > 100_000) return json(413, { error: 'Check body is too large.' })
@@ -344,7 +357,7 @@ async function updateQuestions(
   if (!isRecord(body) || typeof body.id !== 'string' || !UUID_RE.test(body.id)) {
     return json(400, { error: 'Check id is required.' })
   }
-  if (body.recordRun === true) return recordOwnedRun(sb, userId, body, config)
+  if (body.recordRun === true) return recordOwnedRun(sb, userId, body, config, env)
   const id = body.id
 
   let loaded: Response
@@ -415,7 +428,7 @@ async function updateQuestions(
   }
   if (!updated.ok) return json(502, { error: 'Could not save these questions.' })
 
-  const text = JSON.stringify({ ok: true, check: publicCheck(row, result) })
+  const text = JSON.stringify({ ok: true, check: publicCheck(row, clientResult(result, env) as StoredResult) })
   if (text.includes(sb.serviceRole)) return json(500, { error: 'Could not save these questions.' })
   return new Response(text, {
     status: 200,
@@ -432,6 +445,7 @@ async function recordOwnedRun(
   userId: string,
   body: Record<string, unknown>,
   config: ProductConfig,
+  env: { CITATIONS_GEMINI?: string } | undefined,
 ): Promise<Response> {
   const id = body.id
   if (typeof id !== 'string' || !UUID_RE.test(id)) return json(400, { error: 'Check id is required.' })
@@ -500,7 +514,7 @@ async function recordOwnedRun(
 
   const text = JSON.stringify({
     ok: true,
-    check: publicCheck({ ...row, mode: shaped.mode }, result),
+    check: publicCheck({ ...row, mode: shaped.mode }, clientResult(result, env) as StoredResult),
   })
   if (text.includes(sb.serviceRole)) return json(500, { error: 'Could not store this run.' })
   return new Response(text, {
