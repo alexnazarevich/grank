@@ -25,6 +25,7 @@ export type CitationEngine = 'chatgpt' | 'gemini'
 
 /** One cited page. Same fields for every engine. */
 export type CitationSource = {
+  engine: CitationEngine
   url: string
   domain: string
   title: string
@@ -32,14 +33,14 @@ export type CitationSource = {
 
 /**
  * One searched answer for one engine on one question.
- * `suggestionsHtml` is Google's Search Suggestions markup, unmodified, Gemini only.
+ * `renderedContent` is Google's searchEntryPoint HTML, unmodified, Gemini only.
  */
 export type QuestionSearch = {
   engine: CitationEngine
   text: string
   sources: CitationSource[]
   miss?: { class: string; status?: number }
-  suggestionsHtml?: string
+  renderedContent?: string
 }
 
 export type FullReportQuestion = {
@@ -83,8 +84,13 @@ export type FullReport = {
   /**
    * Present after a Citations run. Absent on reports saved before Citations.
    * `gemini` is whether grounded calls were on for this read.
+   * `searched` is how many questions each engine searched on this run.
    */
-  citations?: { cap: number; gemini: boolean }
+  citations?: {
+    cap: number
+    gemini: boolean
+    searched?: { chatgpt: number; gemini?: number }
+  }
 }
 
 type Leaning = 'unbranded' | 'branded' | 'either'
@@ -666,10 +672,25 @@ export function fullReportFromStored(result: unknown): FullReport | null {
   return { domain, model, includesBranded, themes, ...(citations ? { citations } : {}) }
 }
 
-function cleanCitationMeta(value: unknown): { cap: number; gemini: boolean } | null {
+function cleanCount(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.floor(value)
+}
+
+function cleanCitationMeta(value: unknown): FullReport['citations'] | null {
   if (!isRecord(value) || typeof value.cap !== 'number' || !Number.isFinite(value.cap)) return null
   const cap = Math.max(0, Math.floor(value.cap))
-  return { cap, gemini: value.gemini === true }
+  const gemini = value.gemini === true
+  const searched = isRecord(value.searched) ? value.searched : null
+  const chatgpt = searched ? cleanCount(searched.chatgpt) : null
+  const geminiCount = searched && gemini ? cleanCount(searched.gemini) : null
+  return {
+    cap,
+    gemini,
+    ...(chatgpt === null
+      ? {}
+      : { searched: { chatgpt, ...(geminiCount === null ? {} : { gemini: geminiCount }) } }),
+  }
 }
 
 function cleanQuestionSearches(value: unknown): QuestionSearch[] {
@@ -687,7 +708,8 @@ function cleanQuestionSearches(value: unknown): QuestionSearch[] {
         const domain = typeof source.domain === 'string' ? source.domain.trim().toLowerCase() : ''
         if (!url || !domain) continue
         const title = typeof source.title === 'string' ? source.title.replace(/\s+/g, ' ').trim().slice(0, 300) : ''
-        sources.push({ url, domain, title })
+        const engine = source.engine === 'chatgpt' || source.engine === 'gemini' ? source.engine : entry.engine
+        sources.push({ engine, url, domain, title })
       }
     }
     const search: QuestionSearch = { engine: entry.engine, text, sources }
@@ -696,9 +718,13 @@ function cleanQuestionSearches(value: unknown): QuestionSearch[] {
       if (typeof entry.miss.status === 'number' && Number.isInteger(entry.miss.status)) miss.status = entry.miss.status
       search.miss = miss
     }
-    if (typeof entry.suggestionsHtml === 'string' && entry.suggestionsHtml.trim()) {
-      search.suggestionsHtml = entry.suggestionsHtml
-    }
+    const rendered =
+      typeof entry.renderedContent === 'string'
+        ? entry.renderedContent
+        : typeof entry.suggestionsHtml === 'string'
+          ? entry.suggestionsHtml
+          : ''
+    if (entry.engine === 'gemini' && rendered.trim()) search.renderedContent = rendered
     out.push(search)
   }
   return out

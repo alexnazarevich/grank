@@ -2,30 +2,29 @@
  * Citations for a signed-in full report and Run test.
  * ChatGPT web search always runs for the capped unbranded questions.
  * Gemini grounding runs only when CITATIONS_GEMINI is exactly `on`.
- * Sources use one shape: engine, url, domain, title, question, run id.
+ * Each source is {engine, url, domain, title} on the question inside the saved check.
  */
 
 import {
   CITATIONS_CAP,
-  citationDomain,
+  citationMetaFor,
   citationsGeminiEnabled,
   sourceFromUrl,
   stripGeminiFromStored,
 } from '../../src/citations.ts'
 import {
   unbrandedQuestionTexts,
-  type CitationEngine,
   type FullReportTheme,
   type QuestionSearch,
 } from '../../src/fullReport.ts'
 import { createOutboundSlots, type OutboundSlots } from '../lib/slots.ts'
 import { chatgptSearchModelFromEnv, chatgptWebSearch, geminiGrounded, type SearchMiss } from './searched.ts'
 import { geminiApiKeyFromEnv, geminiModelFromEnv } from './visibility.ts'
-import { sbFetch, serviceHeaders, type ServiceDb } from './supabaseAuth.ts'
+import { serviceHeaders } from './supabaseAuth.ts'
 
 const SEARCH_TIMEOUT_MS = 8_000
 
-export { CITATIONS_CAP, citationsGeminiEnabled, createOutboundSlots }
+export { CITATIONS_CAP, citationMetaFor, citationsGeminiEnabled, createOutboundSlots }
 export type { OutboundSlots }
 
 type CitationEnv = {
@@ -44,7 +43,7 @@ function missOf(miss: SearchMiss | undefined): QuestionSearch['miss'] {
 function sourcesFromChatGpt(citations: { url: string; title: string }[]): QuestionSearch['sources'] {
   const sources: QuestionSearch['sources'] = []
   for (const citation of citations) {
-    const source = sourceFromUrl(citation.url, citation.title)
+    const source = sourceFromUrl(citation.url, citation.title, 'chatgpt')
     if (source) sources.push(source)
   }
   return sources
@@ -53,7 +52,7 @@ function sourcesFromChatGpt(citations: { url: string; title: string }[]): Questi
 function sourcesFromGrounding(chunks: { uri: string; title: string }[]): QuestionSearch['sources'] {
   const sources: QuestionSearch['sources'] = []
   for (const chunk of chunks) {
-    const source = sourceFromUrl(chunk.uri, chunk.title)
+    const source = sourceFromUrl(chunk.uri, chunk.title, 'gemini')
     if (source) sources.push(source)
   }
   return sources
@@ -102,13 +101,13 @@ export async function searchOneQuestion(opts: {
     },
   ]
   if (gem) {
-    const suggestions = gem.suggestionsHtml.trim() ? gem.suggestionsHtml : undefined
+    const renderedContent = gem.suggestionsHtml.trim() ? gem.suggestionsHtml : undefined
     searches.push({
       engine: 'gemini',
       text: gem.miss ? '' : gem.text,
       sources: sourcesFromGrounding(gem.chunks),
       ...(missOf(gem.miss) ? { miss: missOf(gem.miss) } : {}),
-      ...(suggestions ? { suggestionsHtml: suggestions } : {}),
+      ...(renderedContent ? { renderedContent } : {}),
     })
   }
   return searches
@@ -148,111 +147,50 @@ export function attachSearches(themes: FullReportTheme[], found: Map<string, Que
   }))
 }
 
-type SourceRow = {
-  user_id: string
-  run_id: string
-  question: string
-  engine: CitationEngine
-  url: string
-  domain: string
-  title: string
+export type PurgeResult = { rows: number; sources: number }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-type SuggestionRow = {
-  user_id: string
-  run_id: string
-  question: string
-  engine: CitationEngine
-  rendered_content: string
-}
-
-function rowsFromThemes(userId: string, runId: string, themes: readonly FullReportTheme[]): {
-  sources: SourceRow[]
-  suggestions: SuggestionRow[]
-} {
-  const sources: SourceRow[] = []
-  const suggestions: SuggestionRow[] = []
+/** Gemini citation sources stored on a check. `present` is a Gemini search, source, or searched count. */
+export function geminiCitationBurden(result: unknown): { sources: number; present: boolean } {
+  let sources = 0
+  let present = false
+  if (!isRecord(result) || !isRecord(result.fullReport)) return { sources, present }
+  const full = result.fullReport
+  const themes = Array.isArray(full.themes) ? full.themes : []
   for (const theme of themes) {
+    if (!isRecord(theme) || !Array.isArray(theme.questions)) continue
     for (const item of theme.questions) {
-      for (const search of item.searches ?? []) {
-        for (const source of search.sources) {
-          if (!source.url || !citationDomain(source.url)) continue
-          sources.push({
-            user_id: userId,
-            run_id: runId,
-            question: item.question,
-            engine: search.engine,
-            url: source.url,
-            domain: source.domain,
-            title: source.title,
-          })
-        }
-        if (search.suggestionsHtml && search.suggestionsHtml.trim()) {
-          suggestions.push({
-            user_id: userId,
-            run_id: runId,
-            question: item.question,
-            engine: search.engine,
-            rendered_content: search.suggestionsHtml,
-          })
+      if (!isRecord(item)) continue
+      if (typeof item.renderedContent === 'string' && item.renderedContent.trim()) present = true
+      if (!Array.isArray(item.searches)) continue
+      for (const search of item.searches) {
+        if (!isRecord(search)) continue
+        if (search.engine === 'gemini') present = true
+        const html = search.renderedContent ?? search.suggestionsHtml
+        if (search.engine === 'gemini' && typeof html === 'string' && html.trim()) present = true
+        const list = Array.isArray(search.sources) ? search.sources : []
+        for (const source of list) {
+          if (!isRecord(source)) continue
+          const engine = source.engine === 'chatgpt' || source.engine === 'gemini' ? source.engine : search.engine
+          if (engine === 'gemini') {
+            present = true
+            sources += 1
+          }
         }
       }
     }
   }
-  return { sources, suggestions }
-}
-
-async function sbSlot(slots: OutboundSlots, sb: ServiceDb, path: string, init: RequestInit): Promise<Response | null> {
-  try {
-    return await sbFetch(sb, path, init, slots)
-  } catch {
-    return null
-  }
-}
-
-/** Replace this run's source rows. A failed write does not fail the report. */
-export async function saveCitationRows(
-  sb: ServiceDb,
-  slots: OutboundSlots,
-  userId: string,
-  runId: string,
-  themes: readonly FullReportTheme[],
-): Promise<void> {
-  const { sources, suggestions } = rowsFromThemes(userId, runId, themes)
-  await sbSlot(slots, sb, `/rest/v1/citation_sources?run_id=eq.${runId}`, {
-    method: 'DELETE',
-    headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-  })
-  await sbSlot(slots, sb, `/rest/v1/citation_suggestions?run_id=eq.${runId}`, {
-    method: 'DELETE',
-    headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-  })
-  if (sources.length > 0) {
-    await sbSlot(slots, sb, '/rest/v1/citation_sources', {
-      method: 'POST',
-      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-      body: JSON.stringify(sources),
-    })
-  }
-  if (suggestions.length > 0) {
-    await sbSlot(slots, sb, '/rest/v1/citation_suggestions', {
-      method: 'POST',
-      headers: serviceHeaders(sb.serviceRole, 'return=minimal'),
-      body: JSON.stringify(suggestions),
-    })
-  }
-}
-
-export type PurgeResult = { sources: number; suggestions: number }
-
-function rowCount(payload: unknown): number {
-  return Array.isArray(payload) ? payload.length : 0
+  if (isRecord(full.citations) && isRecord(full.citations.searched) && 'gemini' in full.citations.searched) present = true
+  return { sources, present }
 }
 
 /**
- * Delete every Gemini source and stored Search Suggestions.
- * A second call deletes nothing. Also strips Gemini searches from saved checks
- * so a later read cannot show them.
+ * Remove Gemini sources and Search Suggestions from saved checks.
+ * Pages through checks and PATCH only rows that still contain them.
+ * A second call changes nothing.
  */
 export async function purgeGeminiCitations(env: {
   SUPABASE_URL?: string
@@ -261,42 +199,34 @@ export async function purgeGeminiCitations(env: {
   const url = env.SUPABASE_URL?.trim().replace(/\/$/, '') || ''
   const key = env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
   if (!url || !key) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required')
-  const headers = serviceHeaders(key, 'return=representation')
-  const sourcesRes = await fetch(`${url}/rest/v1/citation_sources?engine=eq.gemini`, { method: 'DELETE', headers })
-  if (!sourcesRes.ok) throw new Error(`citation_sources delete failed: HTTP ${sourcesRes.status}`)
-  const sources = rowCount(await sourcesRes.json().catch(() => []))
-  const suggestionsRes = await fetch(`${url}/rest/v1/citation_suggestions?engine=eq.gemini`, {
-    method: 'DELETE',
-    headers,
-  })
-  if (!suggestionsRes.ok) throw new Error(`citation_suggestions delete failed: HTTP ${suggestionsRes.status}`)
-  const suggestions = rowCount(await suggestionsRes.json().catch(() => []))
-  await stripStoredGemini(url, key)
-  return { sources, suggestions }
-}
-
-async function stripStoredGemini(url: string, key: string): Promise<void> {
-  const headers = serviceHeaders(key)
+  let rows = 0
+  let sources = 0
   let offset = 0
+  const page = 200
   for (;;) {
     const res = await fetch(
-      `${url}/rest/v1/checks?select=id,result&order=created_at.asc&limit=200&offset=${offset}`,
-      { headers },
+      `${url}/rest/v1/checks?select=id,result&order=created_at.asc&limit=${page}&offset=${offset}`,
+      { headers: serviceHeaders(key) },
     )
-    if (!res.ok) return
-    const rows = (await res.json().catch(() => [])) as { id?: string; result?: unknown }[]
-    if (!Array.isArray(rows) || rows.length === 0) return
-    for (const row of rows) {
-      if (!row || typeof row.id !== 'string' || !row.result) continue
+    if (!res.ok) throw new Error(`checks read failed: HTTP ${res.status}`)
+    const list = (await res.json().catch(() => [])) as { id?: string; result?: unknown }[]
+    if (!Array.isArray(list) || list.length === 0) break
+    for (const row of list) {
+      if (!row || typeof row.id !== 'string' || !row.result || !geminiCitationBurden(row.result).present) continue
+      const removed = geminiCitationBurden(row.result).sources
       const next = stripGeminiFromStored(row.result)
       if (JSON.stringify(next) === JSON.stringify(row.result)) continue
-      await fetch(`${url}/rest/v1/checks?id=eq.${row.id}`, {
+      const patched = await fetch(`${url}/rest/v1/checks?id=eq.${row.id}`, {
         method: 'PATCH',
         headers: serviceHeaders(key, 'return=minimal'),
         body: JSON.stringify({ result: next }),
       })
+      if (!patched.ok) throw new Error(`checks update failed: HTTP ${patched.status}`)
+      rows += 1
+      sources += removed
     }
-    if (rows.length < 200) return
-    offset += rows.length
+    if (list.length < page) break
+    offset += list.length
   }
+  return { rows, sources }
 }

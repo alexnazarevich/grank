@@ -85,12 +85,11 @@ import {
   type ServiceDb,
 } from './supabaseAuth.ts'
 import {
-  CITATIONS_CAP,
   attachSearches,
   cappedQuestions,
+  citationMetaFor,
   citationsGeminiEnabled,
   createOutboundSlots,
-  saveCitationRows,
   searchQuestionList,
 } from './citations.ts'
 import type { OutboundSlots } from '../lib/slots.ts'
@@ -827,7 +826,7 @@ async function answerOwnedReport(opts: {
   const stopSide = new AbortController()
   const scrub = [opts.apiKey, opts.sb.serviceRole]
   const slots = createOutboundSlots()
-  const citations = { cap: CITATIONS_CAP, gemini: citationsGeminiEnabled(opts.env) }
+  const geminiOn = citationsGeminiEnabled(opts.env)
   const geminiTask = softGemini(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
   const claudeTask = softClaude(asked, opts.env, scrub, waitMs, stopSide.signal, slots)
   const searchTask = preview
@@ -868,6 +867,7 @@ async function answerOwnedReport(opts: {
   const claude = themesWithClaude(gemini.themes, await claudeTask, asked)
   const searched = attachSearches(claude.themes, await searchTask)
   const themes = searched
+  const citations = citationMetaFor(themes, geminiOn)
   const saved = opts.checkId
     ? await updateOwnedReport(
         opts.sb,
@@ -900,7 +900,6 @@ async function answerOwnedReport(opts: {
     await admitted.release()
     return json(saved.status, { error: saved.error })
   }
-  await saveCitationRows(opts.sb, slots, opts.userId, saved.id, themes)
   const body = withEngineMisses(
     {
       ok: true,
@@ -1064,7 +1063,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
   }))
   const startedAt = Date.now()
   const slots = createOutboundSlots()
-  const citations = { cap: CITATIONS_CAP, gemini: citationsGeminiEnabled(context.env) }
+  const geminiOn = citationsGeminiEnabled(context.env)
   const excerpt = await homepageExcerpt(domain, slots)
   const safeExcerpt = excerpt ? scrubSecret(excerpt, apiKey) : null
   const parts = await Promise.all(
@@ -1107,6 +1106,7 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
   const gemini = themesWithGemini(shapedThemes, geminiResult, asked)
   const claude = themesWithClaude(gemini.themes, claudeResult, asked)
   const themes = attachSearches(claude.themes, found)
+  const citations = citationMetaFor(themes, geminiOn)
 
   const saved = await saveReport(
     sb,
@@ -1124,7 +1124,6 @@ export async function onRequest(context: { request: Request; env?: ReportEnv }):
     await reserved.release()
     return json(502, { error: 'Could not save this full report.' })
   }
-  await saveCitationRows(sb, slots, authed.user.id, saved.id, themes)
 
   const body = withEngineMisses(
     {

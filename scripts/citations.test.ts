@@ -3,7 +3,7 @@
  * purge, cap 3, Run test past the cap, and the shared slot limiter.
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { purgeGeminiCitations, searchOneQuestion } from '../functions/api/citations.ts'
 import { citationsFromWebSearchPayload, chatgptWebSearchBody, groundingFromGeminiPayload } from '../functions/api/searched.ts'
@@ -13,6 +13,7 @@ import {
   CITATIONS_CAP,
   CITATION_COPY,
   citationCopyCorpus,
+  citationMetaFor,
   citationsGeminiEnabled,
   hideGeminiCitations,
   searchedQuestions,
@@ -128,8 +129,8 @@ describe('citations', () => {
     const gemini: QuestionSearch = {
       engine: 'gemini',
       text: 'A grounded answer.',
-      sources: [{ url: 'https://ground.example/a', domain: 'ground.example', title: 'Ground' }],
-      suggestionsHtml: '<div>widget</div>',
+      sources: [{ engine: 'gemini', url: 'https://ground.example/a', domain: 'ground.example', title: 'Ground' }],
+      renderedContent: '<div>widget</div>',
     }
     const stored = report([[chat(), gemini]], true)
     const hidden = hideGeminiCitations(stored)
@@ -171,6 +172,8 @@ describe('citations', () => {
     )
     assert.equal(searchedQuestions(past, 'chatgpt').length, CITATIONS_CAP + 1)
     assert.equal(searchedQuestions(past, 'gemini').length, 0)
+    assert.equal(past.citations?.searched?.chatgpt, CITATIONS_CAP + 1)
+    assert.equal(past.citations?.searched?.gemini, 0)
   })
 
   it('shows a searching line under signed-in Run again and not for guests', () => {
@@ -235,6 +238,8 @@ describe('citations', () => {
         searches.map((search) => search.engine),
         ['chatgpt'],
       )
+      assert.equal(searches[0]?.sources[0]?.engine, 'chatgpt')
+      assert.equal(searches.some((search) => search.engine === 'gemini'), false)
     } finally {
       globalThis.fetch = prev
     }
@@ -285,36 +290,122 @@ describe('citations', () => {
     }
   })
 
-  it('purges Gemini rows and is idempotent', async () => {
-    let sources = [{ id: 'a' }, { id: 'b' }]
-    let suggestions = [{ id: 's' }]
+  it('purges Gemini citations from saved checks and is idempotent', async () => {
+    const checks = [
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        result: {
+          report: 'full',
+          fullReport: {
+            citations: { cap: 3, gemini: true, searched: { chatgpt: 1, gemini: 1 } },
+            themes: [
+              {
+                questions: [
+                  {
+                    searches: [
+                      {
+                        engine: 'chatgpt',
+                        text: 'A plain searched answer.',
+                        sources: [{ engine: 'chatgpt', url: 'https://jira.com/a', domain: 'jira.com', title: 'Jira' }],
+                      },
+                      {
+                        engine: 'gemini',
+                        text: 'A grounded answer.',
+                        sources: [
+                          { engine: 'gemini', url: 'https://asana.com/a', domain: 'asana.com', title: 'Asana' },
+                          { engine: 'gemini', url: 'https://monday.com/a', domain: 'monday.com', title: 'Monday' },
+                        ],
+                        renderedContent: '<div>widget</div>',
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        result: {
+          report: 'full',
+          fullReport: {
+            themes: [{ questions: [{ searches: [{ engine: 'chatgpt', text: 'Only ChatGPT.', sources: [] }] }] }],
+          },
+        },
+      },
+    ]
+    const calls: string[] = []
     const prev = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-      if (url.includes('/citation_sources') && init?.method === 'DELETE') {
-        const rows = sources
-        sources = []
-        return new Response(JSON.stringify(rows), { status: 200 })
+      const method = init?.method || 'GET'
+      calls.push(`${method} ${url}`)
+      if (url.includes('citation_sources') || url.includes('citation_suggestions')) {
+        throw new Error('citation tables are not in the schema')
       }
-      if (url.includes('/citation_suggestions') && init?.method === 'DELETE') {
-        const rows = suggestions
-        suggestions = []
-        return new Response(JSON.stringify(rows), { status: 200 })
+      if (method === 'GET' && url.includes('/rest/v1/checks')) {
+        return new Response(JSON.stringify(checks), { status: 200 })
       }
-      if (url.includes('/checks')) return new Response('[]', { status: 200 })
+      if (method === 'PATCH' && url.includes('/rest/v1/checks')) {
+        const id = /id=eq\.([^&]+)/.exec(url)?.[1] || ''
+        const body = JSON.parse(String(init?.body || '{}')) as { result?: unknown }
+        const row = checks.find((item) => item.id === id)
+        if (row && body.result) row.result = body.result as (typeof checks)[number]['result']
+        return new Response(null, { status: 204 })
+      }
       return new Response('[]', { status: 200 })
     }) as typeof fetch
     try {
       const env = { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'service' }
       const first = await purgeGeminiCitations(env)
+      assert.equal(first.rows, 1)
       assert.equal(first.sources, 2)
-      assert.equal(first.suggestions, 1)
+      const kept = checks[0]?.result.fullReport.themes[0]?.questions[0]?.searches
+      assert.deepEqual(
+        kept?.map((search) => search.engine),
+        ['chatgpt'],
+      )
+      assert.equal(JSON.stringify(checks[0]).includes('renderedContent'), false)
+      assert.equal(JSON.stringify(checks[0]).includes('asana.com'), false)
+      assert.equal(JSON.stringify(checks[0]).includes('jira.com'), true)
+      assert.equal(checks[0]?.result.fullReport.citations.searched.gemini, undefined)
+      assert.equal(checks[0]?.result.fullReport.citations.gemini, false)
       const second = await purgeGeminiCitations(env)
+      assert.equal(second.rows, 0)
       assert.equal(second.sources, 0)
-      assert.equal(second.suggestions, 0)
+      assert.equal(calls.filter((call) => call.startsWith('PATCH')).length, 1)
     } finally {
       globalThis.fetch = prev
     }
+  })
+
+  it('stores citations in the check JSON and adds no table', () => {
+    const migrations = readdirSync(new URL('../supabase/migrations/', import.meta.url))
+    assert.equal(migrations.some((name) => name.includes('citation')), false)
+    const schema = readFileSync(new URL('../supabase/migrations/20260925120000_save_and_rerun.sql', import.meta.url), 'utf8')
+    assert.match(schema, /create table public\.checks \([\s\S]*result jsonb/)
+    assert.equal(schema.includes('citation_sources'), false)
+    const later = readFileSync(new URL('../supabase/migrations/20260926203000_full_report.sql', import.meta.url), 'utf8')
+    assert.equal(later.includes('alter table public.checks'), false)
+    const saver = readFileSync(new URL('../functions/api/full-report.ts', import.meta.url), 'utf8')
+    assert.equal(saver.includes('citation_sources'), false)
+    assert.equal(saver.includes('citation_suggestions'), false)
+    assert.match(saver, /user_id: userId,\s*domain,\s*mode: 'unbranded',\s*result,/)
+    const api = readFileSync(new URL('../functions/api/citations.ts', import.meta.url), 'utf8')
+    assert.equal(api.includes('citation_sources'), false)
+    assert.equal(api.includes('citation_suggestions'), false)
+    const meta = citationMetaFor(
+      report([
+        [chat()],
+        [chat('asana.com')],
+        [chat('monday.com')],
+      ]).themes,
+      false,
+    )
+    assert.equal(meta.cap, CITATIONS_CAP)
+    assert.equal(meta.gemini, false)
+    assert.deepEqual(meta.searched, { chatgpt: CITATIONS_CAP })
   })
 
   it('keeps the guest visibility path free of citation calls', async () => {

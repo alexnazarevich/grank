@@ -64,10 +64,30 @@ export function citationDomain(url: string): string {
   }
 }
 
-export function sourceFromUrl(url: string, title: string): CitationSource | null {
+export function sourceFromUrl(url: string, title: string, engine: CitationEngine): CitationSource | null {
   const domain = citationDomain(url)
   if (!domain) return null
-  return { url: url.trim(), domain, title: title.replace(/\s+/g, ' ').trim() }
+  return { engine, url: url.trim(), domain, title: title.replace(/\s+/g, ' ').trim() }
+}
+
+/** Run-level searched counts. Gemini is omitted while its switch is off. */
+export function citationMetaFor(
+  themes: FullReport['themes'],
+  gemini: boolean,
+  cap = CITATIONS_CAP,
+): NonNullable<FullReport['citations']> {
+  const draft: FullReport = {
+    domain: 'example.com',
+    model: 'gpt-4o-mini',
+    includesBranded: true,
+    themes,
+    citations: { cap, gemini, searched: { chatgpt: 0 } },
+  }
+  const searched: { chatgpt: number; gemini?: number } = {
+    chatgpt: searchedQuestions(draft, 'chatgpt').length,
+  }
+  if (gemini) searched.gemini = searchedQuestions(draft, 'gemini').length
+  return { cap, gemini, searched }
 }
 
 export function questionCountPhrase(n: number): string {
@@ -312,7 +332,7 @@ export type QuestionCitationView = {
   state: 'not-searched' | 'miss' | 'answer'
   text: string
   sources: CitationSource[]
-  suggestionsHtml?: string
+  renderedContent?: string
 }
 
 /** Blocks under an opened question. Hidden engines are omitted. */
@@ -341,7 +361,7 @@ export function questionCitationViews(report: FullReport, item: FullReportQuesti
         state: 'miss',
         text: searchMissSentence(engine, search.miss),
         sources: search.sources,
-        ...(engine === 'gemini' && search.suggestionsHtml ? { suggestionsHtml: search.suggestionsHtml } : {}),
+        ...(engine === 'gemini' && search.renderedContent ? { renderedContent: search.renderedContent } : {}),
       })
       continue
     }
@@ -351,7 +371,7 @@ export function questionCitationViews(report: FullReport, item: FullReportQuesti
       state: 'answer',
       text: search.text,
       sources: search.sources,
-      ...(engine === 'gemini' && search.suggestionsHtml ? { suggestionsHtml: search.suggestionsHtml } : {}),
+      ...(engine === 'gemini' && search.renderedContent ? { renderedContent: search.renderedContent } : {}),
     })
   }
   return views
@@ -362,17 +382,24 @@ export function hideGeminiCitations(report: FullReport): FullReport {
   if (!report.citations?.gemini && !report.themes.some((theme) => theme.questions.some((item) => item.searches?.some((search) => search.engine === 'gemini')))) {
     return report
   }
+  const themes = report.themes.map((theme) => ({
+    ...theme,
+    questions: theme.questions.map((item) => {
+      if (!item.searches) return item
+      const searches = item.searches
+        .filter((search) => search.engine !== 'gemini')
+        .map((search) => ({
+          ...search,
+          sources: search.sources.filter((source) => source.engine !== 'gemini'),
+        }))
+      return { ...item, searches }
+    }),
+  }))
+  const cap = report.citations?.cap ?? CITATIONS_CAP
   return {
     ...report,
-    citations: report.citations ? { ...report.citations, gemini: false } : report.citations,
-    themes: report.themes.map((theme) => ({
-      ...theme,
-      questions: theme.questions.map((item) => {
-        if (!item.searches) return item
-        const searches = item.searches.filter((search) => search.engine !== 'gemini')
-        return { ...item, searches }
-      }),
-    })),
+    themes,
+    ...(report.citations ? { citations: citationMetaFor(themes, false, cap) } : {}),
   }
 }
 
@@ -393,22 +420,44 @@ export function stripGeminiFromStored(result: unknown): unknown {
           questions: themeRecord.questions.map((item) => {
             if (!item || typeof item !== 'object' || Array.isArray(item)) return item
             const question = item as Record<string, unknown>
-            if (!Array.isArray(question.searches)) return item
+            const next = { ...question }
+            delete next.renderedContent
+            delete next.suggestionsHtml
+            if (!Array.isArray(question.searches)) return next
             return {
-              ...question,
-              searches: question.searches.filter((search) => {
-                if (!search || typeof search !== 'object' || Array.isArray(search)) return false
-                return (search as { engine?: unknown }).engine !== 'gemini'
-              }),
+              ...next,
+              searches: question.searches
+                .filter((search) => {
+                  if (!search || typeof search !== 'object' || Array.isArray(search)) return false
+                  return (search as { engine?: unknown }).engine !== 'gemini'
+                })
+                .map((search) => {
+                  const entry = search as Record<string, unknown>
+                  const sources = Array.isArray(entry.sources)
+                    ? entry.sources.filter((source) => {
+                        if (!source || typeof source !== 'object' || Array.isArray(source)) return false
+                        return (source as { engine?: unknown }).engine !== 'gemini'
+                      })
+                    : entry.sources
+                  return { ...entry, sources }
+                }),
             }
           }),
         }
       })
     : blob.themes
-  const citations =
+  const prior =
     blob.citations && typeof blob.citations === 'object' && !Array.isArray(blob.citations)
-      ? { ...(blob.citations as Record<string, unknown>), gemini: false }
-      : blob.citations
+      ? (blob.citations as Record<string, unknown>)
+      : null
+  const searched =
+    prior?.searched && typeof prior.searched === 'object' && !Array.isArray(prior.searched)
+      ? { ...(prior.searched as Record<string, unknown>) }
+      : null
+  if (searched) delete searched.gemini
+  const citations = prior
+    ? { ...prior, gemini: false, ...(searched ? { searched } : {}) }
+    : blob.citations
   return { ...record, fullReport: { ...blob, themes, citations } }
 }
 
@@ -422,10 +471,11 @@ export function patchQuestionSearches(report: FullReport, question: string, sear
       return { ...item, searches: [...kept, ...searches] }
     }),
   }))
+  const cap = report.citations?.cap ?? CITATIONS_CAP
   const next: FullReport = {
     ...report,
     themes,
-    citations: { cap: report.citations?.cap ?? CITATIONS_CAP, gemini },
+    citations: citationMetaFor(themes, gemini, cap),
   }
   return gemini ? next : hideGeminiCitations(next)
 }

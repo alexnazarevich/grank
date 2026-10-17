@@ -135,10 +135,10 @@ export function CitationAnswers({
               )}
             </div>
           ) : null}
-          {view.engine === 'gemini' && view.suggestionsHtml ? (
+          {view.engine === 'gemini' && view.renderedContent ? (
             <div className="citation-suggestions">
               <p>{CITATION_COPY.suggestions}</p>
-              <iframe title={CITATION_COPY.suggestions} sandbox="" srcDoc={view.suggestionsHtml} />
+              <iframe title={CITATION_COPY.suggestions} sandbox="" srcDoc={view.renderedContent} />
             </div>
           ) : null}
         </div>
