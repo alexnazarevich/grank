@@ -83,6 +83,7 @@ export function reportFromPayload(data: unknown): FullReport | null {
       model: data.model,
       includesBranded: data.includesBranded === true,
       themes: data.themes,
+      citations: data.citations,
     },
   })
 }
@@ -167,20 +168,86 @@ export async function fetchFullReport(
   return interpretFullReportResponse(res.status, data, false)
 }
 
+/**
+ * Read a Run again response. A progress stream hides the searching line on
+ * `{searches:'done'}`, which the server writes when every searched call has
+ * finished or missed. A plain JSON body hides the line when that body arrives.
+ */
+export async function readOwnedReportResponse(
+  res: Response,
+  onSearchesSettled?: () => void,
+): Promise<{ status: number; data: unknown; unusable: boolean }> {
+  const settle = () => onSearchesSettled?.()
+  const type = res.headers.get('content-type') || ''
+  if (!type.includes('application/x-ndjson')) {
+    const raw = await res.text()
+    settle()
+    if (type.includes('text/html') || raw.trimStart().startsWith('<')) {
+      return { status: res.status, data: null, unusable: true }
+    }
+    try {
+      return { status: res.status, data: raw ? JSON.parse(raw) : null, unusable: false }
+    } catch {
+      return { status: res.status, data: null, unusable: true }
+    }
+  }
+  const reader = res.body?.getReader()
+  if (!reader) {
+    settle()
+    return { status: res.status, data: null, unusable: true }
+  }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const final: { status: number; body: unknown }[] = []
+  const take = (line: string) => {
+    if (!line.trim()) return
+    let parsed: { searches?: unknown; status?: unknown; body?: unknown }
+    try {
+      parsed = JSON.parse(line) as { searches?: unknown; status?: unknown; body?: unknown }
+    } catch {
+      return
+    }
+    if (parsed.searches === 'done' && typeof parsed.status !== 'number') {
+      settle()
+      return
+    }
+    if (typeof parsed.status === 'number') final.push({ status: parsed.status, body: parsed.body ?? null })
+  }
+  try {
+    for (;;) {
+      const step = await reader.read()
+      if (step.value) buffer += decoder.decode(step.value, { stream: !step.done })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) take(line)
+      if (step.done) break
+    }
+    if (buffer.trim()) take(buffer)
+  } finally {
+    settle()
+  }
+  const last = final.at(-1)
+  if (!last) return { status: res.status, data: null, unusable: true }
+  return { status: last.status, data: last.body, unusable: false }
+}
+
 /** Answer a saved question set. The server must not replace it with a generated roster. */
 export async function fetchOwnedReport(
   domain: string,
   accessToken: string,
   owned: OwnedQuestion[],
   checkId?: string | null,
+  hooks?: { onSearchesSettled?: () => void },
 ): Promise<FullReportOk | FullReportFail> {
   const headers = new Headers({
-    Accept: 'application/json',
+    Accept: 'application/x-ndjson, application/json',
     'content-type': 'application/json',
     authorization: `Bearer ${accessToken}`,
+    'x-grank-search-progress': '1',
   })
   const anon = readAnonKey()
   if (anon) headers.set('x-grank-anon', anon)
+  const settle = () => hooks?.onSearchesSettled?.()
   let res: Response
   try {
     res = await fetch('/api/full-report', {
@@ -189,18 +256,10 @@ export async function fetchOwnedReport(
       body: JSON.stringify(checkId ? { domain, owned, checkId } : { domain, owned }),
     })
   } catch {
+    settle()
     return { ok: false, error: 'Could not reach the full report. Try again.' }
   }
-  const raw = await res.text()
-  const type = res.headers.get('content-type') || ''
-  if (type.includes('text/html') || raw.trimStart().startsWith('<')) {
-    return interpretFullReportResponse(res.status, null, true)
-  }
-  let data: unknown
-  try {
-    data = JSON.parse(raw)
-  } catch {
-    return { ok: false, error: `Full report failed (HTTP ${res.status}).` }
-  }
-  return interpretFullReportResponse(res.status, data, false)
+  const read = await readOwnedReportResponse(res, settle)
+  if (read.unusable) return interpretFullReportResponse(read.status, null, true)
+  return interpretFullReportResponse(read.status, read.data, false)
 }

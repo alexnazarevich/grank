@@ -126,6 +126,7 @@ export function applyOwnedToReport(report: FullReport, owned: OwnedQuestion[]): 
           whoInstead: [],
         }
     if (same && prior.mention && prior.answer.trim()) next.mention = prior.mention
+    if (same && prior.searches && framing === 'unbranded') next.searches = prior.searches
     const list = buckets.get(item.themeId) ?? []
     list.push(next)
     buckets.set(item.themeId, list)

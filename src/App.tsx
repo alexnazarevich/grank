@@ -36,11 +36,13 @@ import {
   type FullReportOk,
   type SignedGeminiMiss,
 } from './fullReportClient'
-import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, type FullReport, type RunPin } from './fullReport'
+import { THEME_CATALOG, fullReportFromStored, overlayUnbrandedGemini, unbrandedQuestionTexts, type FullReport, type RunPin } from './fullReport'
+import { CITATION_COPY, patchQuestionSearches } from './citations'
 import {
   fetchTestQuestion,
   patchTestAnswer,
   type TestQuestionInput,
+  type TestQuestionOk,
   type TestQuestionOutcome,
 } from './testQuestionClient'
 import {
@@ -323,6 +325,7 @@ export default function App() {
   const [activeMode, setActiveMode] = useState<VisibilityMode>('unbranded')
   const [digStatus, setDigStatus] = useState<DigStatus>('idle')
   const [busy, setBusy] = useState(false)
+  const [searchingSources, setSearchingSources] = useState(false)
   const [config, setConfig] = useState<ProductConfig>(PRODUCT_DEFAULTS)
   const [session, setSession] = useState<AuthSession | null>(null)
   const [email, setEmail] = useState('')
@@ -1215,6 +1218,11 @@ export default function App() {
     })
   }
 
+  function applySearches(report: FullReport, question: string, result: TestQuestionOk): FullReport {
+    if (!result.searches) return report
+    return patchQuestionSearches(report, question, result.searches, result.citationsGemini === true)
+  }
+
   async function onRunTestQuestion(input: TestQuestionInput): Promise<TestQuestionOutcome> {
     if (!session || !fullReport) return { ok: false, error: 'Sign in to run a test question.' }
     const epoch = testEpoch.current
@@ -1223,9 +1231,7 @@ export default function App() {
     if (!result.ok) return { ok: false, error: result.error }
     if (result.engine === 'gemini') {
       const gemini = result.gemini
-      setFullReport((current) =>
-        current ? patchTestAnswer(current, input.question, { engine: 'gemini', gemini }) : current,
-      )
+      setFullReport((current) => (current ? applySearches(patchTestAnswer(current, input.question, { engine: 'gemini', gemini }), input.question, result) : current))
       return { ok: true }
     }
     if (result.engine === 'claude') {
@@ -1238,14 +1244,14 @@ export default function App() {
         return next
       })
       setFullReport((current) =>
-        current ? patchTestAnswer(current, input.question, { engine: 'claude', claude }) : current,
+        current ? applySearches(patchTestAnswer(current, input.question, { engine: 'claude', claude }), input.question, result) : current,
       )
       return { ok: true }
     }
     if ('openaiPaused' in result) return { ok: true, openaiPaused: true }
     const answer = result.answer
     setFullReport((current) =>
-      current ? patchTestAnswer(current, input.question, { engine: 'openai', answer }) : current,
+      current ? applySearches(patchTestAnswer(current, input.question, { engine: 'openai', answer }), input.question, result) : current,
     )
     return { ok: true }
   }
@@ -1271,7 +1277,12 @@ export default function App() {
       setQuestionsDirty(false)
       setOwnedSet(true)
     }
-    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions, savedId)
+    const willSearch = !openaiPaused && unbrandedQuestionTexts(fullReport.themes).length > 0
+    if (willSearch) setSearchingSources(true)
+    const result = await fetchOwnedReport(fullReport.domain, session.accessToken, questions, savedId, {
+      onSearchesSettled: () => setSearchingSources(false),
+    })
+    setSearchingSources(false)
     setBusy(false)
     if (result.ok) {
       setOwnedSet(true)
@@ -1670,12 +1681,19 @@ export default function App() {
               testQuestionDisabled={questionToolsBusy}
             />
             {owning ? (
-              <div className="save-row">
-                {openaiPaused ? <ChatGptPausedNote /> : null}
-                <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
-                  {busy ? 'Generating…' : config.copy.runAgainCta}
-                </button>
-              </div>
+              <>
+                <div className="save-row">
+                  {openaiPaused ? <ChatGptPausedNote /> : null}
+                  <button type="button" onClick={onRunAgain} disabled={questionToolsBusy}>
+                    {busy ? 'Generating…' : config.copy.runAgainCta}
+                  </button>
+                </div>
+                {searchingSources ? (
+                  <p className="status" role="status">
+                    {CITATION_COPY.searching}
+                  </p>
+                ) : null}
+              </>
             ) : null}
             {reportPhase === 'error' && reportMessage ? <p className="err">{reportMessage}</p> : null}
             {questionsNote ? <p className={questionsNote === 'Questions saved.' ? 'status' : 'err'}>{questionsNote}</p> : null}

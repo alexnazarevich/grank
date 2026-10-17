@@ -1174,7 +1174,7 @@ describe('full-report question accordion', () => {
     assert.match(render, /copy\.competitorsTab/)
     assert.match(render, /competitorTopics\(report\.themes\)/)
     assert.equal(render.includes('<WhoInsteadBoard'), false)
-    assert.equal(render.includes('Citations'), false)
+    assert.match(render, /report-tab-citations/)
     assert.equal(render.includes('Glance'), false)
     assert.equal(render.includes('Overview'), false)
     assert.equal(section.includes('whoInsteadBoard('), false)

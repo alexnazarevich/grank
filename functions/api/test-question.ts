@@ -31,6 +31,9 @@ import {
   SERVER_AUTH_NOT_CONFIGURED,
   userFromToken,
 } from './supabaseAuth.ts'
+import { citationsGeminiEnabled, createOutboundSlots, searchOneQuestion } from './citations.ts'
+import type { OutboundSlots } from '../lib/slots.ts'
+import type { QuestionSearch } from '../../src/fullReport.ts'
 
 const MODEL = 'gpt-4o-mini'
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
@@ -63,7 +66,7 @@ function respond(body: Record<string, unknown>, secrets: string[]): Response {
 }
 
 async function readBody(request: Request): Promise<
-  | { ok: true; domain: string; question: string; engine: TestEngine; themeId: ThemeId }
+  | { ok: true; domain: string; question: string; engine: TestEngine; themeId: ThemeId; framing: 'unbranded' | 'branded' | null }
   | { ok: false; status: number; error: string }
 > {
   const raw = await request.text()
@@ -83,7 +86,8 @@ async function readBody(request: Request): Promise<
   if (engine !== 'openai' && engine !== 'gemini' && engine !== 'claude') {
     return { ok: false, status: 400, error: 'engine must be openai, gemini, or claude' }
   }
-  return { ok: true, domain, question, engine, themeId: resolveThemeId(data.themeId) ?? 'problems' }
+  const framing = data.framing === 'unbranded' || data.framing === 'branded' ? data.framing : null
+  return { ok: true, domain, question, engine, themeId: resolveThemeId(data.themeId) ?? 'problems', framing }
 }
 
 /** One OpenAI answer. Mention and who-instead from the model are discarded. */
@@ -92,10 +96,12 @@ async function openAIAnswer(
   domain: string,
   question: string,
   themeId: ThemeId,
+  slots?: OutboundSlots,
 ): Promise<{ ok: true; answer: string } | { ok: false; error: string }> {
   const safeQuestion = scrubSecret(question, apiKey)
   const owned = [{ question: safeQuestion, themeId }]
   const prompt = ownedAnswerPrompt(domain, groupOwned(owned), null)
+  const run = async (signal: AbortSignal): Promise<{ ok: true; answer: string } | { ok: false; error: string }> => {
   let res: Response
   try {
     res = await fetch(OPENAI_URL, {
@@ -104,7 +110,7 @@ async function openAIAnswer(
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal,
       body: JSON.stringify({
         model: MODEL,
         temperature: 0.3,
@@ -144,6 +150,9 @@ async function openAIAnswer(
   } catch {
     return { ok: false, error: 'ChatGPT request failed: unreadable response' }
   }
+  }
+  if (!slots) return run(AbortSignal.timeout(TIMEOUT_MS))
+  return slots.use({ timeoutMs: TIMEOUT_MS, now: () => Date.now() }, (slot) => run(slot.signal))
 }
 
 export async function onRequest(context: { request: Request; env?: TestEnv }): Promise<Response> {
@@ -164,15 +173,29 @@ export async function onRequest(context: { request: Request; env?: TestEnv }): P
   const geminiKey = geminiApiKeyFromEnv(context.env)
   const claudeKey = claudeApiKeyFromEnv(context.env)
   const secrets = [apiKey, geminiKey, claudeKey, sb.serviceRole].filter((secret) => secret !== '')
+  const slots = createOutboundSlots()
+  const withSearches = async (body: Record<string, unknown>) => {
+    if (incoming.framing !== 'unbranded' || !apiKey) return body
+    const searches: QuestionSearch[] = await searchOneQuestion({
+      question: incoming.question,
+      domain: incoming.domain,
+      env: context.env,
+      slots,
+      scrub: secrets,
+      gemini: citationsGeminiEnabled(context.env),
+      apiKey,
+    })
+    return { ...body, searches, citationsGemini: citationsGeminiEnabled(context.env) }
+  }
 
   if (incoming.engine === 'openai' && fullReportOpenAIPaused(context.env)) {
     return respond({ ok: true, engine: 'openai', openaiPaused: true }, secrets)
   }
   if (incoming.engine === 'openai') {
     if (!apiKey) return json(503, { error: 'OPENAI_API_KEY not configured' })
-    const answered = await openAIAnswer(apiKey, incoming.domain, incoming.question, incoming.themeId)
+    const answered = await openAIAnswer(apiKey, incoming.domain, incoming.question, incoming.themeId, slots)
     if (!answered.ok) return json(502, { error: answered.error })
-    return respond({ ok: true, engine: 'openai', answer: answered.answer }, secrets)
+    return respond(await withSearches({ ok: true, engine: 'openai', answer: answered.answer }), secrets)
   }
 
   if (incoming.engine === 'claude') {
@@ -182,11 +205,12 @@ export async function onRequest(context: { request: Request; env?: TestEnv }): P
       questions: [incoming.question],
       scrub: secrets,
       timeoutMs: CLAUDE_TIMEOUT_CAP_MS,
+      slots,
     })
     const claude = secrets.reduce((text, secret) => scrubSecret(text, secret), result.replies[0] ?? '')
     const body: Record<string, unknown> = { ok: true, engine: 'claude', claude }
     if (!claude.trim()) body.claudeMiss = claudeMissForResponse(result.miss ?? { class: 'empty' })
-    return respond(body, secrets)
+    return respond(await withSearches(body), secrets)
   }
 
   const result = await geminiReplies({
@@ -195,7 +219,8 @@ export async function onRequest(context: { request: Request; env?: TestEnv }): P
     questions: [incoming.question],
     scrub: secrets,
     timeoutMs: geminiTimeoutFromEnv(context.env),
+    slots,
   })
   const gemini = secrets.reduce((text, secret) => scrubSecret(text, secret), result.replies[0] ?? '')
-  return respond({ ok: true, engine: 'gemini', gemini }, secrets)
+  return respond(await withSearches({ ok: true, engine: 'gemini', gemini }), secrets)
 }

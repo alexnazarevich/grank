@@ -21,6 +21,28 @@ import {
 export type { Framing, Mention, ThemeId }
 export { mentionsBrand }
 
+export type CitationEngine = 'chatgpt' | 'gemini'
+
+/** One cited page. Same fields for every engine. */
+export type CitationSource = {
+  engine: CitationEngine
+  url: string
+  domain: string
+  title: string
+}
+
+/**
+ * One searched answer for one engine on one question.
+ * `renderedContent` is Google's searchEntryPoint HTML, unmodified, Gemini only.
+ */
+export type QuestionSearch = {
+  engine: CitationEngine
+  text: string
+  sources: CitationSource[]
+  miss?: { class: string; status?: number }
+  renderedContent?: string
+}
+
 export type FullReportQuestion = {
   question: string
   answer: string
@@ -39,6 +61,11 @@ export type FullReportQuestion = {
    * Absent on branded. Not a mention and not a who-instead list.
    */
   claude?: string
+  /**
+   * Searched answers for this question. Absent on branded rows and on
+   * reports saved before Citations. Does not change `answer` or mention.
+   */
+  searches?: QuestionSearch[]
 }
 
 export type FullReportTheme = {
@@ -54,6 +81,16 @@ export type FullReport = {
   model: string
   includesBranded: boolean
   themes: FullReportTheme[]
+  /**
+   * Present after a Citations run. Absent on reports saved before Citations.
+   * `gemini` is whether grounded calls were on for this read.
+   * `searched` is how many questions each engine searched on this run.
+   */
+  citations?: {
+    cap: number
+    gemini: boolean
+    searched?: { chatgpt: number; gemini?: number }
+  }
 }
 
 type Leaning = 'unbranded' | 'branded' | 'either'
@@ -621,6 +658,8 @@ export function fullReportFromStored(result: unknown): FullReport | null {
       if (framing === 'unbranded') {
         stored.gemini = cleanGeminiText(item.gemini)
         stored.claude = cleanClaudeText(item.claude)
+        const searches = cleanQuestionSearches(item.searches)
+        if (searches.length > 0) stored.searches = searches
       }
       questions.push(stored)
     }
@@ -629,7 +668,66 @@ export function fullReportFromStored(result: unknown): FullReport | null {
   }
   const themes = assembleThemes(groups, includesBranded)
   if (themes.length === 0) return null
-  return { domain, model, includesBranded, themes }
+  const citations = cleanCitationMeta(blob.citations)
+  return { domain, model, includesBranded, themes, ...(citations ? { citations } : {}) }
+}
+
+function cleanCount(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.floor(value)
+}
+
+function cleanCitationMeta(value: unknown): FullReport['citations'] | null {
+  if (!isRecord(value) || typeof value.cap !== 'number' || !Number.isFinite(value.cap)) return null
+  const cap = Math.max(0, Math.floor(value.cap))
+  const gemini = value.gemini === true
+  const searched = isRecord(value.searched) ? value.searched : null
+  const chatgpt = searched ? cleanCount(searched.chatgpt) : null
+  const geminiCount = searched && gemini ? cleanCount(searched.gemini) : null
+  return {
+    cap,
+    gemini,
+    ...(chatgpt === null
+      ? {}
+      : { searched: { chatgpt, ...(geminiCount === null ? {} : { gemini: geminiCount }) } }),
+  }
+}
+
+function cleanQuestionSearches(value: unknown): QuestionSearch[] {
+  if (!Array.isArray(value)) return []
+  const out: QuestionSearch[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) continue
+    if (entry.engine !== 'chatgpt' && entry.engine !== 'gemini') continue
+    const text = typeof entry.text === 'string' ? entry.text.replace(/\s+/g, ' ').trim().slice(0, 2000) : ''
+    const sources: CitationSource[] = []
+    if (Array.isArray(entry.sources)) {
+      for (const source of entry.sources) {
+        if (!isRecord(source)) continue
+        const url = typeof source.url === 'string' ? source.url.trim() : ''
+        const domain = typeof source.domain === 'string' ? source.domain.trim().toLowerCase() : ''
+        if (!url || !domain) continue
+        const title = typeof source.title === 'string' ? source.title.replace(/\s+/g, ' ').trim().slice(0, 300) : ''
+        const engine = source.engine === 'chatgpt' || source.engine === 'gemini' ? source.engine : entry.engine
+        sources.push({ engine, url, domain, title })
+      }
+    }
+    const search: QuestionSearch = { engine: entry.engine, text, sources }
+    if (isRecord(entry.miss) && typeof entry.miss.class === 'string' && entry.miss.class.trim()) {
+      const miss: { class: string; status?: number } = { class: entry.miss.class.trim() }
+      if (typeof entry.miss.status === 'number' && Number.isInteger(entry.miss.status)) miss.status = entry.miss.status
+      search.miss = miss
+    }
+    const rendered =
+      typeof entry.renderedContent === 'string'
+        ? entry.renderedContent
+        : typeof entry.suggestionsHtml === 'string'
+          ? entry.suggestionsHtml
+          : ''
+    if (entry.engine === 'gemini' && rendered.trim()) search.renderedContent = rendered
+    out.push(search)
+  }
+  return out
 }
 
 /** This-run pins only. Framing follows the question text, not the client’s claim. */

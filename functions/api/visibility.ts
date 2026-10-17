@@ -20,6 +20,7 @@ import {
 } from '../../src/mentionFacts.ts'
 import { canonicalHostname, pageTextFromHtml } from './homepage.ts'
 import { gateModelCall } from './quota.ts'
+import type { OutboundSlots } from '../lib/slots.ts'
 
 export { parseWhoInstead }
 
@@ -797,6 +798,46 @@ function repliesFromGeminiPayload(
  * one chunk blanks only that slice.
  * Missing key, an HTTP error, a timeout, bad JSON, and an empty payload stay empty strings.
  */
+async function geminiRepliesInSlots(
+  opts: {
+    apiKey: string
+    model: string
+    questions: string[]
+    scrub: string[]
+    signal?: AbortSignal
+    report?: boolean
+    slots?: OutboundSlots
+  },
+  timeoutMs: number,
+  blank: () => string[],
+): Promise<GeminiReplySet> {
+  const slots = opts.slots
+  if (!slots) return noteGeminiMiss(blank(), { class: 'timeout' })
+  const run = (questions: string[], shape: 'single' | 'chunk', maxOutputTokens: number) =>
+    slots.use({ timeoutMs, now: () => Date.now(), parent: opts.signal }, (slot) =>
+      geminiSlice({
+        apiKey: opts.apiKey,
+        model: opts.model,
+        questions,
+        scrub: opts.scrub,
+        signal: slot.signal,
+        maxOutputTokens,
+        shape,
+      }),
+    )
+  if (!opts.report) {
+    return run(opts.questions, 'single', geminiMaxOutputTokens(opts.questions.length))
+  }
+  const planned = geminiChunkSize(opts.questions.length)
+  const maxOutputTokens = geminiChunkMaxOutputTokens(planned)
+  const parts = await Promise.all(
+    geminiQuestionChunks(opts.questions).map((questions) => run(questions, 'chunk', maxOutputTokens)),
+  )
+  const replies = parts.flatMap((part) => part.replies)
+  const miss = geminiMissFromChunks(parts.map((part) => part.miss))
+  return miss ? { replies, miss } : { replies }
+}
+
 export async function geminiReplies(opts: {
   apiKey: string
   model: string
@@ -807,6 +848,11 @@ export async function geminiReplies(opts: {
   signal?: AbortSignal
   /** Signed-in full report and Run again. Omitted for the guest check and Run test. */
   report?: boolean
+  /**
+   * Signed-in Run again and Run test only. The 8s abort starts when a slot is
+   * granted. Guest visibility omits this and keeps its own timer.
+   */
+  slots?: OutboundSlots
 }): Promise<GeminiReplySet> {
   const blank = () => opts.questions.map(() => '')
   if (opts.questions.length === 0) return { replies: [] }
@@ -816,6 +862,7 @@ export async function geminiReplies(opts: {
     typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) ? Math.floor(rawTimeout) : GEMINI_TIMEOUT_CAP_MS
   const timeoutMs = Math.min(GEMINI_TIMEOUT_CAP_MS, Math.max(0, requested))
   if (timeoutMs === 0 || opts.signal?.aborted) return noteGeminiMiss(blank(), { class: 'timeout' })
+  if (opts.slots) return geminiRepliesInSlots(opts, timeoutMs, blank)
   const timed = geminiSignal(timeoutMs, opts.signal)
   try {
     if (!opts.report) {

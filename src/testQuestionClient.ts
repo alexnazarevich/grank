@@ -1,4 +1,4 @@
-import { cleanClaudeText, cleanGeminiText, type FullReport } from './fullReport.ts'
+import { cleanClaudeText, cleanGeminiText, type FullReport, type QuestionSearch } from './fullReport.ts'
 import { geminiMissFromPayload, type SignedGeminiMiss } from './fullReportClient.ts'
 import type { ThemeId } from './mentionFacts.ts'
 
@@ -8,20 +8,31 @@ export type TestQuestionInput = {
   question: string
   engine: TestEngine
   themeId: ThemeId
+  framing?: 'unbranded' | 'branded'
 }
 
 /** What the open question does after the request. The answer text is applied by the caller. */
 export type TestQuestionOutcome = { ok: true; openaiPaused?: boolean } | { ok: false; error: string }
 
-export type TestQuestionOk =
+export type TestQuestionOk = (
   | { ok: true; engine: 'openai'; openaiPaused: true }
   | { ok: true; engine: 'openai'; answer: string }
   | { ok: true; engine: 'gemini'; gemini: string }
   | { ok: true; engine: 'claude'; claude: string; claudeMiss?: SignedGeminiMiss }
+) & { searches?: QuestionSearch[]; citationsGemini?: boolean }
 
 export type TestQuestionFail = { ok: false; error: string }
 
 const ANSWER_MAX = 600
+
+function readSearches(value: unknown): QuestionSearch[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const searches = value.filter((entry): entry is QuestionSearch => {
+    if (!isRecord(entry)) return false
+    return entry.engine === 'chatgpt' || entry.engine === 'gemini'
+  })
+  return searches.length > 0 ? searches : undefined
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -103,18 +114,24 @@ export function interpretTestQuestionResponse(
   if (!rec || rec.ok !== true || status < 200 || status >= 300) {
     return { ok: false, error: serverError || `Test question failed (HTTP ${status}).` }
   }
+  const searches = readSearches(rec.searches)
+  const citationsGemini = rec.citationsGemini === true
+  const extra = {
+    ...(searches ? { searches } : {}),
+    ...(rec.citationsGemini === true || rec.citationsGemini === false ? { citationsGemini } : {}),
+  }
   if (rec.engine === 'openai' && rec.openaiPaused === true) {
     return { ok: true, engine: 'openai', openaiPaused: true }
   }
   if (rec.engine === 'gemini' && typeof rec.gemini === 'string') {
-    return { ok: true, engine: 'gemini', gemini: rec.gemini }
+    return { ok: true, engine: 'gemini', gemini: rec.gemini, ...extra }
   }
   if (rec.engine === 'claude' && typeof rec.claude === 'string') {
     const claudeMiss = geminiMissFromPayload(rec.claudeMiss)
-    return { ok: true, engine: 'claude', claude: rec.claude, ...(claudeMiss ? { claudeMiss } : {}) }
+    return { ok: true, engine: 'claude', claude: rec.claude, ...(claudeMiss ? { claudeMiss } : {}), ...extra }
   }
   if (rec.engine === 'openai' && typeof rec.answer === 'string') {
-    return { ok: true, engine: 'openai', answer: rec.answer }
+    return { ok: true, engine: 'openai', answer: rec.answer, ...extra }
   }
   return { ok: false, error: serverError || `Test question failed (HTTP ${status}).` }
 }
@@ -134,11 +151,12 @@ export async function fetchTestQuestion(
         'content-type': 'application/json',
         authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({
+        body: JSON.stringify({
         domain,
         question: input.question,
         engine: input.engine,
         themeId: input.themeId,
+        ...(input.framing ? { framing: input.framing } : {}),
       }),
     })
   } catch {
